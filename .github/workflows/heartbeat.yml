@@ -1,0 +1,17 @@
+# Independent heartbeat: runs on GitHub's servers (no Claude, no laptop).
+# Reads the bot's PUBLIC read-only status endpoint and fails (→ GitHub emails you) if the bot is stale.
+name: heartbeat
+on:
+  schedule: [{ cron: "17 */2 * * *" }]
+  workflow_dispatch: {}
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check DeskBot freshness
+        run: |
+          set -e
+          J=$(curl -fsS --max-time 30 https://xevymbzgpcsdhygswxlk.supabase.co/functions/v1/deskbot-v5)
+          AGE=$(echo "$J" | python3 -c 'import sys,json,datetime as d;j=json.load(sys.stdin);u=d.datetime.fromisoformat(j["updated"].replace("Z","+00:00"));print(int((d.datetime.now(d.timezone.utc)-u).total_seconds()/60))')
+          echo "version=$(echo "$J" | python3 -c 'import sys,json;print(json.load(sys.stdin)["version"])') last_update_min=$AGE"
+          test "$AGE" -lt 30 || { echo "::error::DeskBot state is $AGE min old"; exit 1; }
