@@ -19,8 +19,10 @@ export const VERSION = "5.2.0";
 
 export type Bar = { t: number; o: number; h: number; l: number; c: number; v: number; ct: number };
 export type Dir = "long" | "short";
-export type StrategyId = "D_BEARTRAP" | "D_THRUST" | "HTF_TREND" | "TREND_MTF" | "SWEEP_REV" | "VWAP_REVERT" | "SESSION_BO";
-export const STRATEGIES: StrategyId[] = ["D_BEARTRAP", "D_THRUST", "HTF_TREND", "TREND_MTF", "SWEEP_REV", "VWAP_REVERT", "SESSION_BO"];
+export type StrategyId = "D_BEARTRAP" | "D_THRUST" | "HTF_TREND" | "TREND_MTF" | "SWEEP_REV" | "VWAP_REVERT" | "SESSION_BO" | "HTF_SWEEP";
+export const STRATEGIES: StrategyId[] = ["D_BEARTRAP", "D_THRUST", "HTF_TREND", "TREND_MTF", "SWEEP_REV", "VWAP_REVERT", "SESSION_BO", "HTF_SWEEP"];
+// strategies that stay OFF unless RISK_SCALE names them explicitly (so a new idea can never go live by accident)
+export const OPT_IN: StrategyId[] = ["HTF_SWEEP"];
 
 export const CFG = {
   // costs (Hyperliquid-style perp, paper)
@@ -46,13 +48,16 @@ export const CFG = {
     SWEEP_REV:   { tp1: 1, tp2: 2, tp3: 3,   maxHoldH: 16 },
     VWAP_REVERT: { tp1: 1, tp2: 1.5, tp3: 2, maxHoldH: 8 },
     SESSION_BO:  { tp1: 1, tp2: 2, tp3: 3.5, maxHoldH: 12 },
+    HTF_SWEEP:   { tp1: 1.5, tp2: 3, tp3: 5, maxHoldH: 120 },
   } as Record<StrategyId, { tp1: number; tp2: number; tp3: number; maxHoldH: number }>,
   // exit management: "BE_AT_TP1" (v4.3: stop→entry after TP1) | "HOLD" (journal v0.4: keep stop until TP2, then →entry)
   EXIT_MODE: "BE_AT_TP1" as "BE_AT_TP1" | "HOLD",
   // sweep reversals: false = 4H counter-bias only penalised, true = must not be against 4H
   SWEEP_REQUIRE_HTF: false,
   // per-strategy risk multiplier (1 = full dynamic risk; 0.25 = evidence-gathering size)
-  RISK_SCALE: { D_BEARTRAP: 1, D_THRUST: 1, HTF_TREND: 1, TREND_MTF: 1, SWEEP_REV: 1, VWAP_REVERT: 1, SESSION_BO: 1 } as Record<StrategyId, number>,
+  RISK_SCALE: { D_BEARTRAP: 1, D_THRUST: 1, HTF_TREND: 1, TREND_MTF: 1, SWEEP_REV: 1, VWAP_REVERT: 1, SESSION_BO: 1, HTF_SWEEP: 0 } as Record<StrategyId, number>,
+  // HTF_SWEEP: failed break of the 4H 55-bar high/low (the turn starts AT the level). Trigger TF: "4h" bar close or earlier "1h" close.
+  HSW_TF: "4h" as "4h" | "1h", HSW_WICK: 0.4, HSW_MAX_RISK_ATR: 2.5,
   HTF_DONCHIAN: 20, HTF_ATR_STOP: 2,
   // minimum stop distance as a fraction of price (0 = off). Keeps round-trip costs a small share of 1R.
   MIN_STOP_PCT: 0,
@@ -458,17 +463,38 @@ function sThrust(s: Snap, S: Series, rej: Reject[]): Signal | null {
   rej.push({ strategy: id, reason: "No recent daily thrust" }); return null;
 }
 
+// S8 — failed breakout at the 4H 55-bar extreme ("sell where it starts dropping"):
+//   a bar trades through the prior 55-bar 4H high (low), closes back inside with a rejection wick → short (long).
+//   Stop just beyond the wick. Fires at the level instead of after the move.
+function sHtfSweep(s: Snap, S: Series, rej: Reject[]): Signal | null {
+  const id: StrategyId = "HTF_SWEEP";
+  const tf = CFG.HSW_TF, isNew = tf === "4h" ? s.new4h : s.new1h;
+  if (!isNew) { rej.push({ strategy: id, reason: `Waits for ${tf.toUpperCase()} close` }); return null; }
+  const b = tf === "4h" ? s.b4h : (s.i1h >= 0 ? S.f.h1[s.i1h] : null);
+  if (!b || !isFinite(s.hi4h) || !isFinite(s.atr4h)) { rej.push({ strategy: id, reason: "4H warming up" }); return null; }
+  // for 1h triggers use the 55-bar range of 4H bars closed BEFORE this 1h bar's 4H bucket (no look-ahead: snapshot already uses closed 4H only)
+  const hi = s.hi4h, lo = s.lo4h, rng = b.h - b.l; if (!(rng > 0)) return null;
+  let dir: Dir | null = null, ext = 0;
+  if (b.h > hi && b.c < hi && (b.h - Math.max(b.o, b.c)) >= CFG.HSW_WICK * rng) { dir = "short"; ext = b.h; }
+  else if (b.l < lo && b.c > lo && (Math.min(b.o, b.c) - b.l) >= CFG.HSW_WICK * rng) { dir = "long"; ext = b.l; }
+  if (!dir) { rej.push({ strategy: id, reason: `No failed break of 4H 55-bar ${"high/low"} ($${hi.toFixed(0)}/$${lo.toFixed(0)})` }); return null; }
+  const d = sgn(dir), stop = ext - d * 0.1 * s.atr4h, risk = Math.abs(s.price - stop);
+  if (!(risk > 0) || risk > CFG.HSW_MAX_RISK_ATR * s.atr4h) { rej.push({ strategy: id, reason: "Sweep stop too wide" }); return null; }
+  const why = [`${tf.toUpperCase()} bar swept the 4H 55-bar ${dir === "short" ? "high" : "low"} ($${(dir === "short" ? hi : lo).toFixed(0)}) and closed back inside`, "Rejection wick", "Stop beyond the wick"];
+  return { strategy: id, dir, entryRef: s.price, stop, score: 80 + contextScore(s, dir, "revert", why), why, regime: s.regime, barT: s.T };
+}
+
 const RUNNERS: Record<StrategyId, (s: Snap, S: Series, r: Reject[]) => Signal | null> = {
   D_BEARTRAP: sBearTrap, D_THRUST: sThrust,
-  HTF_TREND: (s, _S, r) => sHtf(s, r), TREND_MTF: (s, _S, r) => sTrend(s, r), SWEEP_REV: (s, _S, r) => sSweep(s, r), VWAP_REVERT: (s, _S, r) => sVwap(s, r), SESSION_BO: (s, _S, r) => sSession(s, r),
+  HTF_TREND: (s, _S, r) => sHtf(s, r), TREND_MTF: (s, _S, r) => sTrend(s, r), SWEEP_REV: (s, _S, r) => sSweep(s, r), VWAP_REVERT: (s, _S, r) => sVwap(s, r), SESSION_BO: (s, _S, r) => sSession(s, r), HTF_SWEEP: sHtfSweep,
 };
 
 export function evaluate(s: Snap, enabled: Record<string, boolean> = {}, S?: Series): { signals: Signal[]; rejects: Reject[] } {
   const signals: Signal[] = [], rejects: Reject[] = [];
   if (!isFinite(s.atr5) || !isFinite(s.atr15) || !isFinite(s.chop15) || !isFinite(s.price)) { rejects.push({ strategy: "TREND_MTF", reason: "Indicators warming up" }); return { signals, rejects }; }
   for (const id of STRATEGIES) {
-    if (enabled[id] === false || CFG.RISK_SCALE[id] === 0) { rejects.push({ strategy: id, reason: "Strategy switched off" }); continue; }
-    if (!S && (id === "D_BEARTRAP" || id === "D_THRUST")) continue;
+    if (enabled[id] === false || CFG.RISK_SCALE[id] === 0 || (OPT_IN.includes(id) && !(CFG.RISK_SCALE[id] > 0))) { rejects.push({ strategy: id, reason: "Strategy switched off" }); continue; }
+    if (!S && (id === "D_BEARTRAP" || id === "D_THRUST" || id === "HTF_SWEEP")) continue;
     const sig = RUNNERS[id](s, S as Series, rejects);
     const gate = CFG.REGIME_GATE[id];
     if (sig && gate !== undefined && S) {

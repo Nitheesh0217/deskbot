@@ -97,3 +97,20 @@ No ML model was shipped: none was profitable out-of-sample with a meaningful tra
 - Add Hyperliquid funding, open interest and liquidation-map features to the direction model. That's information the candles don't contain.
 - Collect live paper trades from the cloud bot. Each one is labelled automatically and feeds the meta-label model.
 - Re-run this report each quarter. The script outputs are reproducible: `npx tsx ml/mine.ts <csv>`, `python3 ml/meta_label.py <setups.csv>`, `python3 ml/direction.py <csv> K H`.
+
+## 7. "Enter earlier: sell where the drop starts" (tested 22 Oct 2026)
+
+Prompted by a late SESSION_BO short (entered at $81.5k after the drop from the 4H 55-bar high at $84.85k).
+New strategy `HTF_SWEEP` (opt-in, OFF by default): a bar trades through the prior 55-bar 4H high/low, closes back inside with a rejection wick, and the bot fades it with the stop just beyond the wick. Full engine, all costs, 2023 → Aug 2026, auto-disable switched off for research:
+
+| Variant | Trades | Avg R | PF | 2023 | 2024 | 2025 | 2026 |
+|---|---|---|---|---|---|---|---|
+| 4H trigger (wick ≥ 40%) | 249 | −0.075 | 0.88 | +1.3 | −3.3 | −7.3 | −9.4 |
+| **1H trigger (earlier)** | 272 | **−0.164** | 0.74 | −4.1 | −20.0 | −5.6 | −15.1 |
+| 4H, wick ≥ 30% / ≥ 50% | 303 / 168 | −0.064 / −0.116 | 0.90 / 0.82 | | | | |
+| 4H, 20-bar levels | 367 | −0.063 | 0.90 | −6.0 | +12.6 | −12.9 | −16.8 |
+| 4H, only with daily regime | 40 | −0.213 | 0.64 | | | | |
+| v5.1 + 4H sweep | 158 | +0.071 | 1.08 | | | | |
+| **v5.1 alone (live)** | 138 | **+0.117** | **1.21** | +9.4 | +3.6 | −0.8 | +4.0 |
+
+**Result:** every "catch the top" variant lost money, and the *earlier* 1H trigger lost the most. It sees more of the turns, but it also gets stopped by many more fake ones. Charts look obvious in hindsight because the failed breakouts that kept going up are no longer on screen. HTF_SWEEP stays in the code switched off, and nothing changed in the live bot.
