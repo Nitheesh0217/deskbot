@@ -1,4 +1,4 @@
-<title>DeskBot v5</title>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="robots" content="noindex"></head><body><title>DeskBot v5</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
@@ -157,7 +157,7 @@ nav.tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 25; backgroun
 <main>
   <!-- DESK -->
   <section class="view" id="v-desk" aria-label="Desk">
-    <div class="banner" id="srcBanner">Showing the snapshot saved when this page was published. Live numbers load from your Supabase connection.</div>
+    <div class="banner" id="srcBanner">Showing the snapshot saved when this page was published. Live numbers load straight from the cloud bot.</div>
     <div class="card">
       <div class="eq-top">
         <div>
@@ -197,8 +197,8 @@ nav.tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 25; backgroun
   <!-- STRATEGIES -->
   <section class="view" id="v-strategies" aria-label="Strategies" hidden>
     <div class="card">
-      <h2>Seven strategies, sized by evidence</h2>
-      <p class="note" style="margin-top:6px">Each one is checked every 5 minutes. Size follows what the backtests showed, not how good the idea sounds. A strategy moves to full size only after 30+ paper trades with profit factor 1.2 or better.</p>
+      <h2>v5.1: four strategies on, three off</h2>
+      <p class="note" style="margin-top:6px">Each one is checked every 5 minutes. v5.1 keeps only what survived the walk-forward research: trend strategies that trade with the daily regime. Size follows evidence; anything losing live after 20 trades is switched off automatically.</p>
     </div>
     <div class="view" id="stratList" style="gap:10px"></div>
   </section>
@@ -223,12 +223,21 @@ nav.tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 25; backgroun
   <!-- SYSTEM -->
   <section class="view" id="v-system" aria-label="System" hidden>
     <div class="card">
-      <h2>Backtest of the live mix</h2>
+      <h2>Backtest of the live v5.1 config</h2>
       <p class="note" style="margin-top:4px" id="btSub">—</p>
       <svg class="chart" id="btChart" viewBox="0 0 340 170" aria-label="Backtest equity curve"></svg>
       <div class="scroll-x" style="margin-top:10px"><table id="btTable"></table></div>
     </div>
-    <div class="callout" id="honest">This mix roughly broke even over the past year after every cost. That's the honest baseline. No backtest here shows a reliable profit yet, and paper results come before any real money.</div>
+    <div class="card">
+      <h2>What the bot learned (v5.1)</h2>
+      <div class="list" style="margin-top:8px">
+        <div class="li"><div class="a">Trade with the daily regime</div><div class="b up">PF 1.03 → 1.28</div><div class="c">4H trend longs made +0.48R in 2023, then −0.56R in 2026 while shorts turned positive. Now a trend trade needs price 3%+ beyond the daily EMA50 in its direction.</div></div>
+        <div class="li"><div class="a">Stops were too tight for fees</div><div class="b">0.3–0.5R lost</div><div class="c">Intraday setups won before costs but paid a third to half of 1R in fees. Sweep, session and VWAP are off; MTF trend gets a 1.2% minimum stop.</div></div>
+        <div class="li"><div class="a">Don't move to breakeven early</div><div class="b">2.1R vs 0.29R</div><div class="c">Winners typically ran 2.1R before closing, losers only 0.29R. Exits now keep the original stop until TP2.</div></div>
+        <div class="li"><div class="a">Candles alone can't call direction</div><div class="b">49.5–52.3%</div><div class="c">Logistic, LightGBM and neural-net direction models hit coin-flip accuracy out-of-sample and lost after fees. None of them trades.</div></div>
+      </div>
+    </div>
+    <div class="callout" id="honest">Backtest, 2023–Aug 2026: v5.1 PF 1.21, $1,000 → $1,175, max drawdown 10%; the old mix PF 1.02, $1,030. Past 12 months on fresh Binance data: v5.1 +0.03R/trade ($998) vs −0.08R ($963). That's better, not proven. Paper results come before any real money.</div>
     <div class="card">
       <h2>Cloud status</h2>
       <div class="grid2" id="sys"></div>
@@ -262,17 +271,17 @@ nav.tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 25; backgroun
 </nav>
 
 <script>
-const SNAP = {"state":{"state":{"cb":{"trips":0,"consec":0,"cooldownUntil":0},"cfg":{"RISK_SCALE":{"D_THRUST":1,"HTF_TREND":1,"SWEEP_REV":0,"TREND_MTF":0.25,"D_BEARTRAP":1,"SESSION_BO":0.25,"VWAP_REVERT":0.25},"HTF_DONCHIAN":55},"day":{"pnl":0,"date":"2026-10-22","trades":0,"startEquity":352.56},"pos":null,"_fng":{"l":"Greed","t":1792647170963,"v":68},"peak":352.56,"maxDD":0,"stats":{"by":{"D_THRUST":{"n":0,"net":0,"sumR":0,"wins":0,"losses":0},"HTF_TREND":{"n":0,"net":0,"sumR":0,"wins":0,"losses":0},"SWEEP_REV":{"n":0,"net":0,"sumR":0,"wins":0,"losses":0},"TREND_MTF":{"n":0,"net":0,"sumR":0,"wins":0,"losses":0},"D_BEARTRAP":{"n":0,"net":0,"sumR":0,"wins":0,"losses":0},"SESSION_BO":{"n":0,"net":0,"sumR":0,"wins":0,"losses":0},"VWAP_REVERT":{"n":0,"net":0,"sumR":0,"wins":0,"losses":0}},"all":{"n":0,"net":0,"sumR":0,"wins":0,"losses":0}},"equity":352.56,"enabled":{"D_THRUST":true,"HTF_TREND":true,"SWEEP_REV":false,"TREND_MTF":true,"D_BEARTRAP":true,"SESSION_BO":true,"VWAP_REVERT":true},"version":"5.0.0","startEquity":352.56},"carried":{"at":"2026-10-22T01:15:52.731371+00:00","from":"DeskBot v3 cloud (Supabase bot_state)","v3Equity":352.55836833,"v3Trades":3,"v3StartEquity":300},"last_run":{"ts":"2026-10-22T05:32:50.963Z","risk":0.02,"upnl":0,"action":"SKIP","market":{"oi":40192.71646,"fng":68,"poc":82826.5,"st5":-1,"atr5":94.2,"mark":82820.2,"st15":-1,"st1h":-1,"st4h":1,"vwap":83266.2,"atr15":205.4,"chop5":51.2,"ema20":82870.3,"ema50":83111.8,"price":82938,"rsi15":36.1,"rsi1h":38.6,"chop15":49.2,"regime":"MIXED","funding":1.25e-05,"vwapDev":-0.67,"fngLabel":"Greed"},"source":"hyperliquid","decision":{"rejects":[{"reason":"Waits for daily close","strategy":"D_BEARTRAP"},{"reason":"Waits for 1H close","strategy":"D_THRUST"},{"reason":"Waits for 4H close","strategy":"HTF_TREND"},{"reason":"No 5m SuperTrend flip","strategy":"TREND_MTF"},{"reason":"Strategy switched off","strategy":"SWEEP_REV"},{"reason":"Regime MIXED (needs RANGE)","strategy":"VWAP_REVERT"},{"reason":"Outside London/NY open window","strategy":"SESSION_BO"}],"signals":[]}},"updated_at":"2026-10-22T05:32:51.372+00:00"},"events":[{"ts":"2026-10-22T05:34:02.396802+00:00","kind":"BACKTEST","strategy":null,"msg":"Backtest LIVE_CONFIG_v5_final 360d (binance): 82 trades, -0.07R avg, $1000\u2192$995"},{"ts":"2026-10-22T05:33:09.056358+00:00","kind":"BACKTEST","strategy":null,"msg":"Backtest D_BEARTRAP_1y 360d (binance): 10 trades, 0.21R avg, $1000\u2192$1024"},{"ts":"2026-10-22T05:33:08.593658+00:00","kind":"BACKTEST","strategy":null,"msg":"Backtest D_THRUST_1y 360d (binance): 2 trades, -0.13R avg, $1000\u2192$997"},{"ts":"2026-10-22T05:32:51.601635+00:00","kind":"SKIP","strategy":null,"msg":"D_BEARTRAP: Waits for daily close"},{"ts":"2026-10-22T01:50:50.632209+00:00","kind":"INIT","strategy":null,"msg":"DeskBot 5.0.0 initialised at $352.56 (carried from v3)"}],"trades":[],"curve":[{"ts":"2026-10-22T01:50:49.932+00:00","equity":352.56,"price":83665},{"ts":"2026-10-22T02:33:39.56+00:00","equity":352.56,"price":82924},{"ts":"2026-10-22T05:32:50.963+00:00","equity":352.56,"price":82938}],"bt":{"label":"LIVE_CONFIG_v5_final","ran_at":"2026-10-22T05:34:02.108587+00:00","a":{"n":82,"pf":0.982,"wr":0.4512,"net":-5.07,"expR":-0.0739,"wins":37,"losses":45},"by":{"D_THRUST":{"n":1,"expR":0.8314,"net":12.19},"HTF_TREND":{"n":30,"expR":0.0177,"net":2.01},"TREND_MTF":{"n":20,"expR":-0.1546,"net":-6.05},"D_BEARTRAP":{"n":4,"expR":-0.0312,"net":0.72},"SESSION_BO":{"n":27,"expR":-0.1558,"net":-13.94}},"mdd":"0.0879","eq":"994.93","i":{"n":70,"expR":-0.0943},"o":{"n":12,"expR":0.0449},"f":"2025-10-27T05:35:00.000Z","t":"2026-10-22T05:29:59.999Z","curve":[[1761543599999,1000],[1761867599999,987.61],[1762191599999,980.08],[1762515599999,990.21],[1762839599999,989.83],[1763163599999,996.17],[1763487599999,1006.65],[1763811599999,1017.33],[1764135599999,1017.23],[1764459599999,1017.12],[1764783599999,1022.39],[1765107599999,1022.79],[1765431599999,1027.65],[1765755599999,1024.53],[1766079599999,1014.36],[1766403599999,999.14],[1766727599999,991.62],[1767051599999,991.62],[1767375599999,994.71],[1767699599999,1008.76],[1768023599999,1004.2],[1768347599999,1004.81],[1768671599999,1004],[1768995599999,991.55],[1769319599999,990.8],[1769643599999,997.76],[1769967599999,1018.89],[1770291599999,1040.25],[1770615599999,1046.11],[1770939599999,1044.54],[1771263599999,1045.13],[1771587599999,1042.43],[1771911599999,1040.55],[1772235599999,1028.08],[1772559599999,1023.44],[1772883599999,1010.98],[1773207599999,1010.98],[1773531599999,1007.93],[1773855599999,995.65],[1774179599999,1002.17],[1774503599999,994.78],[1774827599999,994.53],[1775151599999,987.02],[1775475599999,985.17],[1775799599999,977.42],[1776123599999,977.16],[1776447599999,982.28],[1776771599999,982.14],[1777095599999,987.35],[1777419599999,987.28],[1777743599999,989.01],[1778067599999,984.22],[1778391599999,983.88],[1778715599999,976.32],[1779039599999,976.04],[1779363599999,975.68],[1779687599999,980.63],[1780011599999,985.67],[1780335599999,985.59],[1780659599999,1009.12],[1780983599999,997.42],[1781307599999,997.42],[1781631599999,1007.43],[1781955599999,1004.1],[1782279599999,1004.1],[1782603599999,1003.54],[1782927599999,1003.11],[1783251599999,990.9],[1783575599999,990.59],[1783899599999,990.28],[1784223599999,995.38],[1784547599999,995.26],[1784871599999,979.87],[1785195599999,979.87],[1785519599999,964.48],[1785843599999,957.06],[1786167599999,957.06],[1786491599999,957.06],[1786815599999,957.06],[1787139599999,957.06],[1787463599999,977.04],[1787787599999,976.72],[1788111599999,976.4],[1788435599999,976.08],[1788759599999,975.75],[1789083599999,975.43],[1789407599999,975.11],[1789731599999,974.8],[1790055599999,989.03],[1790379599999,974.07],[1790703599999,973.35],[1791027599999,999.77],[1791351599999,999.77],[1791675599999,1004.66],[1791999599999,1004.37],[1792323599999,991.91]]},"now":"2026-10-22T05:35:58.717304+00:00"};
+const SNAP = {"state": {"state": {"cb": {"trips": 0, "consec": 0, "cooldownUntil": 0}, "cfg": {"EXIT_MODE": "HOLD", "RISK_SCALE": {"D_THRUST": 1, "HTF_TREND": 1, "SWEEP_REV": 0, "TREND_MTF": 0.5, "D_BEARTRAP": 1, "SESSION_BO": 0, "VWAP_REVERT": 0}, "MIN_STOP_BY": {"TREND_MTF": 0.012}, "REGIME_GATE": {"HTF_TREND": 0.03, "TREND_MTF": 0.03, "D_BEARTRAP": 0.03}, "HTF_DONCHIAN": 55}, "day": {"pnl": 0, "date": "2026-10-22", "trades": 1, "startEquity": 352.56}, "pos": {"id": "V5-1792682161585", "dir": "short", "tp1": 81067.56399661326, "tp2": 80628.53257322652, "tp3": 79969.98543814641, "why": ["NY break of London range", "Volume ≥1.3×", "4H aligned", "Funding 0.0013%/h (+5)", "F&G 68 (+5)", "ROC momentum (+5)"], "stop": 81506.59542, "entry": 81506.59542, "openT": 1792682161585, "score": 89, "stop0": 81945.62684338674, "riskAmt": 1.7628, "tp1Done": true, "tp2Done": false, "tp3Done": false, "strategy": "SESSION_BO", "remainingQty": 0.0016662443120658082}, "peak": 352.56, "maxDD": 0, "stats": {"by": {}, "all": {"n": 0, "net": 0, "sumR": 0, "wins": 0, "losses": 0}}, "equity": 353.15413561347225, "enabled": {"D_THRUST": true, "HTF_TREND": true, "SWEEP_REV": false, "TREND_MTF": true, "D_BEARTRAP": true, "SESSION_BO": true, "VWAP_REVERT": true}, "version": "5.1.0", "startEquity": 352.56}, "carried": {"from": "DeskBot v3 cloud (Supabase bot_state)", "v3Equity": 352.55836833, "v3Trades": 3, "v3StartEquity": 300}, "last_run": {"ms": 546, "ts": "2026-10-22T18:01:47.762Z", "risk": 0.02, "upnl": 0.51, "action": "HOLD", "market": {"oi": 43281.6914, "fng": 68, "poc": 82841.1, "st5": -1, "atr5": 136.1, "mark": 81141, "st15": -1, "st1h": -1, "st4h": -1, "vwap": 82257.1, "atr15": 243.3, "chop5": 48.6, "price": 81202, "rsi15": 36.1, "rsi1h": 25.9, "chop15": 48.6, "ema50D": 80736.2, "regime": "TREND", "funding": 1.25e-05, "vwapDev": -1.32, "fngLabel": "Greed"}, "source": "hyperliquid", "decision": null}, "updated_at": "2026-10-22T18:01:48.308+00:00"}, "events": [{"ts": "2026-10-22T18:01:47.529295+00:00", "kind": "CONFIG", "strategy": null, "msg": "Switched to v5.1 (ML lessons): daily regime gate 3% on trend strategies, TREND_MTF 1.2% min stop, HOLD exits, sweep/session/VWAP off. 3.5y backtest PF 1.21 vs 1.02; past year +0.03R vs −0.08R/trade."}, {"ts": "2026-10-22T18:00:55.632342+00:00", "kind": "BACKTEST", "strategy": null, "msg": "Backtest v5.0-live-cfg 365d (binance): 82 trades, -0.08R avg, $1000→$963"}, {"ts": "2026-10-22T18:00:19.574054+00:00", "kind": "BACKTEST", "strategy": null, "msg": "Backtest v5.1-ml-lessons 365d (binance): 35 trades, 0.03R avg, $1000→$998"}, {"ts": "2026-10-22T16:51:02.074814+00:00", "kind": "TP1", "strategy": "SESSION_BO", "msg": "TP1 filled @ 81067.6 · stop → 81506.6"}, {"ts": "2026-10-22T15:16:02.542067+00:00", "kind": "OPEN", "strategy": "SESSION_BO", "msg": "SESSION_BO SHORT @ 81506.6 · stop 81945.6 · TP 81068/80629/79970 · risk $1.76 · score 89"}, {"ts": "2026-10-22T01:50:50.632209+00:00", "kind": "INIT", "strategy": null, "msg": "DeskBot 5.0.0 initialised at $352.56 (carried from v3)"}], "trades": [], "curve": [{"ts": "2026-10-22T02:33:39Z", "equity": 352.56}, {"ts": "2026-10-22T08:01:00Z", "equity": 352.56}, {"ts": "2026-10-22T14:01:01Z", "equity": 352.56}, {"ts": "2026-10-22T15:31:00Z", "equity": 352.44}, {"ts": "2026-10-22T16:31:00Z", "equity": 352.44}, {"ts": "2026-10-22T17:01:00Z", "equity": 353.15}, {"ts": "2026-10-22T18:01:47Z", "equity": 353.15}], "bt": {"label": "LIVE_CONFIG_v5.1", "ran_at": "2026-10-22T18:00:19Z", "a": {"n": 35, "pf": 0.993, "wr": 0.3714, "net": -1.54, "expR": 0.0282, "sumR": 0.988, "wins": 13, "losses": 22}, "by": {"D_THRUST": {"n": 1, "net": 9.98, "expR": 0.831}, "HTF_TREND": {"n": 22, "net": -23.3, "expR": -0.045}, "TREND_MTF": {"n": 10, "net": 2.92, "expR": 0.041}, "D_BEARTRAP": {"n": 2, "net": 8.86, "expR": 0.374}}, "mdd": 0.0914, "eq": 998.46, "f": "2025-10-22T18:00:00.000Z", "t": "2026-10-22T17:54:59.999Z", "curve": [[1761156299999, 1000], [1761811499999, 1000], [1762139099999, 987.98], [1762466699999, 997.97], [1763121899999, 1007.99], [1763449499999, 1029.12], [1764432299999, 1019.21], [1765742699999, 1019.21], [1766070299999, 1006.73], [1766397899999, 994.62], [1766725499999, 979.64], [1768691099999, 978.61], [1769018699999, 949.43], [1769673899999, 935.09], [1770001499999, 954.87], [1770329099999, 980.29], [1772294699999, 982.63], [1773932699999, 985.7], [1774260299999, 995.74], [1775243099999, 980.66], [1776225899999, 973.08], [1777863899999, 982.69], [1778191499999, 987.21], [1778846699999, 979.42], [1780157099999, 979.06], [1780484699999, 989.29], [1780812299999, 1012.3], [1782122699999, 1008.04], [1783105499999, 995.03], [1784088299999, 987.51], [1786053899999, 979.78], [1787036699999, 979.78], [1787364299999, 1000.44], [1789657499999, 998.49], [1789985099999, 1015.71], [1790312699999, 1008.02], [1790967899999, 1023.08], [1791950699999, 1022.86], [1792278299999, 1010.66], [1792605899999, 1010.38]]}, "now": "2026-10-22T18:03:38Z"};
 const PROJECT = "xevymbzgpcsdhygswxlk";
 
 const STRATS = [
-  { id: "D_BEARTRAP", name: "Daily bear trap", desc: "A red engulfing day inside an uptrend, then a day that dips below its low and closes back above. Buys the reclaim, one 2R target.", ev: "Your research P5: PF 1.20 over 2017–2026. Past year: 10 trades, +0.21R avg." },
+  { id: "D_BEARTRAP", name: "Daily bear trap", desc: "A red engulfing day inside an uptrend, then a day that dips below its low and closes back above. Buys the reclaim, one 2R target.", ev: "v5.1: only when price is 3%+ above the daily EMA50. Research P5 PF 1.20 (2017–2026)." },
   { id: "D_THRUST", name: "Daily thrust pullback", desc: "A daily candle more than 2× its average range in an uptrend, then the first 1-hour dip to the EMA20 within 72 hours.", ev: "Your research P1: PF 4.5 but only 27 trades. Past year: 2 trades. Rare." },
-  { id: "HTF_TREND", name: "4H trend breakout", desc: "A 4-hour close beyond the 55-bar high or low with 4H SuperTrend and EMA50 agreeing. Wide ATR stop, runs to 6R.", ev: "Past year: 34 trades, about breakeven, 5% max drawdown. Catches the big moves." },
-  { id: "TREND_MTF", name: "MTF SuperTrend (v3 + v4)", desc: "The v3 core: 5-minute SuperTrend flip with 15m and 1h aligned, plus v4's 4H bias, chop and EMA gates.", ev: "Past year: 20 trades, −0.15R avg. Kept small to gather live data." },
-  { id: "SESSION_BO", name: "Session breakout", desc: "London open breaking the Asian range, or New York open breaking London's, on a 15m close with real volume.", ev: "Past year: 27 trades, −0.16R avg. Kept small to gather live data." },
-  { id: "VWAP_REVERT", name: "VWAP snap-back", desc: "Only in ranging markets: price stretched 2σ from the daily VWAP with RSI at an extreme and a reversal candle.", ev: "Fires rarely: 0 signals in the last 90 days." },
-  { id: "SWEEP_REV", name: "Liquidity sweep reversal", desc: "15m wick through a recent high or low that closes back inside. The pattern your old signal indicator traded.", ev: "Last 90 days: 175 trades, −0.38R avg after costs. Switched off." },
+  { id: "HTF_TREND", name: "4H trend breakout", desc: "A 4-hour close beyond the 55-bar high or low with 4H SuperTrend and EMA50 agreeing. Wide ATR stop, runs to 6R.", ev: "v5.1 core. Trades only with the daily regime (3%+ beyond EMA50D). 2023–26: PF 1.28, +0.16R/trade; 2026 flipped from −10R to +7.5R." },
+  { id: "TREND_MTF", name: "MTF SuperTrend (v3 + v4)", desc: "The v3 core: 5-minute SuperTrend flip with 15m and 1h aligned, plus v4's 4H bias, chop and EMA gates.", ev: "v5.1: regime-gated, 1.2% minimum stop so fees stop eating it. 2023–26: +0.09R/trade at half size." },
+  { id: "SESSION_BO", name: "Session breakout", desc: "London open breaking the Asian range, or New York open breaking London's, on a 15m close with real volume.", ev: "Off in v5.1. Lost after costs in all four years 2023–26 (−0.19R/trade even with the regime gate)." },
+  { id: "VWAP_REVERT", name: "VWAP snap-back", desc: "Only in ranging markets: price stretched 2σ from the daily VWAP with RSI at an extreme and a reversal candle.", ev: "Off in v5.1. Too few signals and negative after costs." },
+  { id: "SWEEP_REV", name: "Liquidity sweep reversal", desc: "15m wick through a recent high or low that closes back inside. The pattern your old signal indicator traded.", ev: "Off. 6,090 setups 2023–26: +0.21R before costs, −0.33R after. The stop is too tight for the fees." },
 ];
 
 const $ = (id) => document.getElementById(id);
@@ -350,6 +359,7 @@ function renderDesk() {
   $("tf").innerHTML = tf.map(([k, v]) => `<div class="${v === 1 ? "bull" : v === -1 ? "bear" : ""}"><div class="k">${k}</div><div class="v">${v === 1 ? "▲ Up" : v === -1 ? "▼ Down" : "—"}</div></div>`).join("");
   const fund = m.funding != null ? (m.funding * 100).toFixed(4) + "%/h" : "—";
   const cells = [
+    ["Daily regime gate", m.ema50D ? (() => { const d = (m.price - m.ema50D) / m.price; return (d > 0.03 ? "LONG ok" : d < -0.03 ? "SHORT ok" : "Stand aside") + " · " + pct(d, 1) + " vs EMA50D"; })() : "—", m.ema50D ? ((m.price - m.ema50D) / m.price > 0.03 ? "up" : (m.price - m.ema50D) / m.price < -0.03 ? "down" : "") : ""],
     ["Funding (Hyperliquid)", fund, m.funding > 0.00002 ? "down" : m.funding < 0 ? "up" : ""],
     ["Fear & Greed", m.fng != null ? `${m.fng} · ${m.fngLabel || ""}` : "—", ""],
     ["vs daily VWAP", m.vwapDev != null ? (m.vwapDev >= 0 ? "+" : "−") + Math.abs(m.vwapDev).toFixed(2) + "σ" : "—", ""],
@@ -425,7 +435,7 @@ function renderSystem() {
     ["Last check", S.updated_at ? ago(S.updated_at) : "—"],
     ["Data source", lr.source === "binance" ? "Binance (fallback)" : "Hyperliquid perp"],
     ["Check took", lr.ms != null ? lr.ms + " ms" : "—"],
-    ["Engine", "v" + (st.version || "5.0.0")],
+    ["Engine", "v" + (st.version || "5.1.0")],
     ["Circuit breaker", st.cb && st.cb.cooldownUntil > Date.now() ? "Cooling down" : `${(st.cb && st.cb.consec) || 0} of 3 losses`],
   ];
   $("sys").innerHTML = sys.map(([k, v]) => `<div><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`).join("");
@@ -469,9 +479,30 @@ function parseRows(res) {
   try { return JSON.parse(body); } catch (e) { return null; }
 }
 
-let mcp = null, busy = false;
+const LIVE_URL = "https://deskbot-live.vercel.app";
+const API = "https://xevymbzgpcsdhygswxlk.supabase.co/functions/v1/deskbot-v5";
+function fromApi(g) {
+  const st = g.state || {}, r = g.backtest && g.backtest.results;
+  return {
+    state: { state: st, carried: st.carried, last_run: g.lastRun, updated_at: g.updated },
+    events: (g.events || []).filter((e) => e.kind !== "SKIP" || Date.now() - new Date(e.ts).getTime() < 1800000).slice(0, 40),
+    trades: g.trades || [], curve: g.curve || [],
+    bt: r && /^LIVE_CONFIG/.test(r.label || "") ? { label: r.label, ran_at: g.backtest.ran_at, a: r.combined.all, by: r.combined.by, mdd: r.combined.maxDD, eq: r.combined.endEquity, f: r.from, t: r.to, curve: r.curve } : DATA.bt,
+  };
+}
+let mcp = null, busy = false, directOK = false;
+async function pullDirect() {
+  try {
+    const r = await fetch(API, { cache: "no-store" });
+    if (!r.ok) return false;
+    const d = fromApi(await r.json());
+    if (!d.state.state || !d.state.updated_at) return false;
+    DATA = d; LIVE = true; renderAll(); $("srcBanner").hidden = true; return true;
+  } catch (e) { return false; }
+}
 async function pull() {
-  if (!mcp || busy) return; busy = true;
+  if (directOK || !mcp) { directOK = await pullDirect(); if (directOK || !mcp) return; }
+  if (busy) return; busy = true;
   try {
     const res = await mcp.callTool("Supabase", "execute_sql", { project_id: PROJECT, query: Q });
     const rows = parseRows(res);
@@ -493,19 +524,31 @@ async function pull() {
 
 $("refBtn").addEventListener("click", () => pull());
 $("runBtn").addEventListener("click", async () => {
-  if (!mcp) { $("runMsg").textContent = "Needs the Supabase connector. The bot still runs on its own every 5 minutes."; return; }
   const b = $("runBtn"); b.disabled = true; $("runMsg").textContent = "Asking the cloud bot to run a check…";
   try {
+    if (!mcp) { mcp = window.claude && window.claude.use ? await window.claude.use("mcp") : null; if (!mcp) throw { code: "no_connector" }; }
     await mcp.callTool("Supabase", "execute_sql", { project_id: PROJECT, query: `select public.dbv5_invoke('{"action":"run"}'::jsonb) as request_id` });
     setTimeout(async () => { await pull(); $("runMsg").textContent = "Check finished. The numbers above are fresh."; b.disabled = false; }, 6000);
   } catch (e) { $("runMsg").textContent = "The check didn't start (" + ((e && e.code) || "error") + "). The schedule keeps running regardless."; b.disabled = false; }
 });
 
 (async () => {
-  try { mcp = window.claude && window.claude.use ? await window.claude.use("mcp") : null; } catch (e) { mcp = null; }
-  if (!mcp) { $("srcBanner").textContent = "Showing the snapshot saved when this page was published. Open it in Claude with the Supabase connector to see live numbers."; return; }
-  await pull();
-  setInterval(() => { if (!document.hidden) pull(); }, 60000);
-  setInterval(() => { if (DATA.state && DATA.state.updated_at) { $("hdrAge").textContent = (LIVE ? "bot " : "snapshot · ") + ago(DATA.state.updated_at); } }, 15000);
+  directOK = await pullDirect();
+  if (!directOK) {
+    try { mcp = window.claude && window.claude.use ? await window.claude.use("mcp") : null; } catch (e) { mcp = null; }
+    if (mcp) await pull();
+    else $("srcBanner").innerHTML = 'Showing the saved snapshot. <a href="' + LIVE_URL + '" target="_blank" rel="noopener">Open the live dashboard ↗</a>';
+    if (mcp && !LIVE) {
+      $("srcBanner").innerHTML = 'Showing the saved snapshot. <button class="btn primary" id="connectBtn" type="button" style="margin-top:8px">Connect live data</button> or <a href="' + LIVE_URL + '" target="_blank" rel="noopener">open the live dashboard ↗</a>';
+      $("connectBtn").addEventListener("click", async () => {
+        try { const perm = await window.claude.use("permissions"); if (perm) await perm.request(["mcp:Supabase"]); } catch (e) {}
+        await pull();
+      });
+    }
+  }
+  setInterval(() => { if (!document.hidden) pull(); }, 30000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) pull(); });
+  setInterval(() => { const S = DATA.state || {}; if (S.updated_at) $("hdrAge").textContent = (LIVE ? "live · bot " : "snapshot · ") + ago(S.updated_at); }, 10000);
 })();
 </script>
+</body></html>
