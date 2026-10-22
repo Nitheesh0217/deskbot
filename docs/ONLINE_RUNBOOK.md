@@ -94,3 +94,11 @@ Free limits change often. Check the provider consoles before relying on them. We
 - Supabase free projects can pause after long inactivity with no API traffic. The 5-minute cron counts as activity, but check the Supabase dashboard occasionally.
 - No free host guarantees 100% uptime. The watchdog and heartbeat make outages visible and short; they can't make them impossible.
 - News labels are not a proven edge. They start in shadow mode for exactly that reason.
+
+## 9. Chart + TradingView (added 22 Oct 2026)
+
+- **Dashboard → Chart tab:** this is TradingView's open-source Lightweight Charts library (Apache-2.0). It draws only levels the bot actually uses: the daily EMA50 regime line, the ±3% gate lines, the 4H 55-bar breakout triggers, the Asian range, EMA20/50, the open position's entry/stop/TP1–3, and markers for every closed trade. Candles come straight from Hyperliquid in the browser, with Binance as the fallback, and refresh every 60 s.
+- **Chart → TradingView toggle:** this is the free TradingView Advanced Chart widget. You can draw on it yourself; the bot can't draw on it, because the free widget doesn't allow programmatic drawings.
+- **`pine/deskbot_v51_levels.pine`:** paste this into TradingView's Pine Editor and add it to a BTCUSDT chart. It draws the same regime gate, the 4H breakout levels and the Asian range, and marks HTF long/short signals. It also has alert conditions, so TradingView's own servers can send you alerts 24/7. I haven't compiled it here; if the Pine Editor shows an error, send it to me.
+- **TradingView MCP server (community, e.g. `tradesdontlie/tradingview-mcp`):** this drives the *TradingView Desktop app on your PC* through a debug port, and an AI client (Claude) has to operate it. So it can't run 24/7 from GitHub or the cloud. It's optional for hands-on sessions on your laptop and is deliberately not vendored into this repo.
+- **AI "predictions":** in walk-forward tests (docs/ML_REPORT.md), direction models trained on candles alone were coin-flip accurate out-of-sample. The chart therefore shows rule-based levels and the news-risk label, not an AI price forecast.

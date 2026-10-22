@@ -1,0 +1,59 @@
+//@version=5
+// DeskBot v5.1 levels & signals for TradingView (paper research tool — not financial advice).
+// Mirrors the cloud bot's HTF_TREND rules: 4H close beyond the prior 55-bar high/low, with the
+// 4H SuperTrend(10,3) and 4H EMA50 agreeing, AND the daily regime gate: price must sit more than
+// 3% beyond the daily EMA50 in the trade's direction. Uses CLOSED 4H/daily bars only (no repaint).
+// Add to a BTCUSDT chart (any timeframe ≤ 4H). Create alerts from the alert conditions at the bottom.
+indicator("DeskBot v5.1 levels", overlay = true, max_labels_count = 100)
+
+gatePct = input.float(3.0, "Daily regime gate (%)", minval = 0, step = 0.5) / 100
+donN    = input.int(55, "4H Donchian length", minval = 5)
+showAsia = input.bool(true, "Show Asian session range (00:00–07:00 UTC)")
+
+// daily EMA50 of CLOSED daily bars
+eD = request.security(syminfo.tickerid, "D", ta.ema(close, 50)[1], lookahead = barmerge.lookahead_on)
+gateLong  = eD / (1 - gatePct)   // longs allowed above this
+gateShort = eD / (1 + gatePct)   // shorts allowed below this
+
+// 4H context of the last CLOSED 4H bar
+f4() =>
+    [st, dir] = ta.supertrend(3, 10)
+    e50 = ta.ema(close, 50)
+    hh  = ta.highest(high, donN)[1]
+    ll  = ta.lowest(low, donN)[1]
+    lb  = close > hh and dir < 0 and close > e50
+    sb  = close < ll and dir > 0 and close < e50
+    [lb[1], sb[1], close[1], ta.highest(high, donN)[1], ta.lowest(low, donN)[1]]
+[l4, s4, c4, nextHi, nextLo] = request.security(syminfo.tickerid, "240", f4(), lookahead = barmerge.lookahead_on)
+
+new4h = ta.change(time("240")) != 0
+dist  = (c4 - eD) / c4
+longSig  = new4h and l4 and dist > gatePct
+shortSig = new4h and s4 and dist < -gatePct
+
+plot(eD, "Daily EMA50", color.new(color.orange, 0), 2)
+plot(gateLong,  "Long gate (+3%)",  color.new(color.green, 0), 1, plot.style_linebr)
+plot(gateShort, "Short gate (−3%)", color.new(color.red, 0), 1, plot.style_linebr)
+plot(nextHi, "Next 4H breakout high", color.new(color.aqua, 20), 1, plot.style_stepline)
+plot(nextLo, "Next 4H breakout low",  color.new(color.aqua, 20), 1, plot.style_stepline)
+
+// Asian range (00:00–07:00 UTC) like the bot's session levels
+inAsia = not na(time(timeframe.period, "0000-0700", "UTC"))
+var float aHi = na
+var float aLo = na
+if inAsia and not inAsia[1]
+    aHi := high
+    aLo := low
+else if inAsia
+    aHi := math.max(aHi, high)
+    aLo := math.min(aLo, low)
+plot(showAsia and not inAsia ? aHi : na, "Asian high", color.new(color.gray, 30), 1, plot.style_linebr)
+plot(showAsia and not inAsia ? aLo : na, "Asian low",  color.new(color.gray, 30), 1, plot.style_linebr)
+
+plotshape(longSig,  "HTF long",  shape.triangleup,   location.belowbar, color.green, size = size.small, text = "HTF L")
+plotshape(shortSig, "HTF short", shape.triangledown, location.abovebar, color.red,   size = size.small, text = "HTF S")
+bgcolor(dist > gatePct ? color.new(color.green, 94) : dist < -gatePct ? color.new(color.red, 94) : na, title = "Regime")
+
+alertcondition(longSig,  "DeskBot HTF long",  "DeskBot v5.1: 4H trend breakout LONG with daily regime gate on {{ticker}} at {{close}}")
+alertcondition(shortSig, "DeskBot HTF short", "DeskBot v5.1: 4H trend breakout SHORT with daily regime gate on {{ticker}} at {{close}}")
+alertcondition(ta.crossover(dist, gatePct) or ta.crossunder(dist, -gatePct), "DeskBot regime gate opened", "DeskBot v5.1: daily regime gate opened on {{ticker}}")

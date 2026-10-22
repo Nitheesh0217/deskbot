@@ -136,10 +136,21 @@ td:not(:first-child), th:not(:first-child) { text-align: right; }
 /* tabs */
 nav.tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 25; background: var(--panel); border-top: 1px solid var(--line);
   padding-bottom: env(safe-area-inset-bottom, 0px); padding-left: max(8px, env(safe-area-inset-left, 0px)); padding-right: max(8px, env(safe-area-inset-right, 0px)); }
-.tabs-in { max-width: 560px; margin: 0 auto; display: grid; grid-template-columns: repeat(5, 1fr); }
+.tabs-in { max-width: 560px; margin: 0 auto; display: grid; grid-template-columns: repeat(6, 1fr); }
 .tab { background: none; border: 0; color: var(--fg-3); font: 600 11px/1 var(--f-body); padding: 9px 2px 10px; display: flex; flex-direction: column; align-items: center; gap: 5px; cursor: pointer; }
 .tab svg { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .tab[aria-selected="true"] { color: var(--accent); }
+.seg { display: flex; gap: 4px; flex-wrap: wrap; }
+.seg button { font: 600 12px/1 var(--f-mono); padding: 8px 10px; border-radius: 6px; border: 1px solid var(--line-2); background: var(--panel-2); color: var(--fg-2); cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.chartbox { height: 440px; margin-top: 10px; border-radius: 8px; overflow: hidden; border: 1px solid var(--line); position: relative; }
+.chartbox .msg { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; padding: 20px; color: var(--fg-3); font-size: 13px; }
+.legend { display: grid; gap: 4px; margin-top: 10px; }
+.legend div { display: grid; grid-template-columns: 14px 1fr auto; gap: 8px; align-items: center; font: 500 12.5px/1.4 var(--f-mono); }
+.legend i { width: 14px; height: 3px; border-radius: 2px; display: block; }
+.read { display: grid; gap: 8px; margin-top: 8px; }
+.read div { font-size: 13.5px; line-height: 1.5; }
+.read b { font-family: var(--f-mono); }
 .banner { font-size: 12.5px; line-height: 1.45; color: var(--fg-2); padding: 9px 12px; border: 1px dashed var(--line-2); border-radius: 8px; }
 </style>
 
@@ -203,6 +214,25 @@ nav.tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 25; backgroun
     <div class="view" id="stratList" style="gap:10px"></div>
   </section>
 
+  <!-- CHART -->
+  <section class="view" id="v-chart" aria-label="Chart" hidden>
+    <div class="card">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <h2>BTC chart</h2>
+        <div class="seg" id="chartMode" style="margin-left:auto"><button type="button" data-m="bot" aria-pressed="true">Bot levels</button><button type="button" data-m="tv" aria-pressed="false">TradingView</button></div>
+      </div>
+      <div class="seg" id="tfSeg" style="margin-top:10px"><button type="button" data-tf="15m" aria-pressed="false">15m</button><button type="button" data-tf="1h" aria-pressed="true">1H</button><button type="button" data-tf="4h" aria-pressed="false">4H</button><button type="button" data-tf="1d" aria-pressed="false">1D</button></div>
+      <div class="chartbox" id="lwBox"><div class="msg" id="lwMsg">Loading candles…</div></div>
+      <div class="chartbox" id="tvBox" hidden><div id="tvw" style="height:100%"></div><div class="msg" id="tvMsg">Loading TradingView…</div></div>
+      <div class="legend" id="legend"></div>
+      <p class="note faint" style="margin-top:8px" id="chartNote">Every line is a level the bot actually uses. Nothing is hand-drawn or AI-guessed. Candles: Hyperliquid BTC perp (Binance fallback).</p>
+    </div>
+    <div class="card">
+      <h2>What the bot is waiting for</h2>
+      <div class="read" id="botRead"></div>
+    </div>
+  </section>
+
   <!-- TRADES -->
   <section class="view" id="v-trades" aria-label="Trades" hidden>
     <div class="card">
@@ -263,6 +293,7 @@ nav.tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 25; backgroun
 <nav class="tabs" aria-label="Sections">
   <div class="tabs-in" role="tablist">
     <button class="tab" role="tab" data-v="desk" aria-selected="true"><svg viewBox="0 0 24 24"><path d="M3 17l5-5 4 4 8-8"/><path d="M15 8h5v5"/></svg>Desk</button>
+    <button class="tab" role="tab" data-v="chart" aria-selected="false"><svg viewBox="0 0 24 24"><path d="M6 4v16M6 8h-2v6h2M12 6v12M12 9h-2v5h2M18 3v14M18 6h-2v7h2"/></svg>Chart</button>
     <button class="tab" role="tab" data-v="strategies" aria-selected="false"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="7" height="7" rx="1"/><rect x="14" y="4" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>Strategies</button>
     <button class="tab" role="tab" data-v="trades" aria-selected="false"><svg viewBox="0 0 24 24"><path d="M5 4h14v16H5z"/><path d="M9 9h6M9 13h6M9 17h3"/></svg>Trades</button>
     <button class="tab" role="tab" data-v="activity" aria-selected="false"><svg viewBox="0 0 24 24"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>Activity</button>
@@ -444,15 +475,132 @@ function renderSystem() {
 function renderAll() { renderDesk(); renderStrategies(); renderTrades(); renderEvents(); renderSystem(); }
 
 // tabs
-const VIEWS = ["desk", "strategies", "trades", "activity", "system"];
+const VIEWS = ["desk", "chart", "strategies", "trades", "activity", "system"];
 function show(v) {
   if (!VIEWS.includes(v)) v = "desk";
   VIEWS.forEach((x) => { $("v-" + x).hidden = x !== v; });
   document.querySelectorAll(".tab").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.v === v)));
   try { localStorage.setItem("db5tab", v); } catch (e) {}
   window.scrollTo(0, 0);
+  if (v === "chart") setTimeout(() => chartShow(), 0);
 }
 document.querySelectorAll(".tab").forEach((b) => b.addEventListener("click", () => show(b.dataset.v)));
+
+// ── Chart: TradingView Lightweight Charts (Apache-2.0) + the bot's real levels ──
+const CH = { lib: null, chart: null, series: {}, tf: "1h", mode: "bot", timer: null, tvLoaded: false };
+const TFMS = { "15m": 9e5, "1h": 36e5, "4h": 144e5, "1d": 864e5 };
+function cssVar(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim() || "#888"; }
+function loadScript(src) { return new Promise((res, rej) => { const s = document.createElement("script"); s.src = src; s.onload = res; s.onerror = () => rej(new Error("load " + src)); document.head.appendChild(s); }); }
+async function getBars(tf, n) {
+  const end = Date.now(), start = end - (n + 2) * TFMS[tf];
+  try {
+    const r = await fetch("https://api.hyperliquid.xyz/info", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: "candleSnapshot", req: { coin: "BTC", interval: tf, startTime: start, endTime: end } }) });
+    if (!r.ok) throw 0; const j = await r.json(); if (!Array.isArray(j) || !j.length) throw 0;
+    return { src: "Hyperliquid", bars: j.map((k) => ({ t: +k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c })) };
+  } catch (e) {
+    const r = await fetch(`https://data-api.binance.vision/api/v3/klines?symbol=BTCUSDT&interval=${tf}&limit=${Math.min(n, 1000)}`);
+    if (!r.ok) throw new Error("no candle source reachable"); const j = await r.json();
+    return { src: "Binance", bars: j.map((k) => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4] })) };
+  }
+}
+function emaArr(bars, p) { const out = new Array(bars.length).fill(NaN); if (bars.length < p) return out; let e = 0; for (let i = 0; i < p; i++) e += bars[i].c; e /= p; out[p - 1] = e; const k = 2 / (p + 1); for (let i = p; i < bars.length; i++) { e = bars[i].c * k + e * (1 - k); out[i] = e; } return out; }
+function donchianPrior(bars, n) { const i = bars.length - 1; if (i < n) return null; let h = -Infinity, l = Infinity; for (let j = i - n; j < i; j++) { h = Math.max(h, bars[j].h); l = Math.min(l, bars[j].l); } return { hi: h, lo: l }; }
+const sec = (ms) => Math.floor(ms / 1000);
+
+async function chartShow() {
+  if (CH.mode === "tv") return showTV();
+  $("lwBox").hidden = false; $("tvBox").hidden = true;
+  try {
+    if (!CH.lib) { await loadScript("https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"); CH.lib = window.LightweightCharts; }
+  } catch (e) { $("lwMsg").textContent = "Couldn't load the chart library here. Open the live dashboard to see the chart."; return; }
+  if (!CH.chart) {
+    const box = $("lwBox");
+    CH.chart = CH.lib.createChart(box, { height: 440, layout: { background: { color: cssVar("--panel") }, textColor: cssVar("--fg-2"), fontFamily: "IBM Plex Mono, monospace" },
+      grid: { vertLines: { color: cssVar("--line") }, horzLines: { color: cssVar("--line") } }, rightPriceScale: { borderColor: cssVar("--line-2") },
+      timeScale: { borderColor: cssVar("--line-2"), timeVisible: true, secondsVisible: false }, crosshair: { mode: 0 } });
+    new ResizeObserver(() => CH.chart.applyOptions({ width: box.clientWidth })).observe(box);
+    CH.series.c = CH.chart.addCandlestickSeries({ upColor: cssVar("--up"), downColor: cssVar("--down"), wickUpColor: cssVar("--up"), wickDownColor: cssVar("--down"), borderVisible: false });
+    CH.series.e20 = CH.chart.addLineSeries({ color: "#4fd1c5", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+    CH.series.e50 = CH.chart.addLineSeries({ color: "#b48ef0", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+    CH.series.eD = CH.chart.addLineSeries({ color: cssVar("--accent"), lineWidth: 2, priceLineVisible: false, lastValueVisible: false });
+    CH.series.gU = CH.chart.addLineSeries({ color: cssVar("--up"), lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false });
+    CH.series.gD = CH.chart.addLineSeries({ color: cssVar("--down"), lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false });
+  }
+  await chartDraw();
+  clearInterval(CH.timer); CH.timer = setInterval(() => { if (!document.hidden && CH.mode === "bot" && !$("v-chart").hidden) chartDraw(); }, 60000);
+}
+
+async function chartDraw() {
+  const tf = CH.tf;
+  try {
+    const [main, day, h4] = await Promise.all([getBars(tf, tf === "1d" ? 400 : 500), getBars("1d", 200), getBars("4h", 120)]);
+    $("lwMsg").hidden = true;
+    const b = main.bars;
+    CH.series.c.setData(b.map((x) => ({ time: sec(x.t), open: x.o, high: x.h, low: x.l, close: x.c })));
+    const e20 = emaArr(b, 20), e50 = emaArr(b, 50);
+    CH.series.e20.setData(b.map((x, i) => ({ time: sec(x.t), value: e20[i] })).filter((p) => isFinite(p.value)));
+    CH.series.e50.setData(b.map((x, i) => ({ time: sec(x.t), value: e50[i] })).filter((p) => isFinite(p.value)));
+    // daily EMA50 (closed daily bars only, like the engine) stepped onto this timeframe
+    const dClosed = day.bars.filter((x) => x.t + 864e5 <= Date.now()), eDarr = emaArr(dClosed, 50);
+    const dayVal = (t) => { let v = NaN; for (let i = 0; i < dClosed.length; i++) { if (dClosed[i].t + 864e5 <= t) v = eDarr[i]; else break; } return v; };
+    const eD = b.map((x) => ({ time: sec(x.t), value: dayVal(x.t + TFMS[tf]) })).filter((p) => isFinite(p.value));
+    CH.series.eD.setData(eD); CH.series.gU.setData(eD.map((p) => ({ time: p.time, value: p.value / 0.97 }))); CH.series.gD.setData(eD.map((p) => ({ time: p.time, value: p.value / 1.03 })));
+    // price lines: position + 4H Donchian 55 (closed 4H bars) + Asian range
+    (CH.lines || []).forEach((l) => CH.series.c.removePriceLine(l)); CH.lines = [];
+    const PL = (price, color, title, style = 0, w = 1) => { if (isFinite(price)) CH.lines.push(CH.series.c.createPriceLine({ price, color, lineWidth: w, lineStyle: style, axisLabelVisible: true, title })); };
+    const S = (DATA.state || {}), st = S.state || {}, m = (S.last_run || {}).market || {}, p = st.pos;
+    const h4c = h4.bars.filter((x) => x.t + 144e5 <= Date.now()), dc = donchianPrior(h4c.concat([{ h: NaN, l: NaN }]), 55);
+    const last = b[b.length - 1].c, eDnow = eD.length ? eD[eD.length - 1].value : m.ema50D;
+    const legend = [];
+    if (dc) { PL(dc.hi, "#5aa9e6", "4H 55-bar high", 1); PL(dc.lo, "#5aa9e6", "4H 55-bar low", 1); }
+    if (m.asian && tf !== "1d" && tf !== "4h") { PL(m.asian.hi, cssVar("--fg-3"), "Asian high", 3); PL(m.asian.lo, cssVar("--fg-3"), "Asian low", 3); }
+    if (p) { PL(p.entry, cssVar("--fg"), `${p.dir.toUpperCase()} entry`, 0, 2); PL(p.stop, cssVar("--down"), "Stop", 0, 2);
+      [["tp1", "TP1"], ["tp2", "TP2"], ["tp3", "TP3"]].forEach(([k, t]) => PL(p[k], cssVar("--up"), t + (p[k + "Done"] ? " ✓" : ""), p[k + "Done"] ? 2 : 0)); }
+    // markers: closed trades + open entry
+    const times = b.map((x) => sec(x.t));
+    const snapT = (ts) => { let lo = 0, hi = times.length - 1, a = -1; while (lo <= hi) { const md = (lo + hi) >> 1; if (times[md] <= ts) { a = md; lo = md + 1; } else hi = md - 1; } return a < 0 ? null : times[a]; };
+    const mk = [];
+    (DATA.trades || []).forEach((t) => { const o = sec(Date.parse(t.open_t)), c = sec(Date.parse(t.close_t)), L = t.dir === "long";
+      mk.push({ time: snapT(o), position: L ? "belowBar" : "aboveBar", color: L ? cssVar("--up") : cssVar("--down"), shape: L ? "arrowUp" : "arrowDown", text: `${t.strategy}` });
+      mk.push({ time: snapT(c), position: "inBar", color: +t.net >= 0 ? cssVar("--up") : cssVar("--down"), shape: "circle", text: sgnR(+t.r) }); });
+    if (p) { const o = sec(p.openT); mk.push({ time: snapT(o), position: p.dir === "long" ? "belowBar" : "aboveBar", color: cssVar("--accent"), shape: p.dir === "long" ? "arrowUp" : "arrowDown", text: "OPEN " + p.strategy }); }
+    const t0 = sec(b[0].t); CH.series.c.setMarkers(mk.filter((x) => x.time != null && x.time >= t0).sort((a, z) => a.time - z.time));
+    // legend
+    legend.push(["#f2a93b", "Daily EMA50 (regime line)", "$" + fmtPx(eDnow)], [cssVar("--up"), "+3% gate: longs allowed above", "$" + fmtPx(eDnow / 0.97)], [cssVar("--down"), "−3% gate: shorts allowed below", "$" + fmtPx(eDnow / 1.03)]);
+    if (dc) legend.push(["#5aa9e6", "4H 55-bar high / low (breakout triggers)", "$" + fmtPx(dc.hi) + " / $" + fmtPx(dc.lo)]);
+    legend.push(["#4fd1c5", `EMA20 (${tf})`, "$" + fmtPx(e20[e20.length - 1])], ["#b48ef0", `EMA50 (${tf})`, "$" + fmtPx(e50[e50.length - 1])]);
+    if (p) legend.push([cssVar("--fg"), `Open ${p.dir} (${nameOf(p.strategy)})`, `entry $${fmtPx(p.entry)} · stop $${fmtPx(p.stop)}`]);
+    $("legend").innerHTML = legend.map(([c, k, v]) => `<div><i style="background:${c}"></i><span class="muted">${esc(k)}</span><span>${esc(v)}</span></div>`).join("");
+    $("chartNote").textContent = `Every line is a level the bot actually uses. Nothing is hand-drawn or AI-guessed. Candles: ${main.src} BTC · refreshed ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.`;
+    // the bot's read, in words
+    const d = (last - eDnow) / last, rd = [];
+    rd.push(d > 0.03 ? `<div><b class="up">Longs allowed.</b> Price is ${pct(d)} above the daily EMA50, past the +3% gate.</div>`
+      : d < -0.03 ? `<div><b class="down">Shorts allowed.</b> Price is ${pct(d)} below the daily EMA50, past the −3% gate.</div>`
+      : `<div><b>Standing aside on trend trades.</b> Price is ${pct(d)} from the daily EMA50. Longs unlock above <b>$${fmtPx(eDnow / 0.97)}</b>, shorts below <b>$${fmtPx(eDnow / 1.03)}</b> (approx., the EMA moves daily).</div>`);
+    if (dc) rd.push(`<div>4H trend breakout fires on a <b>4H close above $${fmtPx(dc.hi)}</b> (long) or <b>below $${fmtPx(dc.lo)}</b> (short), only if the gate allows that side and 4H SuperTrend + EMA50 agree.</div>`);
+    if (p) rd.push(`<div>Managing an open <b>${p.dir}</b>: ${p.tp1Done ? "TP1 taken, " : ""}stop $${fmtPx(p.stop)}, next target $${fmtPx(!p.tp1Done ? p.tp1 : !p.tp2Done ? p.tp2 : p.tp3)}.</div>`);
+    const nw = (S.last_run || {}).news; if (nw) rd.push(`<div>News risk <b>${esc(nw.risk)}</b> (${esc(nw.by.startsWith("ai:") ? "AI" : "keyword rules")}, ${esc(nw.mode)} mode): ${esc(nw.reason)}</div>`);
+    $("botRead").innerHTML = rd.join("");
+  } catch (e) { $("lwMsg").hidden = false; $("lwMsg").textContent = "Couldn't load candles here (" + (e && e.message || "network") + "). The live dashboard on Vercel shows the chart."; }
+}
+
+async function showTV() {
+  $("lwBox").hidden = true; $("tvBox").hidden = false;
+  if (CH.tvLoaded) return;
+  try {
+    await loadScript("https://s3.tradingview.com/tv.js");
+    new window.TradingView.widget({ autosize: true, symbol: "BINANCE:BTCUSDT", interval: { "15m": "15", "1h": "60", "4h": "240", "1d": "D" }[CH.tf], timezone: "Etc/UTC",
+      theme: matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark", style: "1", allow_symbol_change: true, hide_side_toolbar: false, withdateranges: true, studies: ["MAExp@tv-basicstudies"], container_id: "tvw" });
+    CH.tvLoaded = true; $("tvMsg").hidden = true;
+  } catch (e) { $("tvMsg").textContent = "TradingView can't load inside this viewer. Open the live dashboard on Vercel for the full TradingView chart."; }
+}
+document.querySelectorAll("#tfSeg button").forEach((bt) => bt.addEventListener("click", () => {
+  CH.tf = bt.dataset.tf; document.querySelectorAll("#tfSeg button").forEach((x) => x.setAttribute("aria-pressed", String(x === bt)));
+  if (CH.mode === "tv") { CH.tvLoaded = false; $("tvw").innerHTML = ""; showTV(); } else chartShow();
+}));
+document.querySelectorAll("#chartMode button").forEach((bt) => bt.addEventListener("click", () => {
+  CH.mode = bt.dataset.m; document.querySelectorAll("#chartMode button").forEach((x) => x.setAttribute("aria-pressed", String(x === bt))); chartShow();
+}));
 
 renderAll();
 let startTab = (location.hash || "").slice(1);
@@ -479,7 +627,7 @@ function parseRows(res) {
   try { return JSON.parse(body); } catch (e) { return null; }
 }
 
-const LIVE_URL = "https://deskbot-live.vercel.app";
+const LIVE_URL = "https://deskbot-azure.vercel.app";
 const API = "https://xevymbzgpcsdhygswxlk.supabase.co/functions/v1/deskbot-v5";
 function fromApi(g) {
   const st = g.state || {}, r = g.backtest && g.backtest.results;
