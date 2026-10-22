@@ -10,7 +10,7 @@ import {
   VERSION, CFG, STRATEGIES, buildSeries, snapshot, evaluate, entryGates, openPosition, managePosition,
   initState, unrealized, backtest, summarize, rollDay, dynamicRisk, applyCfg, ensureState, type State, type Trade, type Bar,
 } from "./engine.ts";
-import { candles, candlesRange, candlesRangeBinance, hlContext, fearGreed } from "./data.ts";
+import { candles, candlesRange, candlesRangeBinance, hlContext, fearGreed, orderFlow } from "./data.ts";
 import { readNews, newsBlocks, type NewsRead } from "./news.ts";
 import { providersFromEnv, type Usage } from "./ai.ts";
 
@@ -87,9 +87,9 @@ async function runOnce() {
   if (!st) { st = await carryFromV3(now); evs.push({ kind: "INIT", msg: `DeskBot ${VERSION} initialised at $${st.equity.toFixed(2)} (carried from v3)`, data: st.carried }); }
   ensureState(st); applyCfg(st.cfg); rollDay(st, now);
 
-  const [m5, m15, h1, h4, ctx, fng] = await Promise.all([
+  const [m5, m15, h1, h4, ctx, fng, flow] = await Promise.all([
     candles("5m", 400, now), candles("15m", 400, now), candles("1h", 300, now), candles("4h", 700, now), hlContext(),
-    (async () => { const c = (st as State & { _fng?: { v: number; l: string; t: number } })._fng; if (c && now - c.t < 3 * 3600_000) return { value: c.v, label: c.l }; return await fearGreed(); })(),
+    (async () => { const c = (st as State & { _fng?: { v: number; l: string; t: number } })._fng; if (c && now - c.t < 3 * 3600_000) return { value: c.v, label: c.l }; return await fearGreed(); })(), orderFlow(now),
   ]);
   if (fng) (st as State & { _fng?: unknown })._fng = { v: fng.value, l: fng.label, t: now };
   const source = m5.source;
@@ -133,6 +133,7 @@ async function runOnce() {
   if (snap.T > st.lastEvalT) {
     st.lastEvalT = snap.T;
     const { signals, rejects } = evaluate(snap, st.enabled, S);
+    if (flow) for (const sg of signals) { const a = flow.imb24 * (sg.dir === "long" ? 1 : -1); sg.why.push(`Order flow 24h ${a > 0 ? "with" : "against"} trade (${(flow.imb24 * 100).toFixed(1)}%, shadow)`); }
     decision = { signals: signals.map(s => ({ strategy: s.strategy, dir: s.dir, score: s.score, why: s.why })), rejects };
     if (!st.pos) {
       let opened = false;
@@ -164,6 +165,7 @@ async function runOnce() {
     regime: snap.regime, st5: snap.st5, st15: snap.st15, st1h: snap.st1h, st4h: snap.st4h, chop5: +snap.chop5.toFixed(1), chop15: +snap.chop15.toFixed(1),
     rsi15: +snap.rsi15.toFixed(1), rsi1h: +snap.rsi1h.toFixed(1), vwap: +snap.vwap.toFixed(1), vwapDev: +snap.vwapDev.toFixed(2), atr5: +snap.atr5.toFixed(1), atr15: +snap.atr15.toFixed(1),
     poc: +snap.poc.toFixed(1), asian: snap.asian, ema20: +snap.ema20.toFixed(1), ema50: +snap.ema50.toFixed(1), barT: snap.T,
+    flow4: flow?.imb4 ?? null, flow24: flow?.imb24 ?? null,
     ema50D: snap.i1d >= 0 && isFinite(S.ema50D[snap.i1d]) ? +S.ema50D[snap.i1d].toFixed(1) : null,
   };
   const nw = sx._news;

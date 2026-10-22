@@ -391,6 +391,7 @@ function renderDesk() {
   const fund = m.funding != null ? (m.funding * 100).toFixed(4) + "%/h" : "—";
   const cells = [
     ["Daily regime gate", m.ema50D ? (() => { const d = (m.price - m.ema50D) / m.price; return (d > 0.03 ? "LONG ok" : d < -0.03 ? "SHORT ok" : "Stand aside") + " · " + pct(d, 1) + " vs EMA50D"; })() : "—", m.ema50D ? ((m.price - m.ema50D) / m.price > 0.03 ? "up" : (m.price - m.ema50D) / m.price < -0.03 ? "down" : "") : ""],
+    ["Order flow 24h / 4h", m.flow24 != null ? `${m.flow24 >= 0 ? "Buyers" : "Sellers"} ${pct(m.flow24, 1)} · ${pct(m.flow4, 1)}` : "—", m.flow24 > 0.02 ? "up" : m.flow24 < -0.02 ? "down" : ""],
     ["Funding (Hyperliquid)", fund, m.funding > 0.00002 ? "down" : m.funding < 0 ? "up" : ""],
     ["Fear & Greed", m.fng != null ? `${m.fng} · ${m.fngLabel || ""}` : "—", ""],
     ["vs daily VWAP", m.vwapDev != null ? (m.vwapDev >= 0 ? "+" : "−") + Math.abs(m.vwapDev).toFixed(2) + "σ" : "—", ""],

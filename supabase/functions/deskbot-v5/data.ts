@@ -82,3 +82,17 @@ export async function fearGreed(): Promise<{ value: number; label: string } | nu
     return { value: +j.data[0].value, label: j.data[0].value_classification };
   } catch { return null; }
 }
+
+// Order flow (taker imbalance) from Binance spot 1h klines: field 9 = taker-buy base volume.
+// imbN = Σ(2·takerBuy − volume) / Σ volume over the last N CLOSED hours, in [−1, 1]. >0 = aggressive buyers dominate.
+// Research (docs/ML_REPORT.md §8): 24h imbalance on the trade's side had better results in both periods, but the effect is small,
+// so it is logged (shadow), not used to gate entries.
+export async function orderFlow(now = Date.now()): Promise<{ imb4: number; imb24: number; bars: number } | null> {
+  try {
+    const res = await withTimeout(s => fetch(`${BN}/klines?symbol=BTCUSDT&interval=1h&limit=26`, { signal: s }));
+    if (!res.ok) return null;
+    const j = (await res.json() as unknown[][]).filter(k => +k[6]! < now);
+    const imb = (n: number) => { const w = j.slice(-n); const v = w.reduce((a, k) => a + +k[5]!, 0); return v > 0 ? w.reduce((a, k) => a + 2 * +k[9]! - +k[5]!, 0) / v : NaN; };
+    return { imb4: +imb(4).toFixed(4), imb24: +imb(24).toFixed(4), bars: j.length };
+  } catch { return null; }
+}

@@ -114,3 +114,25 @@ New strategy `HTF_SWEEP` (opt-in, OFF by default): a bar trades through the prio
 | **v5.1 alone (live)** | 138 | **+0.117** | **1.21** | +9.4 | +3.6 | −0.8 | +4.0 |
 
 **Result:** every "catch the top" variant lost money, and the *earlier* 1H trigger lost the most. It sees more of the turns, but it also gets stopped by many more fake ones. Charts look obvious in hindsight because the failed breakouts that kept going up are no longer on screen. HTF_SWEEP stays in the code switched off, and nothing changed in the live bot.
+
+## 8. Positioning and order flow (tested 22 Oct 2026)
+
+Data, built inside Supabase: Binance BTCUSDT hourly bars with **taker-buy volume** (order flow), Jan 2023 → Oct 2026 (33,380 h). Hyperliquid BTC **funding and premium**, hourly, May 2023 → Oct 2026 (29,667 h). 2023–24 is in-sample and 2025–26 out-of-sample.
+
+**Single signals vs next-24h BTC return** (quintile 1 = lowest):
+- 24h taker imbalance (heaviest selling quintile): −13 bp in-sample, **−12 bp out-of-sample**, against roughly flat or positive in the other quintiles. This is order-flow momentum and the only signal whose sign held in both periods. Its size is about one round-trip of fees.
+- 4h imbalance, 24h-average funding and premium all **flip sign** between the periods, so they're noise.
+
+**Order flow at 4H-level sweeps:** the first result looked strong. A high sweep with aggressive selling was followed by +1.2–1.6% over 24h, about 67% of the time. Once each sweep was counted only once (no overlapping hours), just 3–5 independent events a year remained and their signs were mixed. **The effect was an artifact.**
+
+**As a filter on v5.1's own 138 trades:**
+
+| Filter | 2023–24 pass / fail (avg R) | 2025–26 pass / fail (avg R) |
+|---|---|---|
+| 24h order flow on the trade's side | +0.29 (n58) / −0.26 (n15) | +0.06 (n60) / −0.02 (n5) |
+| 4h order flow on the trade's side | +0.19 / +0.15 | −0.11 / **+0.47** (reversed) |
+| Funding: crowd on our side | +0.25 / −0.22 | +0.03 / +0.08 (reversed) |
+
+**Decision:** 24h order flow points the right way consistently, but it would remove only about 10% of trades and changes almost nothing out-of-sample. From v5.3 the bot **measures it live on every decision** ("Order flow 24h with/against trade", shadow) and the dashboard shows it, so a live sample builds up. It doesn't gate trades yet. Revisit after about 50 live trades.
+
+Not tested (no free multi-year history): liquidation clusters, open-interest changes, top-trader positioning. Coinversa holds these, but only 30 days of history, on a $199/month plan.
