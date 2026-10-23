@@ -136,3 +136,19 @@ Data, built inside Supabase: Binance BTCUSDT hourly bars with **taker-buy volume
 **Decision:** 24h order flow points the right way consistently, but it would remove only about 10% of trades and changes almost nothing out-of-sample. From v5.3 the bot **measures it live on every decision** ("Order flow 24h with/against trade", shadow) and the dashboard shows it, so a live sample builds up. It doesn't gate trades yet. Revisit after about 50 live trades.
 
 Not tested (no free multi-year history): liquidation clusters, open-interest changes, top-trader positioning. Coinversa holds these, but only 30 days of history, on a $199/month plan.
+
+## 9. EMA20 / EMA50 cross (user's chart idea, tested 22 Oct 2026)
+
+Idea: on the 15m chart, the drop accelerated after EMA20 crossed under EMA50, so sell the cross (and buy the opposite cross). Strategy `EMA_CROSS` (opt-in, OFF), full engine, all costs, 2023 → Aug 2026, auto-disable switched off for research:
+
+| Variant | Trades | Avg R after costs | Avg R before costs | PF | 2023 / 24 / 25 / 26 (R) |
+|---|---|---|---|---|---|
+| 15m, both sides | 1,462 | −0.150 | −0.013 | 0.71 | −81 / −26 / −72 / −41 |
+| 15m, shorts only | 1,034 | −0.188 | −0.047 | 0.60 | −80 / −33 / −62 / −20 |
+| 15m + 4H SuperTrend agrees | 982 | −0.189 | −0.045 | 0.68 | |
+| 15m + daily regime gate | 693 | −0.201 | −0.065 | 0.70 | |
+| 15m, wider stop (4×ATR) | 848 | −0.076 | +0.015 | 0.87 | +2 / −17 / −56 / +7 |
+| 1h, stop 6×ATR15 | 419 | −0.086 | −0.020 | 0.80 | |
+| 1h + 4H agree + daily gate | 96 | +0.015 | +0.079 | 1.06 | +4 / −1 / −4 / +3 |
+
+**Result:** no edge. Even *before* fees the 15m cross averages about 0R, so the crossover has no predictive value on its own and fees turn it negative. The cross lags by design. It happens after the move has started, which is why it looks perfect on a chart that already shows the drop, and BTC whipsaws through it many times for every clean trend. The one break-even variant (1h, with the 4H trend and daily regime agreeing) is basically a slower copy of HTF_TREND, which the bot already trades. EMA_CROSS stays off.

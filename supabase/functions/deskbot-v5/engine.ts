@@ -19,10 +19,10 @@ export const VERSION = "5.3.0";
 
 export type Bar = { t: number; o: number; h: number; l: number; c: number; v: number; ct: number };
 export type Dir = "long" | "short";
-export type StrategyId = "D_BEARTRAP" | "D_THRUST" | "HTF_TREND" | "TREND_MTF" | "SWEEP_REV" | "VWAP_REVERT" | "SESSION_BO" | "HTF_SWEEP";
-export const STRATEGIES: StrategyId[] = ["D_BEARTRAP", "D_THRUST", "HTF_TREND", "TREND_MTF", "SWEEP_REV", "VWAP_REVERT", "SESSION_BO", "HTF_SWEEP"];
+export type StrategyId = "D_BEARTRAP" | "D_THRUST" | "HTF_TREND" | "TREND_MTF" | "SWEEP_REV" | "VWAP_REVERT" | "SESSION_BO" | "HTF_SWEEP" | "EMA_CROSS";
+export const STRATEGIES: StrategyId[] = ["D_BEARTRAP", "D_THRUST", "HTF_TREND", "TREND_MTF", "SWEEP_REV", "VWAP_REVERT", "SESSION_BO", "HTF_SWEEP", "EMA_CROSS"];
 // strategies that stay OFF unless RISK_SCALE names them explicitly (so a new idea can never go live by accident)
-export const OPT_IN: StrategyId[] = ["HTF_SWEEP"];
+export const OPT_IN: StrategyId[] = ["HTF_SWEEP", "EMA_CROSS"];
 
 export const CFG = {
   // costs (Hyperliquid-style perp, paper)
@@ -49,15 +49,18 @@ export const CFG = {
     VWAP_REVERT: { tp1: 1, tp2: 1.5, tp3: 2, maxHoldH: 8 },
     SESSION_BO:  { tp1: 1, tp2: 2, tp3: 3.5, maxHoldH: 12 },
     HTF_SWEEP:   { tp1: 1.5, tp2: 3, tp3: 5, maxHoldH: 120 },
+    EMA_CROSS:   { tp1: 1.5, tp2: 3, tp3: 5, maxHoldH: 48 },
   } as Record<StrategyId, { tp1: number; tp2: number; tp3: number; maxHoldH: number }>,
   // exit management: "BE_AT_TP1" (v4.3: stop→entry after TP1) | "HOLD" (journal v0.4: keep stop until TP2, then →entry)
   EXIT_MODE: "BE_AT_TP1" as "BE_AT_TP1" | "HOLD",
   // sweep reversals: false = 4H counter-bias only penalised, true = must not be against 4H
   SWEEP_REQUIRE_HTF: false,
   // per-strategy risk multiplier (1 = full dynamic risk; 0.25 = evidence-gathering size)
-  RISK_SCALE: { D_BEARTRAP: 1, D_THRUST: 1, HTF_TREND: 1, TREND_MTF: 1, SWEEP_REV: 1, VWAP_REVERT: 1, SESSION_BO: 1, HTF_SWEEP: 0 } as Record<StrategyId, number>,
+  RISK_SCALE: { D_BEARTRAP: 1, D_THRUST: 1, HTF_TREND: 1, TREND_MTF: 1, SWEEP_REV: 1, VWAP_REVERT: 1, SESSION_BO: 1, HTF_SWEEP: 0, EMA_CROSS: 0 } as Record<StrategyId, number>,
   // HTF_SWEEP: failed break of the 4H 55-bar high/low (the turn starts AT the level). Trigger TF: "4h" bar close or earlier "1h" close.
   HSW_TF: "4h" as "4h" | "1h", HSW_WICK: 0.4, HSW_MAX_RISK_ATR: 2.5,
+  // EMA_CROSS: EMA20 crosses EMA50 on the trigger timeframe (user's chart idea). Stop = XC_STOP_ATR × ATR(15m) beyond entry.
+  XC_TF: "15m" as "15m" | "1h", XC_STOP_ATR: 2, XC_REQUIRE_4H: false, XC_LONGS: true, XC_SHORTS: true,
   HTF_DONCHIAN: 20, HTF_ATR_STOP: 2,
   // minimum stop distance as a fraction of price (0 = off). Keeps round-trip costs a small share of 1R.
   MIN_STOP_PCT: 0,
@@ -232,7 +235,8 @@ export function buildSeries(f: Frames) {
     ext15: priorExtremes(f.m15, 20), ext5: priorExtremes(f.m5, 10),
     vol15: smaVolSeries(f.m15, 20),
     atr4h: atrSeries(f.h4), ema50_4h: emaSeries(f.h4, 50), ext4h: priorExtremes(f.h4, CFG.HTF_DONCHIAN),
-    ema20_1h: emaSeries(f.h1, 20), ...dailySeries(f.h4),
+    ema20_1h: emaSeries(f.h1, 20), ema50_1h: emaSeries(f.h1, 50), ema20_15: emaSeries(f.m15, 20), ema50_15: emaSeries(f.m15, 50),
+    ...dailySeries(f.h4),
   };
 }
 function dailySeries(h4: Bar[]) {
@@ -484,9 +488,27 @@ function sHtfSweep(s: Snap, S: Series, rej: Reject[]): Signal | null {
   return { strategy: id, dir, entryRef: s.price, stop, score: 80 + contextScore(s, dir, "revert", why), why, regime: s.regime, barT: s.T };
 }
 
+// S9 — EMA20/EMA50 crossover on 15m or 1h closes (from the user's chart observation).
+function sEmaCross(s: Snap, S: Series, rej: Reject[]): Signal | null {
+  const id: StrategyId = "EMA_CROSS";
+  const tf = CFG.XC_TF, isNew = tf === "15m" ? s.new15 : s.new1h, i = tf === "15m" ? s.i15 : s.i1h;
+  if (!isNew || i < 1) { rej.push({ strategy: id, reason: `Waits for ${tf} close` }); return null; }
+  const f = tf === "15m" ? S.ema20_15 : S.ema20_1h, sl = tf === "15m" ? S.ema50_15 : S.ema50_1h;
+  if (!isFinite(f[i - 1]) || !isFinite(sl[i - 1])) { rej.push({ strategy: id, reason: "EMAs warming up" }); return null; }
+  const prev = f[i - 1] - sl[i - 1], cur = f[i] - sl[i];
+  let dir: Dir | null = null;
+  if (prev <= 0 && cur > 0 && CFG.XC_LONGS) dir = "long"; else if (prev >= 0 && cur < 0 && CFG.XC_SHORTS) dir = "short";
+  if (!dir) { rej.push({ strategy: id, reason: `No ${tf} EMA20/50 cross` }); return null; }
+  const d = sgn(dir);
+  if (CFG.XC_REQUIRE_4H && s.st4h !== d) { rej.push({ strategy: id, reason: "Cross against 4H SuperTrend" }); return null; }
+  const stop = s.price - d * CFG.XC_STOP_ATR * s.atr15;
+  const why = [`${tf} EMA20 crossed ${dir === "long" ? "above" : "below"} EMA50`, `Stop ${CFG.XC_STOP_ATR}×ATR15`];
+  return { strategy: id, dir, entryRef: s.price, stop, score: 80, why, regime: s.regime, barT: s.T };
+}
+
 const RUNNERS: Record<StrategyId, (s: Snap, S: Series, r: Reject[]) => Signal | null> = {
   D_BEARTRAP: sBearTrap, D_THRUST: sThrust,
-  HTF_TREND: (s, _S, r) => sHtf(s, r), TREND_MTF: (s, _S, r) => sTrend(s, r), SWEEP_REV: (s, _S, r) => sSweep(s, r), VWAP_REVERT: (s, _S, r) => sVwap(s, r), SESSION_BO: (s, _S, r) => sSession(s, r), HTF_SWEEP: sHtfSweep,
+  HTF_TREND: (s, _S, r) => sHtf(s, r), TREND_MTF: (s, _S, r) => sTrend(s, r), SWEEP_REV: (s, _S, r) => sSweep(s, r), VWAP_REVERT: (s, _S, r) => sVwap(s, r), SESSION_BO: (s, _S, r) => sSession(s, r), HTF_SWEEP: sHtfSweep, EMA_CROSS: sEmaCross,
 };
 
 export function evaluate(s: Snap, enabled: Record<string, boolean> = {}, S?: Series): { signals: Signal[]; rejects: Reject[] } {
@@ -494,7 +516,7 @@ export function evaluate(s: Snap, enabled: Record<string, boolean> = {}, S?: Ser
   if (!isFinite(s.atr5) || !isFinite(s.atr15) || !isFinite(s.chop15) || !isFinite(s.price)) { rejects.push({ strategy: "TREND_MTF", reason: "Indicators warming up" }); return { signals, rejects }; }
   for (const id of STRATEGIES) {
     if (enabled[id] === false || CFG.RISK_SCALE[id] === 0 || (OPT_IN.includes(id) && !(CFG.RISK_SCALE[id] > 0))) { rejects.push({ strategy: id, reason: "Strategy switched off" }); continue; }
-    if (!S && (id === "D_BEARTRAP" || id === "D_THRUST" || id === "HTF_SWEEP")) continue;
+    if (!S && (id === "D_BEARTRAP" || id === "D_THRUST" || id === "HTF_SWEEP" || id === "EMA_CROSS")) continue;
     const sig = RUNNERS[id](s, S as Series, rejects);
     const gate = CFG.REGIME_GATE[id];
     if (sig && gate !== undefined && S) {
