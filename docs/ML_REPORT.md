@@ -189,3 +189,13 @@ Net over the five windows: +$232 per $1,000 window, 110 trades (~+0.16R/trade). 
 XRP earlier years: 2024–25 +0.22R ($1,126), 2023–24 −0.03R ($988). It is mixed, so it is not added yet. The alt results are small and inconsistent: one good year is not an edge.
 
 **Caveats.** PAXG on Hyperliquid is thin (~$65k–135k traded per hour), so it suits paper or small real size only. PAXG can trade at a small premium or discount to spot XAUUSD. Weekend PAXG moves exist while the spot gold market is closed.
+
+## 11. Walk-forward v5.6: all strategies, AI filter, new SSR + EMA_PB (Oct 23, 2026)
+
+BTC 5m, 2023→Aug 2026, every setup from 11 strategies simulated with live exits and fees (12,233 setups). Logistic meta-filter (`research.ts`) trained on prior years only, tested on 2024, 2025 and 2026.
+
+- All setups: −0.23R per trade. AI-filtered: −0.09R (1,046 of 8,862 taken). It cuts losses about 60% but doesn't make the pool profitable.
+- Where the money is: **HTF_TREND longs above the daily EMA50 by 3% or more (+0.15R, PF 1.27)**, **D_THRUST (+1.0R, 11 trades)**, **SSR longs with the trend (+0.5R, small sample)**.
+- Where it's lost: SWEEP_REV (−0.31R), SESSION_BO (−0.20R), EMA_CROSS (−0.16R), EMA_PB (−0.23R). Tight stops against fees.
+- New from STRATEGY.md: `SSR` (Session Sweep Reversal v1.4) and `EMA_PB` (XAU Pullback v1). Both are in the engine, opt-in (off).
+- The AI filter is built (`CFG.ML_FILTER`, `ML_SHADOW`) but not switched on. It isn't profitable out-of-sample yet.

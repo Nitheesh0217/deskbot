@@ -19,10 +19,10 @@ export const VERSION = "5.5.0";
 
 export type Bar = { t: number; o: number; h: number; l: number; c: number; v: number; ct: number };
 export type Dir = "long" | "short";
-export type StrategyId = "D_BEARTRAP" | "D_THRUST" | "HTF_TREND" | "TREND_MTF" | "SWEEP_REV" | "VWAP_REVERT" | "SESSION_BO" | "HTF_SWEEP" | "EMA_CROSS";
-export const STRATEGIES: StrategyId[] = ["D_BEARTRAP", "D_THRUST", "HTF_TREND", "TREND_MTF", "SWEEP_REV", "VWAP_REVERT", "SESSION_BO", "HTF_SWEEP", "EMA_CROSS"];
+export type StrategyId = "D_BEARTRAP" | "D_THRUST" | "HTF_TREND" | "TREND_MTF" | "SWEEP_REV" | "VWAP_REVERT" | "SESSION_BO" | "HTF_SWEEP" | "EMA_CROSS" | "SSR" | "EMA_PB";
+export const STRATEGIES: StrategyId[] = ["D_BEARTRAP", "D_THRUST", "HTF_TREND", "TREND_MTF", "SWEEP_REV", "VWAP_REVERT", "SESSION_BO", "HTF_SWEEP", "EMA_CROSS", "SSR", "EMA_PB"];
 // strategies that stay OFF unless RISK_SCALE names them explicitly (so a new idea can never go live by accident)
-export const OPT_IN: StrategyId[] = ["HTF_SWEEP", "EMA_CROSS"];
+export const OPT_IN: StrategyId[] = ["HTF_SWEEP", "EMA_CROSS", "SSR", "EMA_PB"];
 
 export const CFG = {
   // costs (Hyperliquid-style perp, paper)
@@ -50,13 +50,15 @@ export const CFG = {
     SESSION_BO:  { tp1: 1, tp2: 2, tp3: 3.5, maxHoldH: 12 },
     HTF_SWEEP:   { tp1: 1.5, tp2: 3, tp3: 5, maxHoldH: 120 },
     EMA_CROSS:   { tp1: 1.5, tp2: 3, tp3: 5, maxHoldH: 48 },
+    SSR:         { tp1: 3, tp2: 3, tp3: 3, maxHoldH: 8 },      // STRATEGY.md v1.4: single 3R bracket, flat by NY afternoon
+    EMA_PB:      { tp1: 1, tp2: 2, tp3: 3, maxHoldH: 2 },      // XAU Pullback v1: 1R/2R/3R, max 24 x 5m bars
   } as Record<StrategyId, { tp1: number; tp2: number; tp3: number; maxHoldH: number }>,
   // exit management: "BE_AT_TP1" (v4.3: stop→entry after TP1) | "HOLD" (journal v0.4: keep stop until TP2, then →entry)
   EXIT_MODE: "BE_AT_TP1" as "BE_AT_TP1" | "HOLD",
   // sweep reversals: false = 4H counter-bias only penalised, true = must not be against 4H
   SWEEP_REQUIRE_HTF: false,
   // per-strategy risk multiplier (1 = full dynamic risk; 0.25 = evidence-gathering size)
-  RISK_SCALE: { D_BEARTRAP: 1, D_THRUST: 1, HTF_TREND: 1, TREND_MTF: 1, SWEEP_REV: 1, VWAP_REVERT: 1, SESSION_BO: 1, HTF_SWEEP: 0, EMA_CROSS: 0 } as Record<StrategyId, number>,
+  RISK_SCALE: { D_BEARTRAP: 1, D_THRUST: 1, HTF_TREND: 1, TREND_MTF: 1, SWEEP_REV: 1, VWAP_REVERT: 1, SESSION_BO: 1, HTF_SWEEP: 0, EMA_CROSS: 0, SSR: 0, EMA_PB: 0 } as Record<StrategyId, number>,
   // HTF_SWEEP: failed break of the 4H 55-bar high/low (the turn starts AT the level). Trigger TF: "4h" bar close or earlier "1h" close.
   HSW_TF: "4h" as "4h" | "1h", HSW_WICK: 0.4, HSW_MAX_RISK_ATR: 2.5,
   // EMA_CROSS: EMA20 crosses EMA50 on the trigger timeframe (user's chart idea). Stop = XC_STOP_ATR × ATR(15m) beyond entry.
@@ -72,6 +74,9 @@ export const CFG = {
   // per-strategy minimum stop distance (fraction of price); overrides MIN_STOP_PCT when larger
   MIN_STOP_BY: {} as Partial<Record<StrategyId, number>>,
   // probation (auto-learning)
+  // AI/ML trade filter (meta-labeling). null = off. Logistic model over signalFeatures(); trained walk-forward offline.
+  ML_FILTER: null as null | { names: string[]; mean: number[]; std: number[]; w: number[]; b: number; thr: number; ver?: string },
+  ML_SHADOW: false,   // true = compute + log p(win) but never block
   PROBATION_MIN_TRADES: 10,
   DISABLE_MIN_TRADES: 20,
   DISABLE_EXPECTANCY_R: -0.15,
@@ -219,6 +224,27 @@ export function dailyFrom4h(h4: Bar[]): Bar[] {
 }
 
 // ═══════════════════════════ MARKET MODEL ═══════════════════════════════════
+// ─── US Eastern time (DST-aware: 2nd Sun of Mar 07:00 UTC → 1st Sun of Nov 06:00 UTC) ───
+function nthSundayUTC(y: number, m: number, n: number) { const d = new Date(Date.UTC(y, m, 1)).getUTCDay(); return Date.UTC(y, m, 1 + ((7 - d) % 7) + 7 * (n - 1)); }
+export function etOffsetH(t: number) { const y = new Date(t).getUTCFullYear(); return t >= nthSundayUTC(y, 2, 2) + 7 * 3600_000 && t < nthSundayUTC(y, 10, 1) + 6 * 3600_000 ? 4 : 5; }
+export function etParts(t: number) { const lt = t - etOffsetH(t) * 3600_000, d = new Date(lt); return { h: d.getUTCHours() + d.getUTCMinutes() / 60, dow: d.getUTCDay(), day: Math.floor(lt / 86400_000) }; }
+
+// break of structure on confirmed (k bars each side, non-repainting) swings: +1 last BOS up, −1 down, 0 none yet
+export function bosSeries(b: Bar[], k = 2): number[] {
+  const n = b.length, out = new Array<number>(n).fill(0); let sh = NaN, sl = NaN, dir = 0;
+  for (let i = 0; i < n; i++) {
+    const c = i - k;
+    if (c >= k) {
+      let isH = true, isL = true;
+      for (let j = 1; j <= k; j++) { if (!(b[c].h > b[c - j].h && b[c].h > b[c + j].h)) isH = false; if (!(b[c].l < b[c - j].l && b[c].l < b[c + j].l)) isL = false; }
+      if (isH) sh = b[c].h; if (isL) sl = b[c].l;
+    }
+    if (isFinite(sh) && b[i].c > sh) { dir = 1; sh = NaN; } else if (isFinite(sl) && b[i].c < sl) { dir = -1; sl = NaN; }
+    out[i] = dir;
+  }
+  return out;
+}
+
 export type Frames = { m5: Bar[]; m15: Bar[]; h1: Bar[]; h4: Bar[] };
 export type Context = { funding?: number | null; oi?: number | null; markPx?: number | null; fng?: number | null; fngLabel?: string | null };
 
@@ -236,6 +262,7 @@ export function buildSeries(f: Frames) {
     vol15: smaVolSeries(f.m15, 20),
     atr4h: atrSeries(f.h4), ema50_4h: emaSeries(f.h4, 50), ext4h: priorExtremes(f.h4, CFG.HTF_DONCHIAN),
     ema20_1h: emaSeries(f.h1, 20), ema50_1h: emaSeries(f.h1, 50), ema20_15: emaSeries(f.m15, 20), ema50_15: emaSeries(f.m15, 50),
+    ema200_15: emaSeries(f.m15, 200), atr1h: atrSeries(f.h1), ema200_1h: emaSeries(f.h1, 200), bos4h: bosSeries(f.h4, 2),
     ...dailySeries(f.h4),
   };
 }
@@ -506,9 +533,107 @@ function sEmaCross(s: Snap, S: Series, rej: Reject[]): Signal | null {
   return { strategy: id, dir, entryRef: s.price, stop, score: 80, why, regime: s.regime, barT: s.T };
 }
 
+// SSR — your STRATEGY.md v1.4 "Session Sweep Reversal with 4H bias", ported to the bot (15m trigger, ET windows).
+// Bias: 4H close vs EMA50 AND last 4H BOS agree. Window: London 03–05 ET or NY 08–11 ET. Sweep of the Asian range
+// (20:00–02:00 ET), then within 6 bars a 15m close back inside + MSS (close beyond a confirmed swing formed after the sweep).
+// Stop: sweep extreme ± 0.25×ATR15. Target: single 3R. Filters: stop ≤ 2×ATR1h and ≥ 0.5×ATR15. First trigger only.
+function sSSR(s: Snap, S: Series, rej: Reject[]): Signal | null {
+  const id: StrategyId = "SSR";
+  if (!s.new15 || !s.b15) { rej.push({ strategy: id, reason: "Waits for 15m close" }); return null; }
+  const f = S.f.m15, i = s.i15, et = etParts(f[i].t);
+  const win = et.h >= 3 && et.h < 5 ? [3, 5] : et.h >= 8 && et.h < 11 ? [8, 11] : null;
+  if (!win) { rej.push({ strategy: id, reason: "Outside London 03–05 / NY 08–11 ET window" }); return null; }
+  if (s.i4h < 0 || !s.b4h || !isFinite(s.ema50_4h)) { rej.push({ strategy: id, reason: "4H warming up" }); return null; }
+  const bos = S.bos4h[s.i4h], bias = s.b4h.c > s.ema50_4h && bos === 1 ? 1 : s.b4h.c < s.ema50_4h && bos === -1 ? -1 : 0;
+  if (!bias) { rej.push({ strategy: id, reason: "4H bias neutral (EMA50 and last BOS disagree)" }); return null; }
+  let asHi = -Infinity, asLo = Infinity, ws = -1;
+  for (let j = i; j >= Math.max(0, i - 80); j--) {
+    const e = etParts(f[j].t);
+    if ((e.day === et.day - 1 && e.h >= 20) || (e.day === et.day && e.h < 2)) { asHi = Math.max(asHi, f[j].h); asLo = Math.min(asLo, f[j].l); }
+    if (e.day === et.day && e.h >= win[0] && e.h < win[1]) ws = j;
+  }
+  if (!isFinite(asHi) || ws < 0) { rej.push({ strategy: id, reason: "No Asian range yet" }); return null; }
+  const d = bias, lvl = d === 1 ? asLo : asHi;
+  let k0 = -1; for (let j = ws; j <= i; j++) if (d === 1 ? f[j].l < lvl : f[j].h > lvl) { k0 = j; break; }
+  if (k0 < 0) { rej.push({ strategy: id, reason: `No sweep of the Asian ${d === 1 ? "low" : "high"} ($${lvl.toFixed(0)}) in this window` }); return null; }
+  let trig = -1, ext = d === 1 ? Infinity : -Infinity;
+  for (let j = k0; j <= Math.min(i, k0 + 6) && trig < 0; j++) {
+    ext = d === 1 ? Math.min(ext, f[j].l) : Math.max(ext, f[j].h);
+    const reclaim = d === 1 ? f[j].c > lvl : f[j].c < lvl;
+    let sw = NaN;
+    for (let c = j - 2; c >= Math.max(k0, 2); c--) {
+      const isSw = d === 1 ? f[c].h > f[c - 1].h && f[c].h > f[c - 2].h && f[c].h > f[c + 1].h && f[c].h > f[c + 2].h
+                           : f[c].l < f[c - 1].l && f[c].l < f[c - 2].l && f[c].l < f[c + 1].l && f[c].l < f[c + 2].l;
+      if (isSw) { sw = d === 1 ? f[c].h : f[c].l; break; }
+    }
+    if (reclaim && isFinite(sw) && (d === 1 ? f[j].c > sw : f[j].c < sw)) trig = j;
+  }
+  if (trig !== i) { rej.push({ strategy: id, reason: trig < 0 ? "Swept, no reclaim + MSS yet" : "Trigger already fired this window" }); return null; }
+  const atr1h = s.i1h >= 0 ? S.atr1h[s.i1h] : NaN, stop = ext - d * 0.25 * s.atr15, risk = Math.abs(s.price - stop);
+  if (!(risk >= 0.5 * s.atr15)) { rej.push({ strategy: id, reason: "Stop inside noise (< 0.5×ATR15)" }); return null; }
+  if (isFinite(atr1h) && risk > 2 * atr1h) { rej.push({ strategy: id, reason: "Stop too wide (> 2×ATR1h)" }); return null; }
+  const dir: Dir = d === 1 ? "long" : "short";
+  const why = [`4H bias ${dir === "long" ? "bull" : "bear"} (EMA50 + BOS)`, `${win[0] === 3 ? "London" : "NY"} sweep of Asian ${d === 1 ? "low" : "high"} $${lvl.toFixed(0)}`, "15m reclaim + MSS", "3R target"];
+  return { strategy: id, dir, entryRef: s.price, stop, score: 82, why, regime: s.regime, barT: s.T };
+}
+
+// EMA_PB — "XAU Pullback v1" (your saved gold strategy), ported: M15 trend (close > EMA50 > EMA200, EMA200 rising),
+// M5 pullback to EMA20 then a bullish close above the prior high; 08:00–11:30 ET weekdays; stop 1.5×ATR(5m); 1R/2R/3R; 2h max.
+function sEmaPb(s: Snap, S: Series, rej: Reject[]): Signal | null {
+  const id: StrategyId = "EMA_PB";
+  const b = S.f.m5, i = s.i5, et = etParts(b[i].t);
+  if (!(et.h >= 8 && et.h < 11.5) || et.dow === 0 || et.dow === 6) { rej.push({ strategy: id, reason: "Outside 08:00–11:30 ET weekdays" }); return null; }
+  const j = s.i15, c15 = j >= 0 ? S.f.m15[j].c : NaN, e50 = S.ema50_15[j], e200 = S.ema200_15[j], e200p = S.ema200_15[j - 4];
+  if (!isFinite(e200p)) { rej.push({ strategy: id, reason: "EMAs warming up" }); return null; }
+  const bias = c15 > e50 && e50 > e200 && e200 > e200p ? 1 : c15 < e50 && e50 < e200 && e200 < e200p ? -1 : 0;
+  if (!bias) { rej.push({ strategy: id, reason: "No clean M15 EMA50/200 trend" }); return null; }
+  const p = b[i - 1], c = b[i], e20 = S.ema20, atr = s.atr5;
+  if (c.h - c.l > 2 * atr) { rej.push({ strategy: id, reason: "Bar > 2×ATR (chase)" }); return null; }
+  const ok = bias === 1 ? p.l <= e20[i - 1] && c.c > p.h && c.c > e20[i] && c.c > c.o && e20[i] > e20[i - 1]
+                        : p.h >= e20[i - 1] && c.c < p.l && c.c < e20[i] && c.c < c.o && e20[i] < e20[i - 1];
+  if (!ok) { rej.push({ strategy: id, reason: "No 5m pullback-to-EMA20 trigger" }); return null; }
+  const dir: Dir = bias === 1 ? "long" : "short", stop = s.price - bias * 1.5 * atr;
+  return { strategy: id, dir, entryRef: s.price, stop, score: 78, why: ["M15 EMA50/200 trend", "5m pullback to EMA20 + break of prior bar", "Stop 1.5×ATR5"], regime: s.regime, barT: s.T };
+}
+
+// ─── AI/ML layer: market-state features at signal time + logistic trade filter ──────────────────
+export const STRAT_FAMILY_REV: StrategyId[] = ["SWEEP_REV", "VWAP_REVERT", "HTF_SWEEP", "SSR", "D_BEARTRAP"];
+export const BASE_FEATURES = ["score", "stop_atr15", "risk_pct", "st5", "st15", "st1h", "st4h", "chop5", "chop15", "rsi15", "rsi1h", "vwap_dev",
+  "atr5_pct", "atr15_pct", "atr4h_pct", "atrD_pct", "roc5", "ema_gap5", "ema50_4h_dist", "ema200_1h_dist", "ema50D_dist",
+  "r1h", "r4h", "r24h", "r72h", "r7d", "rv24", "rv168", "rv_ratio", "vol15_ratio", "hour_sin", "hour_cos", "is_long", "reg_trend", "reg_range"];
+function rv(b: Bar[], i: number, n: number) { if (i - n < 1) return NaN; let q = 0; for (let j = i - n + 1; j <= i; j++) { const r = Math.log(b[j].c / b[j - 1].c); q += r * r; } return Math.sqrt(q / n); }
+/** Direction-signed market state when a signal fires (same function for mining, training and the live filter). */
+export function signalFeatures(s: Snap, S: Series, sig: Signal): number[] {
+  const d = sgn(sig.dir), px = s.price, h1 = S.f.h1, i = s.i1h, risk = Math.abs(s.price - sig.stop);
+  const ret = (n: number) => (i - n >= 0 ? (h1[i].c / h1[i - n].c - 1) * d : NaN);
+  const r24 = rv(h1, i, 24), r168 = rv(h1, i, 168), iD = s.i1d;
+  const v: Record<string, number> = {
+    score: sig.score, stop_atr15: risk / s.atr15, risk_pct: risk / px, st5: s.st5 * d, st15: s.st15 * d, st1h: s.st1h * d, st4h: s.st4h * d,
+    chop5: s.chop5, chop15: s.chop15, rsi15: (s.rsi15 - 50) * d, rsi1h: (s.rsi1h - 50) * d, vwap_dev: s.vwapDev * d,
+    atr5_pct: s.atr5 / px, atr15_pct: s.atr15 / px, atr4h_pct: s.atr4h / px, atrD_pct: iD >= 0 ? S.atrD[iD] / px : NaN,
+    roc5: s.roc5 * d, ema_gap5: (s.ema20 - s.ema50) / px * d, ema50_4h_dist: (px - s.ema50_4h) / px * d,
+    ema200_1h_dist: i >= 0 ? (px - S.ema200_1h[i]) / px * d : NaN, ema50D_dist: iD >= 0 ? (px - S.ema50D[iD]) / px * d : NaN,
+    r1h: ret(1), r4h: ret(4), r24h: ret(24), r72h: ret(72), r7d: ret(168), rv24: r24, rv168: r168, rv_ratio: r24 / r168,
+    vol15_ratio: s.volAvg15 > 0 ? s.vol15 / s.volAvg15 : NaN, hour_sin: Math.sin(2 * Math.PI * s.hour / 24), hour_cos: Math.cos(2 * Math.PI * s.hour / 24),
+    is_long: d > 0 ? 1 : 0, reg_trend: s.regime === "TREND" ? 1 : 0, reg_range: s.regime === "RANGE" ? 1 : 0,
+  };
+  return BASE_FEATURES.map((k) => v[k]);
+}
+/** Model input = base features + (base × reversal-family flag) + strategy one-hots + asset flag. */
+export function modelInput(base: number[], strategy: string, isGold: boolean): number[] {
+  const rev = STRAT_FAMILY_REV.includes(strategy as StrategyId) ? 1 : 0;
+  return [...base, ...base.map((x) => x * rev), ...STRATEGIES.map((id) => (id === strategy ? 1 : 0)), isGold ? 1 : 0];
+}
+export function mlProb(x: number[], m: NonNullable<typeof CFG.ML_FILTER>): number {
+  let z = m.b;
+  for (let k = 0; k < m.w.length; k++) { const v = isFinite(x[k]) ? (x[k] - m.mean[k]) / (m.std[k] || 1) : 0; z += m.w[k] * Math.max(-6, Math.min(6, v)); }
+  return 1 / (1 + Math.exp(-z));
+}
+export let ML_IS_GOLD = false; export function setMlAsset(gold: boolean) { ML_IS_GOLD = gold; }
+
 const RUNNERS: Record<StrategyId, (s: Snap, S: Series, r: Reject[]) => Signal | null> = {
   D_BEARTRAP: sBearTrap, D_THRUST: sThrust,
-  HTF_TREND: (s, _S, r) => sHtf(s, r), TREND_MTF: (s, _S, r) => sTrend(s, r), SWEEP_REV: (s, _S, r) => sSweep(s, r), VWAP_REVERT: (s, _S, r) => sVwap(s, r), SESSION_BO: (s, _S, r) => sSession(s, r), HTF_SWEEP: sHtfSweep, EMA_CROSS: sEmaCross,
+  HTF_TREND: (s, _S, r) => sHtf(s, r), TREND_MTF: (s, _S, r) => sTrend(s, r), SWEEP_REV: (s, _S, r) => sSweep(s, r), VWAP_REVERT: (s, _S, r) => sVwap(s, r), SESSION_BO: (s, _S, r) => sSession(s, r), HTF_SWEEP: sHtfSweep, EMA_CROSS: sEmaCross, SSR: sSSR, EMA_PB: sEmaPb,
 };
 
 export function evaluate(s: Snap, enabled: Record<string, boolean> = {}, S?: Series): { signals: Signal[]; rejects: Reject[] } {
@@ -516,7 +641,7 @@ export function evaluate(s: Snap, enabled: Record<string, boolean> = {}, S?: Ser
   if (!isFinite(s.atr5) || !isFinite(s.atr15) || !isFinite(s.chop15) || !isFinite(s.price)) { rejects.push({ strategy: "TREND_MTF", reason: "Indicators warming up" }); return { signals, rejects }; }
   for (const id of STRATEGIES) {
     if (enabled[id] === false || CFG.RISK_SCALE[id] === 0 || (OPT_IN.includes(id) && !(CFG.RISK_SCALE[id] > 0))) { rejects.push({ strategy: id, reason: "Strategy switched off" }); continue; }
-    if (!S && (id === "D_BEARTRAP" || id === "D_THRUST" || id === "HTF_SWEEP" || id === "EMA_CROSS")) continue;
+    if (!S && (id === "D_BEARTRAP" || id === "D_THRUST" || id === "HTF_SWEEP" || id === "EMA_CROSS" || id === "SSR" || id === "EMA_PB")) continue;
     const sig = RUNNERS[id](s, S as Series, rejects);
     const gate = CFG.REGIME_GATE[id];
     if (sig && gate !== undefined && S) {
@@ -524,7 +649,16 @@ export function evaluate(s: Snap, enabled: Record<string, boolean> = {}, S?: Ser
       if (!(dist > gate)) { rejects.push({ strategy: id, reason: `Daily regime gate: ${isFinite(dist) ? (dist * 100).toFixed(1) + "%" : "n/a"} vs EMA50D, needs >${(gate * 100).toFixed(1)}% in trade direction` }); continue; }
       sig.why.push(`Daily regime aligned (${(dist * 100).toFixed(1)}% beyond EMA50D)`);
     }
-    if (sig) { sig.score = Math.max(10, Math.min(97, Math.round(sig.score))); signals.push(sig); }
+    if (sig) {
+      sig.score = Math.max(10, Math.min(97, Math.round(sig.score)));
+      const M = CFG.ML_FILTER;
+      if (M && S) {
+        const p = mlProb(modelInput(signalFeatures(s, S, sig), id, ML_IS_GOLD), M);
+        sig.why.push(`AI filter p(win) ${(p * 100).toFixed(0)}% vs ${(M.thr * 100).toFixed(0)}% needed${CFG.ML_SHADOW ? " (shadow)" : ""}`);
+        if (p < M.thr && !CFG.ML_SHADOW) { rejects.push({ strategy: id, reason: `AI filter: p(win) ${(p * 100).toFixed(0)}% < ${(M.thr * 100).toFixed(0)}%` }); continue; }
+      }
+      signals.push(sig);
+    }
   }
   signals.sort((a, b) => b.score - a.score);
   return { signals, rejects };
