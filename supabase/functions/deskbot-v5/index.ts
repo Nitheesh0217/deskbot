@@ -164,8 +164,9 @@ async function runOnce(sym: Sym = "BTC") {
       let opened = false;
       if (newsBlock) notes.push(`Entries paused: ${newsBlock}`);
       if (newsShadow && signals.length) notes.push(`(shadow) news filter would pause: ${newsShadow}`);
-      if (!integrity.approved) notes.push(`New entries paused: ${integrity.reason}`);
-      for (const sig of newsBlock || !integrity.approved ? [] : signals) {
+      const enforce = (Deno.env.get("DESKBOT_ENFORCE_APPROVAL") ?? "off") === "on";
+      if (!integrity.approved) notes.push(`${enforce ? "New entries paused" : "Warning (not enforced)"}: ${integrity.reason}`);
+      for (const sig of newsBlock || (enforce && !integrity.approved) ? [] : signals) {
         const g = entryGates(st, sig, now);
         if (!g.ok) { notes.push(`${sig.strategy} ${sig.dir} ${sig.score}: ${g.reason}`); continue; }
         const fillRef = ctx?.markPx && Math.abs(ctx.markPx - snap.price) / snap.price < 0.01 ? ctx.markPx : snap.price;
