@@ -8,12 +8,18 @@
 // ═══════════════════════════════════════════════════════════════════════════
 import {
   VERSION, CFG, STRATEGIES, buildSeries, snapshot, evaluate, entryGates, openPosition, managePosition,
-  initState, unrealized, backtest, summarize, rollDay, dynamicRisk, applyCfg, ensureState, type State, type Trade, type Bar,
+  initState, unrealized, backtest, summarize, rollDay, dynamicRisk, applyCfg, resolvedCfg, ensureState, markEquity, setMlAsset, type State, type Trade, type Bar,
 } from "./engine.ts";
 import { candles, candlesRange, candlesRangeBinance, hlContext, fearGreed, orderFlow, SYMBOLS, isSym, type Sym } from "./data.ts";
 import { readNews, newsBlocks, type NewsRead } from "./news.ts";
 import { providersFromEnv, type Usage } from "./ai.ts";
 import { chat, validatePatch, mergeCfg, EDITABLE, type ChatTurn } from "./chat.ts";
+import { configIntegrity, serialExecutor } from "./runtime.ts";
+
+// Module config belongs to one request at a time. This is isolate-local; the
+// existing database lease still coordinates state writes across edge isolates.
+const exclusive = serialExecutor();
+const integrityFor = (sym: Sym, cfg: unknown) => configIntegrity(VERSION, sym, cfg, Deno.env.get(`DESKBOT_${sym}_CONFIG_HASH`) ?? "");
 
 const SB = Deno.env.get("SUPABASE_URL")!;
 const KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -33,7 +39,7 @@ const CORS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers
 // ─── tiny PostgREST client ──────────────────────────────────────────────────
 async function rest(path: string, init: RequestInit = {}) {
   const r = await fetch(`${SB}/rest/v1/${path}`, {
-    ...init, headers: { apikey: KEY, Authorization: `Bearer ${KEY}`, "Content-Type": "application/json", Prefer: "return=minimal", ...(init.headers ?? {}) },
+    ...init, signal: init.signal ?? AbortSignal.timeout(10000), headers: { apikey: KEY, Authorization: `Bearer ${KEY}`, "Content-Type": "application/json", Prefer: "return=minimal", ...(init.headers ?? {}) },
   });
   if (!r.ok) throw new Error(`DB ${path.split("?")[0]} ${r.status}: ${(await r.text()).slice(0, 200)}`);
   const t = await r.text(); return t ? JSON.parse(t) : null;
@@ -101,7 +107,8 @@ async function runOnce(sym: Sym = "BTC") {
   let st = await loadState(sym);
   if (!st && sym !== "BTC") return { ok: true, sym, skipped: "book not initialised" };
   if (!st) { st = await carryFromV3(now); evs.push({ kind: "INIT", msg: `DeskBot ${VERSION} initialised at $${st.equity.toFixed(2)} (carried from v3)`, data: st.carried }); }
-  ensureState(st); applyCfg(st.cfg); rollDay(st, now);
+  ensureState(st); applyCfg(st.cfg); setMlAsset(sym === "GOLD");
+  const integrity = await integrityFor(sym, resolvedCfg(st.cfg));
 
   const [m5, m15, h1, h4, ctx, fng, flow] = await Promise.all([
     candles("5m", 400, now, "hyperliquid", sym), candles("15m", 400, now, "hyperliquid", sym), candles("1h", 300, now, "hyperliquid", sym), candles("4h", 700, now, "hyperliquid", sym), hlContext(sym),
@@ -145,6 +152,8 @@ async function runOnce(sym: Sym = "BTC") {
   const S = buildSeries({ m5: m5.bars, m15: m15.bars, h1: h1.bars, h4: h4.bars });
   const i5 = m5.bars.length - 1;
   const snap = snapshot(S, i5, { funding: ctx?.funding ?? null, oi: ctx?.oi ?? null, markPx: ctx?.markPx ?? null, fng: fng?.value ?? null });
+  rollDay(st, now);
+  markEquity(st, snap.price);
   let action = st.pos ? "HOLD" : "SKIP"; let decision: unknown = null;
   if (snap.T > st.lastEvalT) {
     st.lastEvalT = snap.T;
@@ -155,7 +164,8 @@ async function runOnce(sym: Sym = "BTC") {
       let opened = false;
       if (newsBlock) notes.push(`Entries paused: ${newsBlock}`);
       if (newsShadow && signals.length) notes.push(`(shadow) news filter would pause: ${newsShadow}`);
-      for (const sig of newsBlock ? [] : signals) {
+      if (!integrity.approved) notes.push(`New entries paused: ${integrity.reason}`);
+      for (const sig of newsBlock || !integrity.approved ? [] : signals) {
         const g = entryGates(st, sig, now);
         if (!g.ok) { notes.push(`${sig.strategy} ${sig.dir} ${sig.score}: ${g.reason}`); continue; }
         const fillRef = ctx?.markPx && Math.abs(ctx.markPx - snap.price) / snap.price < 0.01 ? ctx.markPx : snap.price;
@@ -188,12 +198,12 @@ async function runOnce(sym: Sym = "BTC") {
   const nw = sx._news;
   const news = nw ? { t: nw.t, risk: nw.risk, bias: nw.bias, event: nw.event, reason: nw.reason, by: nw.by, mode: NEWS_MODE, top: nw.headlines.slice(0, 5).map((h) => ({ src: h.src, title: h.title, t: h.t })), errors: nw.aiErrors ?? [] } : null;
   const ai = { providers: providersFromEnv().map((p) => p.name), usage: sx._aiUsage ?? {} };
-  const lastRun = { ts: new Date(now).toISOString(), sym, action, source, news, ai, upnl: +upnl.toFixed(2), market, decision, risk: dynamicRisk(st.equity), ms: Date.now() - now };
+  const lastRun = { ts: new Date(now).toISOString(), sym, action, source, integrity, news, ai, upnl: +upnl.toFixed(2), market, decision, risk: dynamicRisk(st.equity), ms: Date.now() - now };
   st.version = VERSION;
   await saveState(st, lastRun, sym);
   await upsert("dbv5_equity", [{ symbol: sym, ts: new Date(now).toISOString(), equity: +st.equity.toFixed(4), upnl: +upnl.toFixed(4), price: snap.price }]);
   await events(evs);
-  return { ok: true, sym, version: VERSION, action, equity: +st.equity.toFixed(2), upnl: +upnl.toFixed(2), pos: st.pos ? { strategy: st.pos.strategy, dir: st.pos.dir, entry: st.pos.entry, stop: st.pos.stop } : null, closed: closed.length, source, news: news ? { risk: news.risk, by: news.by } : null, ms: Date.now() - now };
+  return { ok: true, sym, version: VERSION, integrity, action, equity: +st.equity.toFixed(2), upnl: +upnl.toFixed(2), pos: st.pos ? { strategy: st.pos.strategy, dir: st.pos.dir, entry: st.pos.entry, stop: st.pos.stop } : null, closed: closed.length, source, news: news ? { risk: news.risk, by: news.by } : null, ms: Date.now() - now };
 }
 
 // ─── backtest (walk-forward; in-sample = first 2/3, out-of-sample = last 1/3) ──
@@ -208,19 +218,20 @@ async function runBacktest(o: BtOpts) {
     get("5m", start5, end), get("15m", start5 - 30 * 86400_000, end), get("1h", start5 - 40 * 86400_000, end), get("4h", start5 - 120 * 86400_000, end),
   ]);
   if (m5.length < 2000) throw new Error(`${sym}: only ${m5.length} 5m bars from ${source}`);
-  applyCfg(); const t0 = Date.now(); const frames = { m5, m15, h1, h4 }; const cfg = o.cfg ?? {};
+  applyCfg(); setMlAsset(sym === "GOLD"); const t0 = Date.now(); const frames = { m5, m15, h1, h4 }; const cfg = o.cfg ?? {};
+  const fingerprint = await configIntegrity(VERSION, sym, resolvedCfg(cfg), "");
   const only = STRATEGIES.find(x => x === o.only);
   const all = backtest(frames, { startEquity: 1000, cfg, only });
   const cut = all.from! + (all.to - all.from!) * 2 / 3;
   const per: Record<string, unknown> = {};
   for (const id of (only ? [only] : o.combinedOnly ? [] : STRATEGIES)) {
     const r = only ? all : backtest(frames, { startEquity: 1000, only: id, cfg });
-    per[id] = { ...summarize(r.trades, 1000), inSample: summarize(r.trades.filter(t => t.openT < cut), 1000).all, outSample: summarize(r.trades.filter(t => t.openT >= cut), 1000).all, signals: r.signalsSeen[id] ?? 0 };
+    per[id] = { ...summarize(r.trades, 1000), maxDD: r.state.maxDD, inSample: summarize(r.trades.filter(t => t.openT < cut), 1000).all, outSample: summarize(r.trades.filter(t => t.openT >= cut), 1000).all, signals: r.signalsSeen[id] ?? 0 };
   }
   const unseenFrom = Date.parse("2026-09-01T00:00:00Z");
   const res = {
-    version: VERSION, sym, label: o.label ?? "default", source, cfg, from: new Date(all.from ?? start5).toISOString(), to: new Date(all.to).toISOString(), splitAt: new Date(cut).toISOString(), bars5m: m5.length,
-    combined: summarize(all.trades, 1000), combinedIn: summarize(all.trades.filter(t => t.openT < cut), 1000).all, combinedOut: summarize(all.trades.filter(t => t.openT >= cut), 1000).all,
+    version: VERSION, sym, configHash: fingerprint.hash, drawdownBasis: "sampled marked equity at bar closes", label: o.label ?? "default", source, cfg, from: new Date(all.from ?? start5).toISOString(), to: new Date(all.to).toISOString(), splitAt: new Date(cut).toISOString(), bars5m: m5.length,
+    combined: { ...summarize(all.trades, 1000), maxDD: all.state.maxDD }, combinedIn: summarize(all.trades.filter(t => t.openT < cut), 1000).all, combinedOut: summarize(all.trades.filter(t => t.openT >= cut), 1000).all,
     unseenSep2026: summarize(all.trades.filter(t => t.openT >= unseenFrom), 1000).all,
     perStrategy: per, curve: all.curve.filter((_, i) => i % Math.max(1, Math.round(days / 4)) === 0),
     trades: all.trades.slice(-80).map(t => ({ s: t.strategy, d: t.dir, r: +t.r.toFixed(2), net: +t.net.toFixed(2), o: t.openT, c: t.closeT, why: t.reason })),
@@ -243,7 +254,9 @@ async function status() {
     select(`dbv5_equity?select=ts,equity,upnl,price&symbol=eq.BTC&ts=gte.${new Date(Date.now() - 14 * 86400_000).toISOString()}&order=ts.asc`),
     select("dbv5_backtests?select=ran_at,days,results&results->>label=like.LIVE_CONFIG*&order=id.desc&limit=1"),
   ]);
-  const st = s?.[0]?.state ?? null; applyCfg(st?.cfg);
+  const st = s?.[0]?.state ?? null;
+  const config = resolvedCfg(st?.cfg);
+  const integrity = await integrityFor("BTC", config);
   if (st) { delete st._aiUsage; }
   const books: Record<string, unknown> = {};
   for (const sym of BOOKS.filter((b) => b !== "BTC")) {
@@ -252,10 +265,10 @@ async function status() {
       select(`dbv5_equity?select=ts,equity,upnl,price&symbol=eq.${sym}&ts=gte.${new Date(Date.now() - 14 * 86400_000).toISOString()}&order=ts.asc`),
     ]);
     const c = (eqb ?? []).filter((_: unknown, i: number, a: unknown[]) => a.length < 400 || i % Math.ceil(a.length / 400) === 0 || i === a.length - 1);
-    books[sym] = r?.[0] ? { name: SYMBOLS[sym].name, hl: SYMBOLS[sym].hl, state: r[0].state, lastRun: r[0].last_run, updated: r[0].updated_at, curve: c } : { name: SYMBOLS[sym].name, hl: SYMBOLS[sym].hl, state: null };
+    books[sym] = r?.[0] ? { name: SYMBOLS[sym].name, hl: SYMBOLS[sym].hl, integrity: await integrityFor(sym, resolvedCfg(r[0].state?.cfg)), state: r[0].state, lastRun: r[0].last_run, updated: r[0].updated_at, curve: c } : { name: SYMBOLS[sym].name, hl: SYMBOLS[sym].hl, state: null };
   }
   const curve = (eq ?? []).filter((_: unknown, i: number, a: unknown[]) => a.length < 600 || i % Math.ceil(a.length / 600) === 0 || i === a.length - 1);
-  return { version: VERSION, mode: "PAPER", now: new Date().toISOString(), updated: s?.[0]?.updated_at ?? null, state: st, lastRun: s?.[0]?.last_run ?? null, events: ev, trades: tr, curve, books, backtest: bt?.[0] ?? null, config: { ...CFG }, chat: { enabled: !!CHAT_KEY, ai: providersFromEnv().map((p) => p.name) } };
+  return { version: VERSION, mode: "PAPER", now: new Date().toISOString(), updated: s?.[0]?.updated_at ?? null, integrity, state: st, lastRun: s?.[0]?.last_run ?? null, events: ev, trades: tr, curve, books, backtest: bt?.[0] ?? null, config, chat: { enabled: !!CHAT_KEY, ai: providersFromEnv().map((p) => p.name) } };
 }
 
 // ─── AI assistant (owner only; password = DESKBOT_CHAT_KEY secret) ─────────
@@ -334,13 +347,14 @@ Deno.serve(async (req) => {
     if (req.method === "GET") return json(await status());
     if (req.headers.get("x-chat-key") !== null) {
       if (!CHAT_KEY || req.headers.get("x-chat-key") !== CHAT_KEY) return json({ ok: false, error: "bad_password" }, 401);
-      return json(await chatRoute(await req.json().catch(() => ({}))));
+      const body = await req.json().catch(() => ({}));
+      return json(await exclusive(() => chatRoute(body)));
     }
     const expected = SECRET || await cronKey();
     if (!expected || req.headers.get("x-deskbot-key") !== expected) return json({ ok: false, error: "unauthorized" }, 401);
     const body = await req.json().catch(() => ({}));
-    if (body.action === "backtest") return json(await runBacktest({ sym: isSym(body.sym) ? body.sym : "BTC", endDaysAgo: body.endDaysAgo, days: body.days, source: body.source, cfg: body.cfg, label: body.label, save: body.save, only: body.only, combinedOnly: body.combinedOnly }));
-    return json(await runLocked());
+    if (body.action === "backtest") return json(await exclusive(() => runBacktest({ sym: isSym(body.sym) ? body.sym : "BTC", endDaysAgo: body.endDaysAgo, days: body.days, source: body.source, cfg: body.cfg, label: body.label, save: body.save, only: body.only, combinedOnly: body.combinedOnly })));
+    return json(await exclusive(() => runLocked()));
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     try { await events([{ kind: "ERROR", msg: msg.slice(0, 300) }]); } catch { /* ignore */ }

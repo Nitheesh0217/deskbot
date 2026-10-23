@@ -1,5 +1,11 @@
 # Changelog
 
+## 5.6.1 — runtime integrity (pending deployment)
+- Per-book configuration fingerprints pause new paper entries on missing approval or drift; ongoing positions remain managed.
+- Isolate-local request serialization, read-only status configuration, explicit ML asset identity, bounded database requests.
+- Conservative moved-stop ambiguity, entry-bar timing policy, sampled marked drawdown, latched daily loss gate, final replay-bar management.
+- Independent BTC/GOLD heartbeat, pinned dependencies, full test/typecheck CI. See [deployment and limitations](RUNTIME_INTEGRITY.md).
+
 ## 5.1.0 — 2026-10-22
 - ML research (ml/mine.ts, ml/meta_label.py, ml/direction.py, ml/variants.ts) → docs/ML_REPORT.md.
 - Engine: per-strategy daily regime gate (`REGIME_GATE`), per-strategy minimum stop (`MIN_STOP_BY`), `MIN_STOP_PCT`/`MAX_COST_R` guards.

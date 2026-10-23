@@ -73,8 +73,9 @@ test("Sizing: $353 equity, 2% tier, 100k/99k → risk incl. costs ≈ $7.06, par
   assert.ok(Math.abs((353 - st2.equity) - 7.06) < 0.05, `loss ${(353 - st2.equity)}`);
   // TP path: TP1 → TP2 → TP3 sums exactly
   const bars: Bar[] = [
-    { t: 2, o: 100000, h: p.tp1 + 1, l: 99900, c: p.tp1, v: 1, ct: 3 },
-    { t: 4, o: p.tp1, h: p.tp2 + 1, l: p.tp1, c: p.tp2, v: 1, ct: 5 },
+    // Unambiguous continuation: the low stays ABOVE the newly activated stop.
+    { t: 2, o: p.entry + 10, h: p.tp1 + 1, l: p.entry + 1, c: p.tp1, v: 1, ct: 3 },
+    { t: 4, o: p.tp1 + 10, h: p.tp2 + 1, l: p.tp1 + 1, c: p.tp2, v: 1, ct: 5 },
     { t: 6, o: p.tp2, h: p.tp3 + 1, l: p.tp2, c: p.tp3, v: 1, ct: 7 },
   ];
   const tr = managePosition(st, bars, 0);
@@ -92,7 +93,7 @@ test("Stop-first when a bar spans stop and TP; BE after TP1; gap fills at open",
   const tr = managePosition(st, [{ t: 2, o: 100, h: 101.5, l: p.tp1 - 1, c: 100, v: 1, ct: 3 }], 0);
   assert.equal(tr[0].exits[0].kind, "stop"); assert.ok(tr[0].net < 0);
   const st2 = initState(1000, 0); const p2 = openPosition(st2, { ...sig, barT: 2 }, 100, 1)!;
-  managePosition(st2, [{ t: 2, o: 100, h: 100.1, l: p2.tp1 - 0.01, c: p2.tp1, v: 1, ct: 3 }], 0);
+  managePosition(st2, [{ t: 2, o: p2.entry - 0.01, h: p2.entry - 0.001, l: p2.tp1 - 0.01, c: p2.tp1, v: 1, ct: 3 }], 0);
   assert.equal(st2.pos!.stop, p2.entry);
   const tr2 = managePosition(st2, [{ t: 4, o: 102, h: 102.5, l: 101.8, c: 102, v: 1, ct: 5 }], 0); // gap through BE
   assert.equal(tr2[0].exits.at(-1)!.kind, "stop"); assert.ok(tr2[0].exits.at(-1)!.px >= 102);

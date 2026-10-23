@@ -198,6 +198,7 @@ nav.tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 25; backgroun
   <section class="view" id="v-desk" aria-label="Desk">
     <div class="seg book-seg" id="bookSeg" role="group" aria-label="Paper book" hidden><button type="button" data-b="BTC" aria-pressed="true">Bitcoin</button><button type="button" data-b="GOLD" aria-pressed="false">Gold</button></div>
     <div class="banner" id="srcBanner">Showing the snapshot saved when this page was published. Live numbers load straight from the cloud bot.</div>
+    <div class="banner down" id="integrityBanner" role="status" hidden></div>
     <div class="card">
       <div class="eq-top">
         <div>
@@ -392,6 +393,10 @@ function sparkPath(vals, w, h, pad = 4) {
 
 function renderDesk() {
   const S = DATA.state || {}, st = S.state || {}, lr = S.last_run || {}, m = lr.market || {};
+  const integrity = S.integrity || lr.integrity;
+  $("integrityBanner").hidden = !integrity || integrity.approved;
+  $("integrityBanner").textContent = integrity && !integrity.approved
+    ? `New entries paused: ${integrity.reason}. Position management continues. Review this book's settings and approval.` : "";
   const eq = +st.equity || 0, start = +st.startEquity || eq, upnl = +lr.upnl || 0;
   $("eq").textContent = fmt$(eq + upnl);
   const ch = eq + upnl - start, base = S.carried && S.carried.v3StartEquity ? +S.carried.v3StartEquity : null;
@@ -521,6 +526,9 @@ function renderSystem() {
     ["Data source", lr.source === "binance" ? "Binance (fallback)" : "Hyperliquid perp"],
     ["Check took", lr.ms != null ? lr.ms + " ms" : "—"],
     ["Engine", "v" + (st.version || "5.1.0")],
+    ["Configuration", S.integrity ? (S.integrity.approved ? "Approved fingerprint" : "Entries paused: approval required") : "Not verified"],
+    ["Config fingerprint", S.integrity ? S.integrity.hash : "—"],
+    ["Drawdown basis", st.markedEquity != null ? "Sampled marked equity (since upgrade)" : "Legacy realized equity"],
     ["Circuit breaker", st.cb && st.cb.cooldownUntil > Date.now() ? "Cooling down" : `${(st.cb && st.cb.consec) || 0} of 3 losses`],
   ];
   $("sys").innerHTML = sys.map(([k, v]) => `<div><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`).join("");
@@ -692,7 +700,7 @@ function fromApi(g) {
   const sym = gold ? "GOLD" : "BTC", mine = (x) => (x.symbol || "BTC") === sym;
   const st = (gold ? bk.state : g.state) || {}, r = g.backtest && g.backtest.results;
   return {
-    state: { state: st, carried: st.carried, last_run: gold ? bk.lastRun : g.lastRun, updated_at: gold ? bk.updated : g.updated },
+    state: { state: st, carried: st.carried, integrity: gold ? bk.integrity : g.integrity, last_run: gold ? bk.lastRun : g.lastRun, updated_at: gold ? bk.updated : g.updated },
     events: (g.events || []).filter((e) => mine(e) && (e.kind !== "SKIP" || Date.now() - new Date(e.ts).getTime() < 1800000)).slice(0, 40),
     trades: (g.trades || []).filter(mine), curve: (gold ? bk.curve : g.curve) || [],
     bt: r && /^LIVE_CONFIG/.test(r.label || "") ? { label: r.label, ran_at: g.backtest.ran_at, a: r.combined.all, by: r.combined.by, mdd: r.combined.maxDD, eq: r.combined.endEquity, f: r.from, t: r.to, curve: r.curve } : DATA.bt,

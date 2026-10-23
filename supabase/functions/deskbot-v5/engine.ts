@@ -15,7 +15,7 @@
 //    • the same evaluate()/manage() code drives live runs AND the backtester
 // ═══════════════════════════════════════════════════════════════════════════
 
-export const VERSION = "5.5.0";
+export const VERSION = "5.6.1";
 
 export type Bar = { t: number; o: number; h: number; l: number; c: number; v: number; ct: number };
 export type Dir = "long" | "short";
@@ -83,7 +83,11 @@ export const CFG = {
 };
 
 export const CFG_DEFAULTS = JSON.parse(JSON.stringify(CFG)) as typeof CFG;
-export function applyCfg(over?: Partial<typeof CFG>) { Object.assign(CFG, JSON.parse(JSON.stringify(CFG_DEFAULTS)), over ?? {}); }
+// Pure resolution is also used by GET status: a read must never change a running book.
+export function resolvedCfg(over?: Partial<typeof CFG>): typeof CFG {
+  return JSON.parse(JSON.stringify({ ...CFG_DEFAULTS, ...over }));
+}
+export function applyCfg(over?: Partial<typeof CFG>) { Object.assign(CFG, resolvedCfg(over)); }
 
 // ─── dynamic risk (v4 tiers, kept) ──────────────────────────────────────────
 export function dynamicRisk(equity: number): number {
@@ -681,8 +685,9 @@ export type Trade = {
 export type Stat = { n: number; wins: number; losses: number; sumR: number; grossWin: number; grossLoss: number; net: number };
 export type State = {
   version: string; schema: 1; equity: number; startEquity: number; peak: number; maxDD: number;
+  markedEquity?: number;
   carried?: Record<string, unknown>; pos: Position | null; lastBarT: number; lastEvalT: number;
-  lastSig: Record<string, number>; day: { date: string; startEquity: number; trades: number; pnl: number };
+  lastSig: Record<string, number>; day: { date: string; startEquity: number; trades: number; pnl: number; halted?: boolean };
   cb: { consec: number; cooldownUntil: number; trips: number };
   stats: { all: Stat; by: Record<string, Stat> };
   enabled: Record<string, boolean>; created: number;
@@ -694,7 +699,7 @@ export function initState(equity: number, now: number, carried?: Record<string, 
   const by: Record<string, Stat> = {}; const enabled: Record<string, boolean> = {};
   for (const s of STRATEGIES) { by[s] = emptyStat(); enabled[s] = true; }
   return {
-    version: VERSION, schema: 1, equity, startEquity: equity, peak: equity, maxDD: 0, carried, pos: null,
+    version: VERSION, schema: 1, equity, markedEquity: equity, startEquity: equity, peak: equity, maxDD: 0, carried, pos: null,
     lastBarT: now, lastEvalT: 0, lastSig: {}, day: { date: dayKey(now), startEquity: equity, trades: 0, pnl: 0 },
     cb: { consec: 0, cooldownUntil: 0, trips: 0 }, stats: { all: emptyStat(), by }, enabled, created: now,
   };
@@ -708,7 +713,19 @@ export function ensureState(st: State): State {
 }
 
 export function rollDay(st: State, t: number) {
-  const k = dayKey(t); if (st.day.date !== k) st.day = { date: k, startEquity: st.equity, trades: 0, pnl: 0 };
+  const k = dayKey(t); if (k > st.day.date) st.day = { date: k, startEquity: st.markedEquity ?? st.equity, trades: 0, pnl: 0, halted: false };
+}
+
+// Sampled marked equity (bar closes/live snapshot), not a tick-level drawdown claim.
+// Existing history cannot be reconstructed from legacy realized-only state.
+export function markEquity(st: State, px: number): number {
+  const value = st.equity + unrealized(st.pos, px);
+  if (!Number.isFinite(value)) throw new Error("Invalid equity mark");
+  st.markedEquity = value;
+  st.peak = Math.max(st.peak, value);
+  if (st.peak > 0) st.maxDD = Math.max(st.maxDD, (st.peak - value) / st.peak);
+  if (value <= st.day.startEquity * (1 - CFG.DAILY_LOSS_LIMIT)) st.day.halted = true;
+  return value;
 }
 
 export function riskMultiplier(st: State, id: StrategyId): number {
@@ -730,7 +747,7 @@ export function entryGates(st: State, sig: Signal, t: number): GateResult {
   if (st.cb.cooldownUntil > t) return { ok: false, reason: `Circuit-breaker cooldown until ${new Date(st.cb.cooldownUntil).toISOString().slice(11, 16)} UTC` };
   rollDay(st, t);
   if (st.day.trades >= CFG.MAX_TRADES_PER_DAY) return { ok: false, reason: "Daily trade cap reached" };
-  if (st.equity < st.day.startEquity * (1 - CFG.DAILY_LOSS_LIMIT)) return { ok: false, reason: "Daily loss limit hit" };
+  if (st.day.halted || (st.markedEquity ?? st.equity) <= st.day.startEquity * (1 - CFG.DAILY_LOSS_LIMIT)) return { ok: false, reason: "Daily marked loss limit hit" };
   if ((st.lastSig[sig.strategy] ?? 0) >= sig.barT) return { ok: false, reason: "Signal already acted on" };
   return { ok: true };
 }
@@ -760,6 +777,7 @@ export function openPosition(st: State, sig: Signal, fillRef: number, t: number)
     score: sig.score, why: sig.why, regime: sig.regime,
   };
   st.pos = p; st.lastSig[sig.strategy] = sig.barT; rollDay(st, t); st.day.trades++;
+  markEquity(st, entry);
   return p;
 }
 
@@ -814,9 +832,13 @@ function finalize(st: State, t: number, lastKind: string): Trade {
 // touches both stop and a target (conservative). Returns closed trades.
 export function managePosition(st: State, bars: Bar[], fundingPerHour: number | null): Trade[] {
   const out: Trade[] = [];
-  for (const b of bars) {
+  for (const raw of bars) {
     const p = st.pos; if (!p) break;
-    if (b.ct <= p.openT) continue;
+    if (raw.ct <= p.openT) continue;
+    // A candle straddling entry contains unknowable PRE-entry extremes. Only its
+    // closing observation is available after entry; never use the earlier range.
+    const b = raw.t < p.openT ? { ...raw, o: raw.c, h: raw.c, l: raw.c } : raw;
+    rollDay(st, b.t);
     // funding accrual per elapsed hour on remaining notional (signed rate; null → backtest cost)
     while (b.ct - p.lastFundT >= 3600_000) {
       p.lastFundT += 3600_000;
@@ -825,13 +847,24 @@ export function managePosition(st: State, bars: Bar[], fundingPerHour: number | 
     }
     const d = sgn(p.dir);
     const hitStop = d === 1 ? b.l <= p.stop : b.h >= p.stop;
-    if (hitStop) { const gapPx = d === 1 ? Math.min(p.stop, b.o) : Math.max(p.stop, b.o); const tr = fill(st, "stop", gapPx, b.ct); if (tr) out.push(tr); continue; }
+    if (hitStop) { const gapPx = d === 1 ? Math.min(p.stop, b.o) : Math.max(p.stop, b.o); const tr = fill(st, "stop", gapPx, b.ct); if (tr) out.push(tr); markEquity(st, b.c); continue; }
     for (const k of ["tp1", "tp2", "tp3"] as const) {
       const cur = st.pos; if (!cur) break;
-      if (!cur[(k + "Done") as "tp1Done"] && (d === 1 ? b.h >= cur[k] : b.l <= cur[k])) { const tr = fill(st, k, cur[k], b.ct); if (tr) out.push(tr); }
+      if (!cur[(k + "Done") as "tp1Done"] && (d === 1 ? b.h >= cur[k] : b.l <= cur[k])) {
+        const oldStop = cur.stop;
+        const tr = fill(st, k, cur[k], b.ct); if (tr) out.push(tr);
+        const remaining = st.pos;
+        // OHLC cannot order a target and a newly activated stop. Resolve the
+        // remaining quantity adversely before awarding any later target.
+        if (remaining && remaining.stop !== oldStop && (d === 1 ? b.l <= remaining.stop : b.h >= remaining.stop)) {
+          const stopped = fill(st, "stop", remaining.stop, b.ct); if (stopped) out.push(stopped);
+          break;
+        }
+      }
     }
     const cur = st.pos;
     if (cur && b.ct - cur.openT >= cur.maxHoldH * 3600_000) { const tr = fill(st, "time", b.c, b.ct); if (tr) out.push(tr); }
+    markEquity(st, b.c);
   }
   return out;
 }
@@ -857,6 +890,7 @@ function backtestInner(f: Frames, opts: { startEquity?: number; only?: StrategyI
   for (let i = start; i < f.m5.length - 1; i++) {
     const b = f.m5[i];
     if (st.pos) trades.push(...managePosition(st, [b], null));
+    const sampledEquity = markEquity(st, b.c);
     if (!st.pos) {
       const snap = snapshot(S, i);
       const { signals } = evaluate(snap, opts.only ? Object.fromEntries(STRATEGIES.map(s => [s, s === opts.only])) : st.enabled, S);
@@ -866,9 +900,12 @@ function backtestInner(f: Frames, opts: { startEquity?: number; only?: StrategyI
         openPosition(st, sig, f.m5[i + 1].o, f.m5[i + 1].t); break;
       }
     }
-    if (i % 12 === 0) curve.push([b.ct, +st.equity.toFixed(2)]);
+    if (i % 12 === 0) curve.push([b.ct, +sampledEquity.toFixed(2)]);
   }
-  if (st.pos) { const last = f.m5[f.m5.length - 1]; const tr = fill(st, "manual", last.c, last.ct); if (tr) trades.push(tr); }
+  const last = f.m5[f.m5.length - 1];
+  if (st.pos) trades.push(...managePosition(st, [last], null));
+  if (st.pos) { const tr = fill(st, "manual", last.c, last.ct); if (tr) trades.push(tr); }
+  markEquity(st, last.c);
   return { state: st, trades, curve, signalsSeen, from: f.m5[start]?.t, to: f.m5[f.m5.length - 1].ct, bars: f.m5.length };
 }
 
