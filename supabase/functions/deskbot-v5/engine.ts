@@ -15,7 +15,7 @@
 //    • the same evaluate()/manage() code drives live runs AND the backtester
 // ═══════════════════════════════════════════════════════════════════════════
 
-export const VERSION = "5.6.1";
+export const VERSION = "5.7.0";
 
 export type Bar = { t: number; o: number; h: number; l: number; c: number; v: number; ct: number };
 export type Dir = "long" | "short";
@@ -76,6 +76,8 @@ export const CFG = {
   // probation (auto-learning)
   // AI/ML trade filter (meta-labeling). null = off. Logistic model over signalFeatures(); trained walk-forward offline.
   ML_FILTER: null as null | { names: string[]; mean: number[]; std: number[]; w: number[]; b: number; thr: number; ver?: string },
+  TRADER: true,
+  TRADER_PARTS: "",      // v5.7 trade manager: re-plans open positions (never widens stop, never adds size)
   ML_SHADOW: false,   // true = compute + log p(win) but never block
   PROBATION_MIN_TRADES: 10,
   DISABLE_MIN_TRADES: 20,
@@ -675,6 +677,7 @@ export type Position = {
   tp1: number; tp2: number; tp3: number; originalQty: number; remainingQty: number; closedQty: number;
   riskAmt: number; entryFee: number; fundingPaid: number; exits: Exit[];
   tp1Done: boolean; tp2Done: boolean; tp3Done: boolean; openT: number; lastFundT: number; maxHoldH: number;
+  plan?: { t: number; msg: string }[]; planned?: boolean;
   score: number; why: string[]; regime: string;
 };
 export type Trade = {
@@ -890,6 +893,7 @@ function backtestInner(f: Frames, opts: { startEquity?: number; only?: StrategyI
   for (let i = start; i < f.m5.length - 1; i++) {
     const b = f.m5[i];
     if (st.pos) trades.push(...managePosition(st, [b], null));
+    if (st.pos && CFG.TRADER) { const sn = snapshot(S, i), r = traderManage(st, sn, S, { st: sn.st5, bos: sn.st5, c: b.c }, b.c, b.ct); if (r.closed) trades.push(r.closed); }
     const sampledEquity = markEquity(st, b.c);
     if (!st.pos) {
       const snap = snapshot(S, i);
@@ -921,4 +925,71 @@ export function summarize(trades: Trade[], startEquity: number) {
   let eq = startEquity, peak = startEquity, mdd = 0;
   for (const t of trades) { eq += t.net; peak = Math.max(peak, eq); mdd = Math.max(mdd, (peak - eq) / peak); }
   return { all: fin(all), by: Object.fromEntries(Object.entries(by).map(([k, v]) => [k, fin(v)])), maxDD: mdd, endEquity: eq };
+}
+
+// ─── v5.7 trade manager ("think like a trader") ─────────────────────────────────────────────────
+// Runs every check while a position is open. Deterministic, logged, never widens a stop, never changes size.
+//  1. Structure stop: once the trade is not losing, pull an oversized stop to the 1H swing that invalidates it
+//     (never tighter than the strategy's MIN_STOP_BY floor or 1.5×ATR15 from price).
+//  2. Realistic targets: re-base TP ladder on the current stop distance, and front-run the nearest liquidity
+//     level (Asian/prior-day high-low, 1H swing, VWAP, POC). Targets only ever move closer.
+//  3. 1m reversal guard: ≥60% of the way to TP1 and the 1m SuperTrend + structure turn against → stop to breakeven.
+//  4. Stall exit: half the max hold gone, <20% progress to TP1, and 5m + 1m trend against → close at market.
+export function closeNow(st: State, px: number, t: number): Trade | null { return st.pos ? fill(st, "manual", px, t) : null; }
+export type M1View = { st: number; bos: number; c: number } | null;
+export function m1View(m1: Bar[]): M1View {
+  if (m1.length < 40) return null;
+  const s = stSeries(m1, 10, 3).dir, b = bosSeries(m1, 2), n = m1.length - 1;
+  return { st: s[n], bos: b[n], c: m1[n].c };
+}
+export function liquidityLevels(s: Snap, S: Series): { px: number; name: string }[] {
+  const out: { px: number; name: string }[] = [];
+  if (s.asian) out.push({ px: s.asian.hi, name: "Asian high" }, { px: s.asian.lo, name: "Asian low" });
+  if (s.i1d >= 0) { const d = S.d1[s.i1d]; out.push({ px: d.h, name: "prior-day high" }, { px: d.l, name: "prior-day low" }); }
+  const h = S.f.h1, i = s.i1h;
+  for (let c = i - 2; c >= Math.max(2, i - 48); c--) {
+    if (h[c].h > h[c - 1].h && h[c].h > h[c - 2].h && h[c].h > h[c + 1].h && h[c].h > h[c + 2].h) out.push({ px: h[c].h, name: "1H swing high" });
+    if (h[c].l < h[c - 1].l && h[c].l < h[c - 2].l && h[c].l < h[c + 1].l && h[c].l < h[c + 2].l) out.push({ px: h[c].l, name: "1H swing low" });
+  }
+  if (isFinite(s.vwap)) out.push({ px: s.vwap, name: "VWAP" });
+  if (isFinite(s.poc)) out.push({ px: s.poc, name: "1H POC" });
+  return out.filter((l) => isFinite(l.px));
+}
+export function traderManage(st: State, s: Snap, S: Series, m1: M1View, px: number, t: number): { acts: string[]; closed: Trade | null } {
+  const p = st.pos, acts: string[] = [];
+  if (!p || !CFG.TRADER) return { acts, closed: null };
+  const d = sgn(p.dir), say = (m: string) => { acts.push(m); (p.plan ??= []).push({ t, msg: m }); if (p.plan.length > 12) p.plan.shift(); };
+  const atr15 = s.atr15, i1h = s.i1h, atr1h = i1h >= 0 ? S.atr1h[i1h] : NaN;
+  if (!isFinite(atr15) || !isFinite(atr1h)) return { acts, closed: null };
+  const fmt = (x: number) => x.toFixed(x > 1000 ? 0 : 1), on = (k: string) => CFG.TRADER_PARTS.split(",").includes(k);
+  if (!p.tp1Done) {
+    // 1. structure stop
+    const R = Math.abs(p.entry - p.stop), prog = (px - p.entry) * d;
+    if (on("stop") && prog > -0.25 * R) {
+      let ext = d === 1 ? Infinity : -Infinity;
+      for (let j = i1h; j >= Math.max(0, i1h - 5); j--) ext = d === 1 ? Math.min(ext, S.f.h1[j].l) : Math.max(ext, S.f.h1[j].h);
+      const floor = Math.max(CFG.MIN_STOP_PCT, CFG.MIN_STOP_BY[p.strategy] ?? 0) * p.entry;
+      let ns = ext - d * 0.25 * atr1h;
+      if ((p.entry - ns) * d < floor) ns = p.entry - d * floor;
+      if ((px - ns) * d < 1.5 * atr15) ns = px - d * 1.5 * atr15;
+      if ((ns - p.stop) * d > 0.1 * atr15 && (px - ns) * d > 0) { say(`Stop tightened ${fmt(p.stop)} → ${fmt(ns)} (1H structure; risk now ${fmt(Math.abs(p.entry - ns))} pts)`); p.stop = ns; }
+    }
+    // 2. realistic targets
+    const R2 = Math.abs(p.entry - p.stop), T = CFG.TARGETS[p.strategy];
+    let t1 = p.entry + d * T.tp1 * R2, t2 = p.entry + d * T.tp2 * R2, t3 = p.entry + d * T.tp3 * R2, why = `${T.tp1}R of current stop`;
+    const lv = liquidityLevels(s, S).filter((l) => (l.px - px) * d > 0.5 * atr15 && (l.px - p.entry) * d >= 0.8 * T.tp1 * R2).sort((a, b) => (a.px - b.px) * d);
+    if (lv[0] && (lv[0].px - p.entry) * d <= 1.6 * T.tp1 * R2) { t1 = lv[0].px - d * 0.15 * atr15; why = `front-runs ${lv[0].name} ${fmt(lv[0].px)}`; }
+    if ((t2 - t1) * d < 0) t2 = t1; if ((t3 - t2) * d < 0) t3 = t2;
+    const closer = (n: number, o: number) => (o - n) * d > 0.1 * atr15;
+    if (on("targets") && closer(t1, p.tp1)) { say(`TP1 ${fmt(p.tp1)} → ${fmt(t1)} (${why})`); p.tp1 = t1; }
+    if (on("targets") && closer(t2, p.tp2) && !p.tp2Done) { p.tp2 = t2; } if (on("targets") && closer(t3, p.tp3) && !p.tp3Done) { p.tp3 = t3; }
+    // 3. 1m reversal guard
+    const toTp1 = Math.abs(p.tp1 - p.entry), done = toTp1 > 0 ? ((px - p.entry) * d) / toTp1 : 0;
+    const be = p.entry + d * p.entry * (CFG.TAKER_FEE * 2 + CFG.SLIPPAGE);
+    if (on("be") && m1 && done >= 0.6 && m1.st === -d && m1.bos === -d && (be - p.stop) * d > 0 && (px - be) * d > 0.3 * atr15) { say(`1m turned against at ${(done * 100).toFixed(0)}% to TP1 — stop to breakeven ${fmt(be)}`); p.stop = be; }
+    // 4. stall exit
+    const held = (t - p.openT) / 3600_000;
+    if (on("stall") && held >= 0.5 * p.maxHoldH && done < 0.2 && s.st5 === -d && (!m1 || m1.st === -d)) { say(`No follow-through after ${held.toFixed(1)}h (${(done * 100).toFixed(0)}% to TP1, 5m${m1 ? "+1m" : ""} against) — closing`); return { acts, closed: closeNow(st, px, t) }; }
+  }
+  return { acts, closed: null };
 }

@@ -45,3 +45,20 @@ TradingView injection + Vercel `deskbot-v3` + Google Sheet / Supabase `bot_state
 - TREND_MTF minimum stop 1.2% → 0.4% on GOLD. Gold moves about a third as much as BTC, so the 1.2% floor put targets out of reach.
 - EMA_CROSS (15m EMA20/50) switched on for GOLD at 25% size as a paper experiment. It is near break-even on BTC research and untested on gold.
 - 1m Asian-range scalping not added: tight stops lose 0.3–0.5R/trade to fees in every test (ML_REPORT §1).
+
+## v5.7.0 — trade manager + 1m view (2026-10-23)
+- Bot now pulls 1m candles every 5-minute check (1m SuperTrend + structure shown on the dashboard).
+- New `traderManage` layer re-plans open positions each check. Four rules, each switchable via `TRADER_PARTS`:
+  `stop` (tighten to 1H structure), `targets` (pull TPs to nearest liquidity), `be` (1m reversal → breakeven), `stall` (close if no follow-through by half the max hold).
+  Never widens a stop, never changes size.
+- 1-year Binance backtest, each rule alone (start $1000, live config):
+  | rule | BTC end | Gold end |
+  |---|---|---|
+  | none | 922 | 1064 |
+  | stop | 900 | 943 |
+  | targets | 922 | 1057 |
+  | be | **994** (DD 17%→13%) | 985 |
+  | stall | 896 | **1068** |
+  | all four | 852 | 846 |
+- Live: BTC `be`, Gold `stall`. Backtest used the 5m trend as the reversal signal (no 1m history); live uses real 1m, so it may fire more often.
+- Dashboard: 1M chip, "Trade manager" log on the open-position card.

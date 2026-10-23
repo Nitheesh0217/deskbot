@@ -8,7 +8,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 import {
   VERSION, CFG, STRATEGIES, buildSeries, snapshot, evaluate, entryGates, openPosition, managePosition,
-  initState, unrealized, backtest, summarize, rollDay, dynamicRisk, applyCfg, resolvedCfg, ensureState, markEquity, setMlAsset, type State, type Trade, type Bar,
+  initState, unrealized, backtest, summarize, rollDay, dynamicRisk, applyCfg, resolvedCfg, ensureState, markEquity, setMlAsset, traderManage, m1View, type State, type Trade, type Bar,
 } from "./engine.ts";
 import { candles, candlesRange, candlesRangeBinance, hlContext, fearGreed, orderFlow, SYMBOLS, isSym, type Sym } from "./data.ts";
 import { readNews, newsBlocks, type NewsRead } from "./news.ts";
@@ -110,8 +110,8 @@ async function runOnce(sym: Sym = "BTC") {
   ensureState(st); applyCfg(st.cfg); setMlAsset(sym === "GOLD");
   const integrity = await integrityFor(sym, resolvedCfg(st.cfg));
 
-  const [m5, m15, h1, h4, ctx, fng, flow] = await Promise.all([
-    candles("5m", 400, now, "hyperliquid", sym), candles("15m", 400, now, "hyperliquid", sym), candles("1h", 300, now, "hyperliquid", sym), candles("4h", 700, now, "hyperliquid", sym), hlContext(sym),
+  const [m1v, m5, m15, h1, h4, ctx, fng, flow] = await Promise.all([
+    candles("1m", 240, now, "hyperliquid", sym).catch(() => ({ bars: [] as Bar[], source: "hyperliquid" as const })), candles("5m", 400, now, "hyperliquid", sym), candles("15m", 400, now, "hyperliquid", sym), candles("1h", 300, now, "hyperliquid", sym), candles("4h", 700, now, "hyperliquid", sym), hlContext(sym),
     (async () => { if (!isCrypto) return null; const c = (st as State & { _fng?: { v: number; l: string; t: number } })._fng; if (c && now - c.t < 3 * 3600_000) return { value: c.v, label: c.l }; return await fearGreed(); })(), orderFlow(now, sym),
   ]);
   if (fng) (st as State & { _fng?: unknown })._fng = { v: fng.value, l: fng.label, t: now };
@@ -154,6 +154,13 @@ async function runOnce(sym: Sym = "BTC") {
   const snap = snapshot(S, i5, { funding: ctx?.funding ?? null, oi: ctx?.oi ?? null, markPx: ctx?.markPx ?? null, fng: fng?.value ?? null });
   rollDay(st, now);
   markEquity(st, snap.price);
+  const m1 = m1View(m1v.bars);
+  let traderActs: string[] = [];
+  if (st.pos) {
+    const r = traderManage(st, snap, S, m1, snap.price, now); traderActs = r.acts;
+    for (const a of r.acts) evs.push({ kind: "MANAGE", strategy: st.pos?.strategy ?? r.closed?.strategy ?? null, msg: tag + a, symbol: sym });
+    if (r.closed) { closed.push(r.closed); const t = r.closed; evs.push({ kind: t.net > 0 ? "WIN" : "LOSS", strategy: t.strategy, msg: `${tag}${t.strategy} ${t.dir.toUpperCase()} closed by trade manager · net $${t.net.toFixed(2)} (${t.r >= 0 ? "+" : ""}${t.r.toFixed(2)}R)`, symbol: sym }); }
+  }
   let action = st.pos ? "HOLD" : "SKIP"; let decision: unknown = null;
   if (snap.T > st.lastEvalT) {
     st.lastEvalT = snap.T;
@@ -193,13 +200,13 @@ async function runOnce(sym: Sym = "BTC") {
     regime: snap.regime, st5: snap.st5, st15: snap.st15, st1h: snap.st1h, st4h: snap.st4h, chop5: +snap.chop5.toFixed(1), chop15: +snap.chop15.toFixed(1),
     rsi15: +snap.rsi15.toFixed(1), rsi1h: +snap.rsi1h.toFixed(1), vwap: +snap.vwap.toFixed(1), vwapDev: +snap.vwapDev.toFixed(2), atr5: +snap.atr5.toFixed(1), atr15: +snap.atr15.toFixed(1),
     poc: +snap.poc.toFixed(1), asian: snap.asian, ema20: +snap.ema20.toFixed(1), ema50: +snap.ema50.toFixed(1), barT: snap.T,
-    flow4: flow?.imb4 ?? null, flow24: flow?.imb24 ?? null,
+    st1m: m1?.st ?? null, bos1m: m1?.bos ?? null, flow4: flow?.imb4 ?? null, flow24: flow?.imb24 ?? null,
     ema50D: snap.i1d >= 0 && isFinite(S.ema50D[snap.i1d]) ? +S.ema50D[snap.i1d].toFixed(1) : null,
   };
   const nw = sx._news;
   const news = nw ? { t: nw.t, risk: nw.risk, bias: nw.bias, event: nw.event, reason: nw.reason, by: nw.by, mode: NEWS_MODE, top: nw.headlines.slice(0, 5).map((h) => ({ src: h.src, title: h.title, t: h.t })), errors: nw.aiErrors ?? [] } : null;
   const ai = { providers: providersFromEnv().map((p) => p.name), usage: sx._aiUsage ?? {} };
-  const lastRun = { ts: new Date(now).toISOString(), sym, action, source, integrity, news, ai, upnl: +upnl.toFixed(2), market, decision, risk: dynamicRisk(st.equity), ms: Date.now() - now };
+  const lastRun = { ts: new Date(now).toISOString(), sym, action, trader: { acts: traderActs, plan: st.pos?.plan ?? [] }, source, integrity, news, ai, upnl: +upnl.toFixed(2), market, decision, risk: dynamicRisk(st.equity), ms: Date.now() - now };
   st.version = VERSION;
   await saveState(st, lastRun, sym);
   await upsert("dbv5_equity", [{ symbol: sym, ts: new Date(now).toISOString(), equity: +st.equity.toFixed(4), upnl: +upnl.toFixed(4), price: snap.price }]);

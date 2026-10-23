@@ -82,7 +82,7 @@ p { margin: 0; }
 @media (prefers-reduced-motion: reduce) { .radar::after { animation: none; } }
 
 /* Market */
-.tf { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 6px; margin-top: 10px; }
+.tf { display: grid; grid-template-columns: repeat(5, minmax(0,1fr)); gap: 6px; margin-top: 10px; }
 .tf > div { border: 1px solid var(--line); border-radius: 6px; padding: 8px 6px; text-align: center; }
 .tf .k { font: 500 10px/1 var(--f-mono); color: var(--fg-3); letter-spacing: .08em; }
 .tf .v { font: 700 14px/1.2 var(--f-mono); margin-top: 5px; }
@@ -433,10 +433,11 @@ function renderDesk() {
     const u = +lr.upnl || 0;
     pc.innerHTML = `<div class="pos-head"><span class="side ${p.dir}">${p.dir.toUpperCase()}</span><h2>${esc(nameOf(p.strategy))}</h2><span class="num ${u >= 0 ? "up" : "down"}" style="margin-left:auto;font-weight:600">${u >= 0 ? "+" : "−"}${fmt$(Math.abs(u))}</span></div>
       <div class="grid2"><div><div class="k">Entry</div><div class="v">${fmtPx(p.entry)}</div></div><div><div class="k">Risk</div><div class="v">${fmt$(p.riskAmt)} · ${fmtPx(R)} pts</div></div>
-      <div><div class="k">Size</div><div class="v">${(+p.remainingQty).toFixed(5)} BTC</div></div><div><div class="k">Opened</div><div class="v">${ago(p.openT)}</div></div></div>
+      <div><div class="k">Size</div><div class="v">${(+p.remainingQty).toFixed(5)} ${BOOK === "GOLD" ? "oz" : "BTC"}</div></div><div><div class="k">Opened</div><div class="v">${ago(p.openT)}</div></div></div>
       <div class="ladder">${rung("TP3", p.tp3, p.tp3Done)}${rung("TP2", p.tp2, p.tp2Done)}${rung("TP1", p.tp1, p.tp1Done)}
       <div class="rung stop"><span class="t">Stop</span><span class="track"><i style="width:${p.stop !== p.stop0 ? 100 : 0}%"></i></span><span>${fmtPx(p.stop)}${p.stop !== p.stop0 ? " (moved)" : ""}</span></div></div>
-      <p class="note" style="margin-top:10px">${(p.why || []).map(esc).join(" · ")}</p>`;
+      <p class="note" style="margin-top:10px">${(p.why || []).map(esc).join(" · ")}</p>
+      <div class="note" style="margin-top:10px"><b>Trade manager</b>${(p.plan && p.plan.length) ? p.plan.slice().reverse().map((x) => `<div>${new Date(x.t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · ${esc(x.msg)}</div>`).join("") : `<div class="muted">Watching 1m/5m/1H structure — no adjustment needed yet.</div>`}</div>`;
   } else {
     const on = STRATS.filter((s) => (st.enabled || {})[s.id] !== false && ((st.cfg && st.cfg.RISK_SCALE) || {})[s.id] !== 0).length;
     pc.innerHTML = `<div class="flat"><span class="radar" aria-hidden="true"></span><div><h2>Flat, scanning</h2><p class="note">${on} of 7 strategies active. Checks run every 5 minutes in the cloud${st.cb && st.cb.cooldownUntil > Date.now() ? ` · <span class="down">circuit breaker until ${new Date(st.cb.cooldownUntil).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>` : ""}.</p></div></div>`;
@@ -444,7 +445,7 @@ function renderDesk() {
 
   // market
   $("regime").textContent = m.regime || "—";
-  const tf = [["5M", m.st5], ["15M", m.st15], ["1H", m.st1h], ["4H", m.st4h]];
+  const tf = [["1M", m.st1m], ["5M", m.st5], ["15M", m.st15], ["1H", m.st1h], ["4H", m.st4h]];
   $("tf").innerHTML = tf.map(([k, v]) => `<div class="${v === 1 ? "bull" : v === -1 ? "bear" : ""}"><div class="k">${k}</div><div class="v">${v === 1 ? "▲ Up" : v === -1 ? "▼ Down" : "—"}</div></div>`).join("");
   const fund = m.funding != null ? (m.funding * 100).toFixed(4) + "%/h" : "—";
   const cells = [

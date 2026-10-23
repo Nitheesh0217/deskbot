@@ -19,6 +19,7 @@ export const EDITABLE: Record<string, Rule> = {
   SWEEP_REQUIRE_HTF: { kind: "bool" },
   HSW_TF: { kind: "enum", values: ["4h", "1h"] }, HSW_WICK: { kind: "num", min: 0.2, max: 0.8 },
   XC_TF: { kind: "enum", values: ["15m", "1h"] }, XC_STOP_ATR: { kind: "num", min: 1, max: 8 }, XC_REQUIRE_4H: { kind: "bool" },
+  TRADER: { kind: "bool" },
 };
 
 /** Validate a proposed patch. Returns the cleaned patch or a list of problems. Unknown keys are rejected, never ignored. */
