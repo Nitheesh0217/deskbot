@@ -179,6 +179,7 @@ nav.tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 25; backgroun
 .chat-f .btn { width: auto; }
 .chips { display: flex; gap: 6px; overflow-x: auto; }
 .chips button { flex: none; font: 500 12px/1 var(--f-body); padding: 7px 10px; border-radius: 999px; border: 1px solid var(--line-2); background: var(--panel-2); color: var(--fg-2); cursor: pointer; }
+.book-seg { display: flex; gap: 6px; margin-bottom: 10px; } .book-seg button { flex: 1; padding: 10px; font-size: 13px; }
 </style>
 
 <header class="bar">
@@ -195,6 +196,7 @@ nav.tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 25; backgroun
 <main>
   <!-- DESK -->
   <section class="view" id="v-desk" aria-label="Desk">
+    <div class="seg book-seg" id="bookSeg" role="group" aria-label="Paper book" hidden><button type="button" data-b="BTC" aria-pressed="true">Bitcoin</button><button type="button" data-b="GOLD" aria-pressed="false">Gold</button></div>
     <div class="banner" id="srcBanner">Showing the snapshot saved when this page was published. Live numbers load straight from the cloud bot.</div>
     <div class="card">
       <div class="eq-top">
@@ -218,7 +220,7 @@ nav.tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 25; backgroun
 
     <div class="card">
       <div style="display:flex;align-items:center;gap:8px">
-        <h2>BTC market read</h2>
+        <h2><span class="bookName">BTC</span> market read</h2>
         <span class="regime" id="regime" style="margin-left:auto">—</span>
       </div>
       <div class="tf" id="tf"></div>
@@ -245,7 +247,7 @@ nav.tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 25; backgroun
   <section class="view" id="v-chart" aria-label="Chart" hidden>
     <div class="card">
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-        <h2>BTC chart</h2>
+        <h2><span class="bookName">BTC</span> chart</h2>
         <div class="seg" id="chartMode" style="margin-left:auto"><button type="button" data-m="bot" aria-pressed="true">Bot levels</button><button type="button" data-m="tv" aria-pressed="false">TradingView</button></div>
       </div>
       <div class="seg" id="tfSeg" style="margin-top:10px"><button type="button" data-tf="15m" aria-pressed="false">15m</button><button type="button" data-tf="1h" aria-pressed="true">1H</button><button type="button" data-tf="4h" aria-pressed="false">4H</button><button type="button" data-tf="1d" aria-pressed="false">1D</button></div>
@@ -378,7 +380,9 @@ function when(ts) { const d = new Date(ts); return d.toLocaleString(undefined, {
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const nameOf = (id) => (STRATS.find((s) => s.id === id) || { name: id || "System" }).name;
 
-let DATA = SNAP, LIVE = false;
+let DATA = SNAP, LIVE = false, RAW = null;
+let BOOK = (() => { try { return localStorage.getItem("deskbot_book") || "BTC"; } catch (e) { return "BTC"; } })();
+const BOOK_META = { BTC: { coin: "BTC", bn: "BTCUSDT", tv: "BINANCE:BTCUSDT", label: "BTC" }, GOLD: { coin: "PAXG", bn: "PAXGUSDT", tv: "OANDA:XAUUSD", label: "Gold" } };
 
 function sparkPath(vals, w, h, pad = 4) {
   if (!vals.length) return "";
@@ -391,7 +395,7 @@ function renderDesk() {
   const eq = +st.equity || 0, start = +st.startEquity || eq, upnl = +lr.upnl || 0;
   $("eq").textContent = fmt$(eq + upnl);
   const ch = eq + upnl - start, base = S.carried && S.carried.v3StartEquity ? +S.carried.v3StartEquity : null;
-  $("eqd").innerHTML = `<span class="${ch >= 0 ? "up" : "down"}">${ch >= 0 ? "+" : "−"}${fmt$(Math.abs(ch)).replace("$", "$")} (${pct(start ? ch / start : 0, 2)})</span> <span class="faint">since v5 start</span>` +
+  $("eqd").innerHTML = `<span class="${ch >= 0 ? "up" : "down"}">${ch >= 0 ? "+" : "−"}${fmt$(Math.abs(ch)).replace("$", "$")} (${pct(start ? ch / start : 0, 2)})</span> <span class="faint">since ${BOOK === "GOLD" ? "gold book start" : "v5 start"}</span>` +
     (base ? `<br><span class="faint">v3 began at $${base.toFixed(0)} · ${pct((eq + upnl) / base - 1, 1)} all-time</span>` : "");
   $("runAction").textContent = (lr.action || "—").replace("_", " ");
   const all = (st.stats && st.stats.all) || { n: 0, wins: 0, sumR: 0 };
@@ -522,7 +526,7 @@ function renderSystem() {
   $("sys").innerHTML = sys.map(([k, v]) => `<div><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`).join("");
 }
 
-function renderAll() { renderDesk(); renderStrategies(); renderTrades(); renderEvents(); renderSystem(); }
+function renderAll() { document.querySelectorAll(".bookName").forEach((e) => { e.textContent = BOOK === "GOLD" && RAW && RAW.books && RAW.books.GOLD && RAW.books.GOLD.state ? "Gold" : "BTC"; }); renderDesk(); renderStrategies(); renderTrades(); renderEvents(); renderSystem(); }
 
 // tabs
 const VIEWS = ["desk", "chart", "strategies", "trades", "activity", "system"];
@@ -544,11 +548,11 @@ function loadScript(src) { return new Promise((res, rej) => { const s = document
 async function getBars(tf, n) {
   const end = Date.now(), start = end - (n + 2) * TFMS[tf];
   try {
-    const r = await fetch("https://api.hyperliquid.xyz/info", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: "candleSnapshot", req: { coin: "BTC", interval: tf, startTime: start, endTime: end } }) });
+    const r = await fetch("https://api.hyperliquid.xyz/info", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: "candleSnapshot", req: { coin: (BOOK_META[BOOK] || BOOK_META.BTC).coin, interval: tf, startTime: start, endTime: end } }) });
     if (!r.ok) throw 0; const j = await r.json(); if (!Array.isArray(j) || !j.length) throw 0;
     return { src: "Hyperliquid", bars: j.map((k) => ({ t: +k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c })) };
   } catch (e) {
-    const r = await fetch(`https://data-api.binance.vision/api/v3/klines?symbol=BTCUSDT&interval=${tf}&limit=${Math.min(n, 1000)}`);
+    const r = await fetch(`https://data-api.binance.vision/api/v3/klines?symbol=${(BOOK_META[BOOK] || BOOK_META.BTC).bn}&interval=${tf}&limit=${Math.min(n, 1000)}`);
     if (!r.ok) throw new Error("no candle source reachable"); const j = await r.json();
     return { src: "Binance", bars: j.map((k) => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4] })) };
   }
@@ -621,7 +625,7 @@ async function chartDraw() {
     legend.push(["#4fd1c5", `EMA20 (${tf})`, "$" + fmtPx(e20[e20.length - 1])], ["#b48ef0", `EMA50 (${tf})`, "$" + fmtPx(e50[e50.length - 1])]);
     if (p) legend.push([cssVar("--fg"), `Open ${p.dir} (${nameOf(p.strategy)})`, `entry $${fmtPx(p.entry)} · stop $${fmtPx(p.stop)}`]);
     $("legend").innerHTML = legend.map(([c, k, v]) => `<div><i style="background:${c}"></i><span class="muted">${esc(k)}</span><span>${esc(v)}</span></div>`).join("");
-    $("chartNote").textContent = `Every line is a level the bot actually uses. Nothing is hand-drawn or AI-guessed. Candles: ${main.src} BTC · refreshed ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.`;
+    $("chartNote").textContent = `Every line is a level the bot actually uses. Nothing is hand-drawn or AI-guessed. Candles: ${main.src} ${BOOK === "GOLD" ? "PAXG (gold)" : "BTC"} · refreshed ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.`;
     // the bot's read, in words
     const d = (last - eDnow) / last, rd = [];
     rd.push(d > 0.03 ? `<div><b class="up">Longs allowed.</b> Price is ${pct(d)} above the daily EMA50, past the +3% gate.</div>`
@@ -639,7 +643,7 @@ async function showTV() {
   if (CH.tvLoaded) return;
   try {
     await loadScript("https://s3.tradingview.com/tv.js");
-    new window.TradingView.widget({ autosize: true, symbol: "BINANCE:BTCUSDT", interval: { "15m": "15", "1h": "60", "4h": "240", "1d": "D" }[CH.tf], timezone: "Etc/UTC",
+    new window.TradingView.widget({ autosize: true, symbol: (BOOK_META[BOOK] || BOOK_META.BTC).tv, interval: { "15m": "15", "1h": "60", "4h": "240", "1d": "D" }[CH.tf], timezone: "Etc/UTC",
       theme: matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark", style: "1", allow_symbol_change: true, hide_side_toolbar: false, withdateranges: true, studies: ["MAExp@tv-basicstudies"], container_id: "tvw" });
     CH.tvLoaded = true; $("tvMsg").hidden = true;
   } catch (e) { $("tvMsg").textContent = "TradingView can't load inside this viewer. Open the live dashboard on Vercel for the full TradingView chart."; }
@@ -680,11 +684,17 @@ function parseRows(res) {
 const LIVE_URL = "https://deskbot-azure.vercel.app";
 const API = "https://xevymbzgpcsdhygswxlk.supabase.co/functions/v1/deskbot-v5";
 function fromApi(g) {
-  const st = g.state || {}, r = g.backtest && g.backtest.results;
+  RAW = g;
+  const bk = g.books && g.books.GOLD;
+  $("bookSeg").hidden = !g.books;
+  document.querySelectorAll("#bookSeg button").forEach((b) => { b.setAttribute("aria-pressed", String(b.dataset.b === BOOK)); if (b.dataset.b === "GOLD") b.title = bk && bk.state ? "" : "Gold book not started yet"; });
+  const gold = BOOK === "GOLD" && bk && bk.state;
+  const sym = gold ? "GOLD" : "BTC", mine = (x) => (x.symbol || "BTC") === sym;
+  const st = (gold ? bk.state : g.state) || {}, r = g.backtest && g.backtest.results;
   return {
-    state: { state: st, carried: st.carried, last_run: g.lastRun, updated_at: g.updated },
-    events: (g.events || []).filter((e) => e.kind !== "SKIP" || Date.now() - new Date(e.ts).getTime() < 1800000).slice(0, 40),
-    trades: g.trades || [], curve: g.curve || [],
+    state: { state: st, carried: st.carried, last_run: gold ? bk.lastRun : g.lastRun, updated_at: gold ? bk.updated : g.updated },
+    events: (g.events || []).filter((e) => mine(e) && (e.kind !== "SKIP" || Date.now() - new Date(e.ts).getTime() < 1800000)).slice(0, 40),
+    trades: (g.trades || []).filter(mine), curve: (gold ? bk.curve : g.curve) || [],
     bt: r && /^LIVE_CONFIG/.test(r.label || "") ? { label: r.label, ran_at: g.backtest.ran_at, a: r.combined.all, by: r.combined.by, mdd: r.combined.maxDD, eq: r.combined.endEquity, f: r.from, t: r.to, curve: r.curve } : DATA.bt,
   };
 }
@@ -818,6 +828,15 @@ $("chatSend").onclick = () => chatSend($("chatIn").value);
 $("chatIn").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); chatSend($("chatIn").value); } });
 $("chatChips").addEventListener("click", (e) => { if (e.target.tagName === "BUTTON") chatSend(e.target.textContent); });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("chat").hidden) chatOpen(false); });
+
+$("bookSeg").addEventListener("click", (e) => {
+  const b = e.target.closest("button"); if (!b || b.dataset.b === BOOK) return;
+  const bk = RAW && RAW.books && RAW.books.GOLD;
+  if (b.dataset.b === "GOLD" && !(bk && bk.state)) { $("srcBanner").hidden = false; $("srcBanner").textContent = "The gold paper book hasn't started yet."; return; }
+  BOOK = b.dataset.b; try { localStorage.setItem("deskbot_book", BOOK); } catch (err) {}
+  if (RAW) { DATA = fromApi(RAW); renderAll(); }
+  CH.tvLoaded = false; $("tvw").innerHTML = ""; if (!$("v-chart").hidden) chartShow();
+});
 </script>
 
 </body></html>

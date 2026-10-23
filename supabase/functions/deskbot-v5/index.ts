@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════════════════
-//  DeskBot v5 — Supabase Edge Function (24/7, server-side, PAPER ONLY)
+//  DeskBot v5.5 — Supabase Edge Function (24/7, server-side, PAPER ONLY). Multi-book: BTC + GOLD (PAXG)
 //    POST  (x-deskbot-key)  {action:"run"}       → one iteration (pg_cron every 5 min, single-leader lease)
 //  Runtime needs NO Claude/Anthropic service. Optional AI (Groq/Gemini free tiers) only labels news risk.
 //    POST  (x-deskbot-key)  {action:"backtest",days,source,cfg,label} → walk-forward backtest (IS 2/3, OOS 1/3)
@@ -10,7 +10,7 @@ import {
   VERSION, CFG, STRATEGIES, buildSeries, snapshot, evaluate, entryGates, openPosition, managePosition,
   initState, unrealized, backtest, summarize, rollDay, dynamicRisk, applyCfg, ensureState, type State, type Trade, type Bar,
 } from "./engine.ts";
-import { candles, candlesRange, candlesRangeBinance, hlContext, fearGreed, orderFlow } from "./data.ts";
+import { candles, candlesRange, candlesRangeBinance, hlContext, fearGreed, orderFlow, SYMBOLS, isSym, type Sym } from "./data.ts";
 import { readNews, newsBlocks, type NewsRead } from "./news.ts";
 import { providersFromEnv, type Usage } from "./ai.ts";
 import { chat, validatePatch, mergeCfg, EDITABLE, type ChatTurn } from "./chat.ts";
@@ -24,6 +24,10 @@ const NEWS_EVERY_MIN = +(Deno.env.get("NEWS_EVERY_MIN") ?? 30);
 const NEWS_AI = (Deno.env.get("NEWS_AI") ?? "on") !== "off";
 const CHAT_KEY = Deno.env.get("DESKBOT_CHAT_KEY") ?? "";
 const CHAT_DAILY_CAP = +(Deno.env.get("CHAT_DAILY_CAP") ?? 150);
+// Each book is a separate paper account (own equity, position, stats, cfg) in its own dbv5_state row.
+// A non-BTC book only runs once its row exists (created deliberately, with a researched cfg).
+const BOOKS: Sym[] = (Deno.env.get("DESKBOT_BOOKS") ?? "BTC,GOLD").split(",").map((x) => x.trim()).filter(isSym);
+const rowId = (sym: Sym) => (sym === "BTC" ? "main" : sym.toLowerCase());
 const CORS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "content-type, x-deskbot-key, x-chat-key", "Access-Control-Allow-Methods": "GET, POST, OPTIONS" };
 
 // ─── tiny PostgREST client ──────────────────────────────────────────────────
@@ -46,18 +50,18 @@ async function cronKey(): Promise<string> {
   return _key!;
 }
 
-async function loadState(): Promise<State | null> {
-  const r = await select("dbv5_state?id=eq.main&select=state"); return r?.[0]?.state ?? null;
+async function loadState(sym: Sym = "BTC"): Promise<State | null> {
+  const r = await select(`dbv5_state?id=eq.${rowId(sym)}&select=state`); return r?.[0]?.state ?? null;
 }
-async function saveState(st: State, lastRun: Record<string, unknown>) {
-  await rest("dbv5_state?id=eq.main", { method: "PATCH", body: JSON.stringify({ state: st, last_run: lastRun, updated_at: new Date().toISOString() }) });
+async function saveState(st: State, lastRun: Record<string, unknown>, sym: Sym = "BTC") {
+  await rest(`dbv5_state?id=eq.${rowId(sym)}`, { method: "PATCH", body: JSON.stringify({ state: st, last_run: lastRun, updated_at: new Date().toISOString() }) });
 }
-type Ev = { kind: string; strategy?: string | null; msg: string; data?: unknown };
-async function events(evs: Ev[]) { if (evs.length) await insert("dbv5_events", evs.map(e => ({ kind: e.kind, strategy: e.strategy ?? null, msg: e.msg, data: e.data ?? null }))); }
-async function saveTrades(trs: Trade[]) {
+type Ev = { kind: string; strategy?: string | null; msg: string; data?: unknown; symbol?: Sym };
+async function events(evs: Ev[]) { if (evs.length) await insert("dbv5_events", evs.map(e => ({ kind: e.kind, strategy: e.strategy ?? null, msg: e.msg, data: e.data ?? null, symbol: e.symbol ?? "BTC" }))); }
+async function saveTrades(trs: Trade[], sym: Sym = "BTC") {
   if (!trs.length) return;
   await upsert("dbv5_trades", trs.map(t => ({
-    id: t.id, strategy: t.strategy, dir: t.dir, entry: t.entry, exit_avg: t.exitAvg, net: t.net, r: t.r, fees: t.fees, funding: t.funding,
+    id: t.id, symbol: sym, strategy: t.strategy, dir: t.dir, entry: t.entry, exit_avg: t.exitAvg, net: t.net, r: t.r, fees: t.fees, funding: t.funding,
     open_t: new Date(t.openT).toISOString(), close_t: new Date(t.closeT).toISOString(), reason: t.reason, data: t,
   })));
 }
@@ -81,18 +85,27 @@ async function runLocked() {
   const owner = crypto.randomUUID();
   const got = await rest("rpc/dbv5_lease", { method: "POST", headers: { Prefer: "" }, body: JSON.stringify({ owner, seconds: 120 }) });
   if (got !== true) return { ok: true, skipped: "another run holds the lease" };
-  try { return await runOnce(); } finally { try { await rest("rpc/dbv5_release", { method: "POST", body: JSON.stringify({ owner }) }); } catch { /* lease expires anyway */ } }
+  try {
+    const out: Record<string, unknown> = {};
+    for (const sym of BOOKS) {
+      try { out[sym] = await runOnce(sym); }
+      catch (e) { const msg = `${sym} book: ${(e as Error).message}`.slice(0, 300); out[sym] = { ok: false, error: msg }; try { await events([{ kind: "ERROR", msg, symbol: sym }]); } catch { /* ignore */ } }
+    }
+    return { ok: true, version: VERSION, books: out };
+  } finally { try { await rest("rpc/dbv5_release", { method: "POST", body: JSON.stringify({ owner }) }); } catch { /* lease expires anyway */ } }
 }
 
-async function runOnce() {
+async function runOnce(sym: Sym = "BTC") {
   const now = Date.now(); const evs: Ev[] = []; const notes: string[] = [];
-  let st = await loadState();
+  const isCrypto = sym !== "GOLD", tag = sym === "BTC" ? "" : `${sym} `;
+  let st = await loadState(sym);
+  if (!st && sym !== "BTC") return { ok: true, sym, skipped: "book not initialised" };
   if (!st) { st = await carryFromV3(now); evs.push({ kind: "INIT", msg: `DeskBot ${VERSION} initialised at $${st.equity.toFixed(2)} (carried from v3)`, data: st.carried }); }
   ensureState(st); applyCfg(st.cfg); rollDay(st, now);
 
   const [m5, m15, h1, h4, ctx, fng, flow] = await Promise.all([
-    candles("5m", 400, now), candles("15m", 400, now), candles("1h", 300, now), candles("4h", 700, now), hlContext(),
-    (async () => { const c = (st as State & { _fng?: { v: number; l: string; t: number } })._fng; if (c && now - c.t < 3 * 3600_000) return { value: c.v, label: c.l }; return await fearGreed(); })(), orderFlow(now),
+    candles("5m", 400, now, "hyperliquid", sym), candles("15m", 400, now, "hyperliquid", sym), candles("1h", 300, now, "hyperliquid", sym), candles("4h", 700, now, "hyperliquid", sym), hlContext(sym),
+    (async () => { if (!isCrypto) return null; const c = (st as State & { _fng?: { v: number; l: string; t: number } })._fng; if (c && now - c.t < 3 * 3600_000) return { value: c.v, label: c.l }; return await fearGreed(); })(), orderFlow(now, sym),
   ]);
   if (fng) (st as State & { _fng?: unknown })._fng = { v: fng.value, l: fng.label, t: now };
   const source = m5.source;
@@ -102,20 +115,20 @@ async function runOnce() {
   if (st.pos) {
     const since = Math.max(st.lastBarT, st.pos.openT);
     const mins = Math.min(1000, Math.ceil((now - since) / 60_000) + 2);
-    const m1 = (await candles("1m", mins, now)).bars.filter((b: Bar) => b.ct > since);
+    const m1 = (await candles("1m", mins, now, "hyperliquid", sym)).bars.filter((b: Bar) => b.ct > since);
     closed.push(...managePosition(st, m1, ctx ? ctx.funding : 0));
     if (m1.length) st.lastBarT = m1[m1.length - 1].ct;
     for (const t of closed) {
       const msg = `${t.strategy} ${t.dir.toUpperCase()} closed ${t.reason} · net $${t.net.toFixed(2)} (${t.r >= 0 ? "+" : ""}${t.r.toFixed(2)}R)`;
-      evs.push({ kind: t.net > 0 ? "WIN" : "LOSS", strategy: t.strategy, msg, data: { r: t.r, net: t.net } });
-      await push(`DeskBot v5 ${t.net > 0 ? "WIN" : "LOSS"}`, `${msg} · Eq $${st.equity.toFixed(2)}`);
+      evs.push({ kind: t.net > 0 ? "WIN" : "LOSS", strategy: t.strategy, msg: tag + msg, data: { r: t.r, net: t.net }, symbol: sym });
+      await push(`DeskBot ${tag}${t.net > 0 ? "WIN" : "LOSS"}`, `${msg} · Eq $${st.equity.toFixed(2)}`);
     }
-    if (st.pos) for (const e of st.pos.exits) if (e.t > since && e.kind !== "stop") evs.push({ kind: e.kind.toUpperCase(), strategy: st.pos.strategy, msg: `${e.kind.toUpperCase()} filled @ ${e.px.toFixed(1)} · stop → ${st.pos.stop.toFixed(1)}` });
+    if (st.pos) for (const e of st.pos.exits) if (e.t > since && e.kind !== "stop") evs.push({ kind: e.kind.toUpperCase(), strategy: st.pos.strategy, symbol: sym, msg: `${tag}${e.kind.toUpperCase()} filled @ ${e.px.toFixed(1)} · stop → ${st.pos.stop.toFixed(1)}` });
   } else st.lastBarT = now;
 
   // 1b) news read (every NEWS_EVERY_MIN). Failure here never stops position management above.
   const sx = st as State & { _news?: NewsRead; _aiUsage?: Usage };
-  if (NEWS_MODE !== "off" && (!sx._news || now - sx._news.t >= NEWS_EVERY_MIN * 60_000)) {
+  if (sym === "BTC" && NEWS_MODE !== "off" && (!sx._news || now - sx._news.t >= NEWS_EVERY_MIN * 60_000)) {
     try {
       const prev = sx._news?.risk;
       const nr = await readNews(now, (sx._aiUsage ??= {}), { useAi: NEWS_AI });
@@ -125,8 +138,8 @@ async function runOnce() {
       if (nr.risk === "HIGH" && prev !== "HIGH") await push("DeskBot news: HIGH risk", `${nr.event}: ${nr.reason}`);
     } catch (e) { evs.push({ kind: "ERROR", msg: `news layer: ${(e as Error).message}`.slice(0, 200) }); }
   }
-  const newsBlock = newsBlocks(sx._news, NEWS_MODE, now);
-  const newsShadow = NEWS_MODE === "shadow" ? newsBlocks(sx._news, "gate", now) : null;
+  const newsBlock = sym === "BTC" ? newsBlocks(sx._news, NEWS_MODE, now) : null;
+  const newsShadow = sym === "BTC" && NEWS_MODE === "shadow" ? newsBlocks(sx._news, "gate", now) : null;
 
   // 2) evaluate on the newest closed 5m bar (once per bar)
   const S = buildSeries({ m5: m5.bars, m15: m15.bars, h1: h1.bars, h4: h4.bars });
@@ -148,19 +161,20 @@ async function runOnce() {
         const fillRef = ctx?.markPx && Math.abs(ctx.markPx - snap.price) / snap.price < 0.01 ? ctx.markPx : snap.price;
         const p = openPosition(st, sig, fillRef, now);
         if (!p) { notes.push(`${sig.strategy}: price already through stop`); continue; }
+        if (sym !== "BTC") p.id = `${sym}-${now}`;
         opened = true; action = `OPEN_${sig.dir.toUpperCase()}`;
         const msg = `${sig.strategy} ${sig.dir.toUpperCase()} @ ${p.entry.toFixed(1)} · stop ${p.stop.toFixed(1)} · TP ${p.tp1.toFixed(0)}/${p.tp2.toFixed(0)}/${p.tp3.toFixed(0)} · risk $${p.riskAmt.toFixed(2)} · score ${sig.score}`;
-        evs.push({ kind: "OPEN", strategy: sig.strategy, msg, data: { why: sig.why, regime: sig.regime, qty: p.originalQty } });
-        await push(`DeskBot v5 ${action}`, msg);
+        evs.push({ kind: "OPEN", strategy: sig.strategy, msg: tag + msg, data: { why: sig.why, regime: sig.regime, qty: p.originalQty, flow }, symbol: sym });
+        await push(`DeskBot ${tag}${action}`, msg);
         break;
       }
       if (!opened) {
         const top = rejects.filter(r => !/Waits for 15m close/.test(r.reason)).slice(0, 4).map(r => `${r.strategy}: ${r.reason}`);
-        evs.push({ kind: "SKIP", msg: (notes[0] ?? top[0] ?? "No setup") , data: { notes, top, regime: snap.regime } });
+        evs.push({ kind: "SKIP", msg: tag + (notes[0] ?? top[0] ?? "No setup"), data: { notes, top, regime: snap.regime }, symbol: sym });
       }
     }
   }
-  if (closed.length) await saveTrades(closed);
+  if (closed.length) await saveTrades(closed, sym);
 
   const upnl = unrealized(st.pos, snap.price);
   const market = {
@@ -174,24 +188,26 @@ async function runOnce() {
   const nw = sx._news;
   const news = nw ? { t: nw.t, risk: nw.risk, bias: nw.bias, event: nw.event, reason: nw.reason, by: nw.by, mode: NEWS_MODE, top: nw.headlines.slice(0, 5).map((h) => ({ src: h.src, title: h.title, t: h.t })), errors: nw.aiErrors ?? [] } : null;
   const ai = { providers: providersFromEnv().map((p) => p.name), usage: sx._aiUsage ?? {} };
-  const lastRun = { ts: new Date(now).toISOString(), action, source, news, ai, upnl: +upnl.toFixed(2), market, decision, risk: dynamicRisk(st.equity), ms: Date.now() - now };
+  const lastRun = { ts: new Date(now).toISOString(), sym, action, source, news, ai, upnl: +upnl.toFixed(2), market, decision, risk: dynamicRisk(st.equity), ms: Date.now() - now };
   st.version = VERSION;
-  await saveState(st, lastRun);
-  await upsert("dbv5_equity", [{ ts: new Date(now).toISOString(), equity: +st.equity.toFixed(4), upnl: +upnl.toFixed(4), price: snap.price }]);
+  await saveState(st, lastRun, sym);
+  await upsert("dbv5_equity", [{ symbol: sym, ts: new Date(now).toISOString(), equity: +st.equity.toFixed(4), upnl: +upnl.toFixed(4), price: snap.price }]);
   await events(evs);
-  return { ok: true, version: VERSION, action, equity: +st.equity.toFixed(2), upnl: +upnl.toFixed(2), pos: st.pos ? { strategy: st.pos.strategy, dir: st.pos.dir, entry: st.pos.entry, stop: st.pos.stop } : null, closed: closed.length, source, news: news ? { risk: news.risk, by: news.by } : null, ms: Date.now() - now };
+  return { ok: true, sym, version: VERSION, action, equity: +st.equity.toFixed(2), upnl: +upnl.toFixed(2), pos: st.pos ? { strategy: st.pos.strategy, dir: st.pos.dir, entry: st.pos.entry, stop: st.pos.stop } : null, closed: closed.length, source, news: news ? { risk: news.risk, by: news.by } : null, ms: Date.now() - now };
 }
 
 // ─── backtest (walk-forward; in-sample = first 2/3, out-of-sample = last 1/3) ──
-type BtOpts = { days?: number; source?: "hyperliquid" | "binance"; cfg?: Partial<typeof CFG>; label?: string; save?: boolean; only?: string; combinedOnly?: boolean };
+type BtOpts = { sym?: Sym; endDaysAgo?: number; days?: number; source?: "hyperliquid" | "binance"; cfg?: Partial<typeof CFG>; label?: string; save?: boolean; only?: string; combinedOnly?: boolean };
 async function runBacktest(o: BtOpts) {
   const source = o.source ?? "hyperliquid";
   const days = Math.min(source === "binance" ? 365 : 17, Math.max(3, +(o.days ?? 16)));
-  const end = Date.now(), warm = 300 * 300_000, start5 = end - days * 86400_000 - warm;
-  const get = source === "binance" ? candlesRangeBinance : candlesRange;
+  const end = Date.now() - Math.min(2500, Math.max(0, +(o.endDaysAgo ?? 0))) * 86400_000, warm = 300 * 300_000, start5 = end - days * 86400_000 - warm;
+  const sym: Sym = o.sym ?? "BTC";
+  const get = (tf: string, a: number, b: number) => (source === "binance" ? candlesRangeBinance : candlesRange)(tf, a, b, sym);
   const [m5, m15, h1, h4] = await Promise.all([
     get("5m", start5, end), get("15m", start5 - 30 * 86400_000, end), get("1h", start5 - 40 * 86400_000, end), get("4h", start5 - 120 * 86400_000, end),
   ]);
+  if (m5.length < 2000) throw new Error(`${sym}: only ${m5.length} 5m bars from ${source}`);
   applyCfg(); const t0 = Date.now(); const frames = { m5, m15, h1, h4 }; const cfg = o.cfg ?? {};
   const only = STRATEGIES.find(x => x === o.only);
   const all = backtest(frames, { startEquity: 1000, cfg, only });
@@ -203,17 +219,17 @@ async function runBacktest(o: BtOpts) {
   }
   const unseenFrom = Date.parse("2026-09-01T00:00:00Z");
   const res = {
-    version: VERSION, label: o.label ?? "default", source, cfg, from: new Date(all.from ?? start5).toISOString(), to: new Date(all.to).toISOString(), splitAt: new Date(cut).toISOString(), bars5m: m5.length,
+    version: VERSION, sym, label: o.label ?? "default", source, cfg, from: new Date(all.from ?? start5).toISOString(), to: new Date(all.to).toISOString(), splitAt: new Date(cut).toISOString(), bars5m: m5.length,
     combined: summarize(all.trades, 1000), combinedIn: summarize(all.trades.filter(t => t.openT < cut), 1000).all, combinedOut: summarize(all.trades.filter(t => t.openT >= cut), 1000).all,
     unseenSep2026: summarize(all.trades.filter(t => t.openT >= unseenFrom), 1000).all,
     perStrategy: per, curve: all.curve.filter((_, i) => i % Math.max(1, Math.round(days / 4)) === 0),
     trades: all.trades.slice(-80).map(t => ({ s: t.strategy, d: t.dir, r: +t.r.toFixed(2), net: +t.net.toFixed(2), o: t.openT, c: t.closeT, why: t.reason })),
-    assumptions: `${source === "binance" ? "Binance spot BTCUSDT" : "Hyperliquid BTC perp"} candles. Start $1000. Entries at next 5m open, taker ${CFG.TAKER_FEE * 100}% + ${CFG.SLIPPAGE * 100}% slippage; TPs maker ${CFG.MAKER_FEE * 100}%; funding ${CFG.BT_FUNDING_PER_HOUR * 100}%/h charged as cost. Stop-first on ambiguous bars. Funding/F&G context neutral (no history).`,
+    assumptions: `${source === "binance" ? "Binance spot " + SYMBOLS[sym].bn : "Hyperliquid " + SYMBOLS[sym].hl + " perp"} candles. Start $1000. Entries at next 5m open, taker ${CFG.TAKER_FEE * 100}% + ${CFG.SLIPPAGE * 100}% slippage; TPs maker ${CFG.MAKER_FEE * 100}%; funding ${CFG.BT_FUNDING_PER_HOUR * 100}%/h charged as cost. Stop-first on ambiguous bars. Funding/F&G context neutral (no history).`,
     cpuMs: Date.now() - t0,
   };
   if (o.save !== false) {
     await insert("dbv5_backtests", [{ days, results: res }]);
-    await events([{ kind: "BACKTEST", msg: `Backtest ${res.label} ${days}d (${source}): ${res.combined.all.n} trades, ${res.combined.all.expR.toFixed(2)}R avg, $1000→$${res.combined.endEquity.toFixed(0)}` }]);
+    await events([{ kind: "BACKTEST", msg: `Backtest ${sym} ${res.label} ${days}d (${source}): ${res.combined.all.n} trades, ${res.combined.all.expR.toFixed(2)}R avg, $1000→$${res.combined.endEquity.toFixed(0)}` }]);
   }
   return res;
 }
@@ -222,15 +238,24 @@ async function runBacktest(o: BtOpts) {
 async function status() {
   const [s, ev, tr, eq, bt] = await Promise.all([
     select("dbv5_state?id=eq.main&select=state,last_run,updated_at"),
-    select("dbv5_events?select=ts,kind,strategy,msg,data&order=id.desc&limit=60"),
-    select("dbv5_trades?select=id,strategy,dir,entry,exit_avg,net,r,fees,funding,open_t,close_t,reason&order=close_t.desc&limit=100"),
-    select(`dbv5_equity?select=ts,equity,upnl,price&ts=gte.${new Date(Date.now() - 14 * 86400_000).toISOString()}&order=ts.asc`),
+    select("dbv5_events?select=ts,kind,strategy,msg,data,symbol&order=id.desc&limit=60"),
+    select("dbv5_trades?select=id,symbol,strategy,dir,entry,exit_avg,net,r,fees,funding,open_t,close_t,reason&order=close_t.desc&limit=100"),
+    select(`dbv5_equity?select=ts,equity,upnl,price&symbol=eq.BTC&ts=gte.${new Date(Date.now() - 14 * 86400_000).toISOString()}&order=ts.asc`),
     select("dbv5_backtests?select=ran_at,days,results&results->>label=like.LIVE_CONFIG*&order=id.desc&limit=1"),
   ]);
   const st = s?.[0]?.state ?? null; applyCfg(st?.cfg);
   if (st) { delete st._aiUsage; }
+  const books: Record<string, unknown> = {};
+  for (const sym of BOOKS.filter((b) => b !== "BTC")) {
+    const [r, eqb] = await Promise.all([
+      select(`dbv5_state?id=eq.${rowId(sym)}&select=state,last_run,updated_at`),
+      select(`dbv5_equity?select=ts,equity,upnl,price&symbol=eq.${sym}&ts=gte.${new Date(Date.now() - 14 * 86400_000).toISOString()}&order=ts.asc`),
+    ]);
+    const c = (eqb ?? []).filter((_: unknown, i: number, a: unknown[]) => a.length < 400 || i % Math.ceil(a.length / 400) === 0 || i === a.length - 1);
+    books[sym] = r?.[0] ? { name: SYMBOLS[sym].name, hl: SYMBOLS[sym].hl, state: r[0].state, lastRun: r[0].last_run, updated: r[0].updated_at, curve: c } : { name: SYMBOLS[sym].name, hl: SYMBOLS[sym].hl, state: null };
+  }
   const curve = (eq ?? []).filter((_: unknown, i: number, a: unknown[]) => a.length < 600 || i % Math.ceil(a.length / 600) === 0 || i === a.length - 1);
-  return { version: VERSION, mode: "PAPER", now: new Date().toISOString(), updated: s?.[0]?.updated_at ?? null, state: st, lastRun: s?.[0]?.last_run ?? null, events: ev, trades: tr, curve, backtest: bt?.[0] ?? null, config: { ...CFG } };
+  return { version: VERSION, mode: "PAPER", now: new Date().toISOString(), updated: s?.[0]?.updated_at ?? null, state: st, lastRun: s?.[0]?.last_run ?? null, events: ev, trades: tr, curve, books, backtest: bt?.[0] ?? null, config: { ...CFG }, chat: { enabled: !!CHAT_KEY, ai: providersFromEnv().map((p) => p.name) } };
 }
 
 // ─── AI assistant (owner only; password = DESKBOT_CHAT_KEY secret) ─────────
@@ -238,10 +263,11 @@ const chatUsage: Usage = {};
 async function chatContext() {
   const [s, tr, bt, nw] = await Promise.all([
     select("dbv5_state?id=eq.main&select=state,last_run,updated_at"),
-    select("dbv5_trades?select=strategy,dir,entry,exit_avg,net,r,reason,open_t,close_t&order=close_t.desc&limit=20"),
+    select("dbv5_trades?select=symbol,strategy,dir,entry,exit_avg,net,r,reason,open_t,close_t&order=close_t.desc&limit=20"),
     select("dbv5_backtests?select=ran_at,results->label,results->combined->all,results->combined->maxDD,results->combined->endEquity,results->from,results->to&order=id.desc&limit=4"),
     select("dbv5_news?select=ts,risk,bias,reason,by&order=id.desc&limit=3"),
   ]);
+  const others = await select("dbv5_state?id=neq.main&select=id,state->equity,state->startEquity,state->pos,state->stats->all,state->cfg,last_run->action,last_run->market->price");
   const st = s?.[0]?.state ?? {}, lr = s?.[0]?.last_run ?? {};
   return {
     version: VERSION, mode: "PAPER", updated: s?.[0]?.updated_at,
@@ -249,6 +275,8 @@ async function chatContext() {
     stats: st.stats, enabled: st.enabled, circuitBreaker: st.cb, liveConfig: st.cfg ?? {},
     market: lr.market, lastAction: lr.action, lastDecision: lr.decision, news: lr.news,
     recentTrades: tr, recentBacktests: bt, newsHistory: nw, editableKeys: Object.keys(EDITABLE),
+    note: "All fields above describe the BTC book. Other paper books (gold via PAXG) are in otherBooks. Chat proposals only change the BTC book.",
+    otherBooks: others,
   };
 }
 async function chatRoute(body: Record<string, unknown>) {
@@ -311,7 +339,7 @@ Deno.serve(async (req) => {
     const expected = SECRET || await cronKey();
     if (!expected || req.headers.get("x-deskbot-key") !== expected) return json({ ok: false, error: "unauthorized" }, 401);
     const body = await req.json().catch(() => ({}));
-    if (body.action === "backtest") return json(await runBacktest({ days: body.days, source: body.source, cfg: body.cfg, label: body.label, save: body.save, only: body.only, combinedOnly: body.combinedOnly }));
+    if (body.action === "backtest") return json(await runBacktest({ sym: isSym(body.sym) ? body.sym : "BTC", endDaysAgo: body.endDaysAgo, days: body.days, source: body.source, cfg: body.cfg, label: body.label, save: body.save, only: body.only, combinedOnly: body.combinedOnly }));
     return json(await runLocked());
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

@@ -116,3 +116,12 @@ Guardrails:
 - You press **Backtest** to compare current vs proposed on 180 days of candles, and **Apply** to use it. **Undo** restores the previous config; the last 10 configs are kept.
 - It can never change leverage, the daily loss limit, risk per trade or paper mode, and it can never place orders.
 - There is a cap of 150 chats a day (`CHAT_DAILY_CAP`).
+
+## 11. Multiple paper books (v5.5): BTC + Gold
+
+- Each book is its own paper account: its own row in `dbv5_state` (`main` = BTC, `gold` = GOLD), with its own equity, position, stats and cfg. Trades, events and the equity curve carry a `symbol` column.
+- Every 5-minute run processes each book in `DESKBOT_BOOKS` (default `BTC,GOLD`). If one book errors, the other still runs.
+- A non-BTC book only starts once its state row exists. To add another asset, add it to `SYMBOLS` in `data.ts`, backtest it (`{"action":"backtest","sym":"XRP","source":"binance","days":365,"endDaysAgo":0}`), then create its row.
+- Backtest any year: `endDaysAgo` shifts the 365-day window back (e.g. 730 = the year ending two years ago).
+- The dashboard has a Bitcoin / Gold switch. The Chart tab follows it (PAXG candles; TradingView shows OANDA:XAUUSD).
+- The chat assistant reads both books but proposals only change the BTC book.

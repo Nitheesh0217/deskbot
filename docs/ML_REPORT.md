@@ -152,3 +152,40 @@ Idea: on the 15m chart, the drop accelerated after EMA20 crossed under EMA50, so
 | 1h + 4H agree + daily gate | 96 | +0.015 | +0.079 | 1.06 | +4 / −1 / −4 / +3 |
 
 **Result:** no edge. Even *before* fees the 15m cross averages about 0R, so the crossover has no predictive value on its own and fees turn it negative. The cross lags by design. It happens after the move has started, which is why it looks perfect on a chart that already shows the drop, and BTC whipsaws through it many times for every clean trend. The one break-even variant (1h, with the 4H trend and daily regime agreeing) is basically a slower copy of HTF_TREND, which the bot already trades. EMA_CROSS stays off.
+
+## 10. Gold (XAUUSD via PAXG) and a 10-asset scan (Oct 23, 2026)
+
+**Setup.** Same engine, same live v5.1 config as BTC, unchanged. Binance spot 5m candles, $1,000 start, fees and slippage included. Gold is traded as PAXG (1 token = 1 oz of London gold, trades 24/7), because spot XAUUSD has no free, keyless 5-minute feed and Hyperliquid lists PAXG.
+
+**Gold, five separate years (Oct → Oct):**
+
+| Window | Trades | Avg R | $1,000 → | Max DD |
+|---|---|---|---|---|
+| 2021–22 | 18 | −0.34R | $934 | 6.7% |
+| 2022–23 | 18 | −0.18R | $954 | 7.7% |
+| 2023–24 | 15 | +0.24R | $1,056 | 4.9% |
+| 2024–25 | 31 | +0.15R | $1,036 | 4.2% |
+| 2025–26 | 28 | +0.68R | $1,252 | 2.4% |
+
+Net over the five windows: +$232 per $1,000 window, 110 trades (~+0.16R/trade). Almost all of it comes from **HTF_TREND** (4H 55-bar breakout). In 2025–26 its longs averaged +1.5R and its shorts +0.76R, so it is catching trends, not just riding the gold rally. TREND_MTF on gold was flat (~0R). Choppy gold years lose.
+
+**Gold-specific tweaks tested (all five windows):** TREND_MTF off → net +$168; regime gate 2% instead of 3% → net +$172. Neither beat the unchanged config (+$232), so the gold book runs the BTC config unchanged (fewer knobs fitted to history).
+
+**Other assets, past 12 months, same config:**
+
+| Asset | Trades | Avg R | $1,000 → |
+|---|---|---|---|
+| Gold (PAXG) | 28 | +0.68R | $1,252 |
+| XRP | 36 | +0.21R | $1,059 |
+| SUI | 38 | +0.15R | $1,056 |
+| SOL | 34 | +0.11R | $1,037 |
+| LINK | 35 | +0.06R | $1,027 |
+| BTC | 35 | +0.03R | $998 |
+| AVAX | 44 | −0.01R | $991 |
+| ETH | 40 | −0.06R | $952 |
+| BNB | 32 | −0.08R | $1,008 |
+| DOGE | 52 | −0.18R | $909 |
+
+XRP earlier years: 2024–25 +0.22R ($1,126), 2023–24 −0.03R ($988). It is mixed, so it is not added yet. The alt results are small and inconsistent: one good year is not an edge.
+
+**Caveats.** PAXG on Hyperliquid is thin (~$65k–135k traded per hour), so it suits paper or small real size only. PAXG can trade at a small premium or discount to spot XAUUSD. Weekend PAXG moves exist while the spot gold market is closed.
