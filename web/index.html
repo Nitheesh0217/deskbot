@@ -152,6 +152,33 @@ nav.tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 25; backgroun
 .read div { font-size: 13.5px; line-height: 1.5; }
 .read b { font-family: var(--f-mono); }
 .banner { font-size: 12.5px; line-height: 1.45; color: var(--fg-2); padding: 9px 12px; border: 1px dashed var(--line-2); border-radius: 8px; }
+
+/* AI chat — floating button + bottom sheet */
+.fab { position: fixed; right: 16px; bottom: calc(72px + env(safe-area-inset-bottom, 0px)); z-index: 30; border-radius: 999px; padding: 12px 16px; font: 600 14px/1 var(--f-body); background: var(--accent); color: var(--accent-ink); border: 0; cursor: pointer; box-shadow: 0 6px 20px rgba(0,0,0,.35); }
+.chat { position: fixed; inset: auto 0 0 0; z-index: 40; max-height: 82vh; height: 82vh; background: var(--panel); border-top: 1px solid var(--line-2); border-radius: 14px 14px 0 0; display: flex; flex-direction: column; box-shadow: 0 -10px 30px rgba(0,0,0,.35); }
+@media (min-width: 760px) { .chat { left: auto; right: 16px; bottom: 16px; width: 440px; height: 640px; max-height: calc(100vh - 32px); border: 1px solid var(--line-2); border-radius: 14px; } }
+.chat[hidden] { display: none; }
+.chat-h { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.chat-h b { font-family: var(--f-display, inherit); }
+.chat-h .x { margin-left: auto; background: none; border: 0; color: var(--fg-2); font-size: 20px; cursor: pointer; padding: 4px 8px; }
+.chat-log { flex: 1; overflow-y: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+.msg { max-width: 92%; padding: 9px 12px; border-radius: 10px; font-size: 14px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+.msg.u { align-self: flex-end; background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); }
+.msg.a { align-self: flex-start; background: var(--panel-2); border: 1px solid var(--line); }
+.msg.sys { align-self: stretch; max-width: none; font-size: 12.5px; color: var(--fg-2); border: 1px dashed var(--line-2); background: none; }
+.msg .by { display: block; margin-top: 6px; font: 500 10.5px/1 var(--f-mono); color: var(--fg-3, var(--fg-2)); }
+.prop { border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line)); border-radius: 10px; padding: 10px 12px; background: var(--panel); font-size: 13px; }
+.prop pre { margin: 6px 0; font: 500 12px/1.4 var(--f-mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--fg); }
+.prop .row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.prop .row .btn { width: auto; padding: 9px 12px; font-size: 13px; }
+.prop table { width: 100%; margin-top: 8px; font: 500 12px/1.3 var(--f-mono); }
+.prop td, .prop th { padding: 4px 4px 4px 0; text-align: right; } .prop th:first-child, .prop td:first-child { text-align: left; }
+.chat-f { border-top: 1px solid var(--line); padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px)); display: flex; flex-direction: column; gap: 8px; }
+.chat-f .in { display: flex; gap: 8px; } .chat-f .in[hidden] { display: none; }
+.chat-f textarea, .chat-f input { flex: 1; min-width: 0; font: 400 14px/1.4 var(--f-body); color: var(--fg); background: var(--panel-2); border: 1px solid var(--line-2); border-radius: 8px; padding: 9px 10px; resize: none; }
+.chat-f .btn { width: auto; }
+.chips { display: flex; gap: 6px; overflow-x: auto; }
+.chips button { flex: none; font: 500 12px/1 var(--f-body); padding: 7px 10px; border-radius: 999px; border: 1px solid var(--line-2); background: var(--panel-2); color: var(--fg-2); cursor: pointer; }
 </style>
 
 <header class="bar">
@@ -290,6 +317,23 @@ nav.tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 25; backgroun
   </section>
 </main>
 
+
+<button class="fab" id="chatFab" type="button" aria-controls="chat" aria-expanded="false">Ask the bot</button>
+<section class="chat" id="chat" hidden aria-label="Talk to DeskBot">
+  <div class="chat-h"><b>Talk to DeskBot</b><span class="chip">free AI</span><button class="x" id="chatX" type="button" aria-label="Close">×</button></div>
+  <div class="chat-log" id="chatLog" aria-live="polite"></div>
+  <div class="chat-f">
+    <div class="chips" id="chatChips">
+      <button type="button">Why no trade right now?</button>
+      <button type="button">Which strategy makes the money?</button>
+      <button type="button">Suggest one change to test</button>
+      <button type="button">How did the last trade go?</button>
+    </div>
+    <div class="in" id="pwRow"><input id="chatPw" type="password" autocomplete="current-password" placeholder="Chat password (DESKBOT_CHAT_KEY)"><button class="btn" id="pwSave" type="button">Save</button></div>
+    <div class="in"><textarea id="chatIn" rows="2" placeholder="Ask anything about the bot…"></textarea><button class="btn primary" id="chatSend" type="button">Send</button></div>
+  </div>
+</section>
+
 <nav class="tabs" aria-label="Sections">
   <div class="tabs-in" role="tablist">
     <button class="tab" role="tab" data-v="desk" aria-selected="true"><svg viewBox="0 0 24 24"><path d="M3 17l5-5 4 4 8-8"/><path d="M15 8h5v5"/></svg>Desk</button>
@@ -302,7 +346,12 @@ nav.tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 25; backgroun
 </nav>
 
 <script>
-const SNAP = {"state": {"state": {"cb": {"trips": 0, "consec": 0, "cooldownUntil": 0}, "cfg": {"EXIT_MODE": "HOLD", "RISK_SCALE": {"D_THRUST": 1, "HTF_TREND": 1, "SWEEP_REV": 0, "TREND_MTF": 0.5, "D_BEARTRAP": 1, "SESSION_BO": 0, "VWAP_REVERT": 0}, "MIN_STOP_BY": {"TREND_MTF": 0.012}, "REGIME_GATE": {"HTF_TREND": 0.03, "TREND_MTF": 0.03, "D_BEARTRAP": 0.03}, "HTF_DONCHIAN": 55}, "day": {"pnl": 0, "date": "2026-10-22", "trades": 1, "startEquity": 352.56}, "pos": {"id": "V5-1792682161585", "dir": "short", "tp1": 81067.56399661326, "tp2": 80628.53257322652, "tp3": 79969.98543814641, "why": ["NY break of London range", "Volume ≥1.3×", "4H aligned", "Funding 0.0013%/h (+5)", "F&G 68 (+5)", "ROC momentum (+5)"], "stop": 81506.59542, "entry": 81506.59542, "openT": 1792682161585, "score": 89, "stop0": 81945.62684338674, "riskAmt": 1.7628, "tp1Done": true, "tp2Done": false, "tp3Done": false, "strategy": "SESSION_BO", "remainingQty": 0.0016662443120658082}, "peak": 352.56, "maxDD": 0, "stats": {"by": {}, "all": {"n": 0, "net": 0, "sumR": 0, "wins": 0, "losses": 0}}, "equity": 353.15413561347225, "enabled": {"D_THRUST": true, "HTF_TREND": true, "SWEEP_REV": false, "TREND_MTF": true, "D_BEARTRAP": true, "SESSION_BO": true, "VWAP_REVERT": true}, "version": "5.1.0", "startEquity": 352.56}, "carried": {"from": "DeskBot v3 cloud (Supabase bot_state)", "v3Equity": 352.55836833, "v3Trades": 3, "v3StartEquity": 300}, "last_run": {"ms": 546, "ts": "2026-10-22T18:01:47.762Z", "risk": 0.02, "upnl": 0.51, "action": "HOLD", "market": {"oi": 43281.6914, "fng": 68, "poc": 82841.1, "st5": -1, "atr5": 136.1, "mark": 81141, "st15": -1, "st1h": -1, "st4h": -1, "vwap": 82257.1, "atr15": 243.3, "chop5": 48.6, "price": 81202, "rsi15": 36.1, "rsi1h": 25.9, "chop15": 48.6, "ema50D": 80736.2, "regime": "TREND", "funding": 1.25e-05, "vwapDev": -1.32, "fngLabel": "Greed"}, "source": "hyperliquid", "decision": null}, "updated_at": "2026-10-22T18:01:48.308+00:00"}, "events": [{"ts": "2026-10-22T18:01:47.529295+00:00", "kind": "CONFIG", "strategy": null, "msg": "Switched to v5.1 (ML lessons): daily regime gate 3% on trend strategies, TREND_MTF 1.2% min stop, HOLD exits, sweep/session/VWAP off. 3.5y backtest PF 1.21 vs 1.02; past year +0.03R vs −0.08R/trade."}, {"ts": "2026-10-22T18:00:55.632342+00:00", "kind": "BACKTEST", "strategy": null, "msg": "Backtest v5.0-live-cfg 365d (binance): 82 trades, -0.08R avg, $1000→$963"}, {"ts": "2026-10-22T18:00:19.574054+00:00", "kind": "BACKTEST", "strategy": null, "msg": "Backtest v5.1-ml-lessons 365d (binance): 35 trades, 0.03R avg, $1000→$998"}, {"ts": "2026-10-22T16:51:02.074814+00:00", "kind": "TP1", "strategy": "SESSION_BO", "msg": "TP1 filled @ 81067.6 · stop → 81506.6"}, {"ts": "2026-10-22T15:16:02.542067+00:00", "kind": "OPEN", "strategy": "SESSION_BO", "msg": "SESSION_BO SHORT @ 81506.6 · stop 81945.6 · TP 81068/80629/79970 · risk $1.76 · score 89"}, {"ts": "2026-10-22T01:50:50.632209+00:00", "kind": "INIT", "strategy": null, "msg": "DeskBot 5.0.0 initialised at $352.56 (carried from v3)"}], "trades": [], "curve": [{"ts": "2026-10-22T02:33:39Z", "equity": 352.56}, {"ts": "2026-10-22T08:01:00Z", "equity": 352.56}, {"ts": "2026-10-22T14:01:01Z", "equity": 352.56}, {"ts": "2026-10-22T15:31:00Z", "equity": 352.44}, {"ts": "2026-10-22T16:31:00Z", "equity": 352.44}, {"ts": "2026-10-22T17:01:00Z", "equity": 353.15}, {"ts": "2026-10-22T18:01:47Z", "equity": 353.15}], "bt": {"label": "LIVE_CONFIG_v5.1", "ran_at": "2026-10-22T18:00:19Z", "a": {"n": 35, "pf": 0.993, "wr": 0.3714, "net": -1.54, "expR": 0.0282, "sumR": 0.988, "wins": 13, "losses": 22}, "by": {"D_THRUST": {"n": 1, "net": 9.98, "expR": 0.831}, "HTF_TREND": {"n": 22, "net": -23.3, "expR": -0.045}, "TREND_MTF": {"n": 10, "net": 2.92, "expR": 0.041}, "D_BEARTRAP": {"n": 2, "net": 8.86, "expR": 0.374}}, "mdd": 0.0914, "eq": 998.46, "f": "2025-10-22T18:00:00.000Z", "t": "2026-10-22T17:54:59.999Z", "curve": [[1761156299999, 1000], [1761811499999, 1000], [1762139099999, 987.98], [1762466699999, 997.97], [1763121899999, 1007.99], [1763449499999, 1029.12], [1764432299999, 1019.21], [1765742699999, 1019.21], [1766070299999, 1006.73], [1766397899999, 994.62], [1766725499999, 979.64], [1768691099999, 978.61], [1769018699999, 949.43], [1769673899999, 935.09], [1770001499999, 954.87], [1770329099999, 980.29], [1772294699999, 982.63], [1773932699999, 985.7], [1774260299999, 995.74], [1775243099999, 980.66], [1776225899999, 973.08], [1777863899999, 982.69], [1778191499999, 987.21], [1778846699999, 979.42], [1780157099999, 979.06], [1780484699999, 989.29], [1780812299999, 1012.3], [1782122699999, 1008.04], [1783105499999, 995.03], [1784088299999, 987.51], [1786053899999, 979.78], [1787036699999, 979.78], [1787364299999, 1000.44], [1789657499999, 998.49], [1789985099999, 1015.71], [1790312699999, 1008.02], [1790967899999, 1023.08], [1791950699999, 1022.86], [1792278299999, 1010.66], [1792605899999, 1010.38]]}, "now": "2026-10-22T18:03:38Z"};
+const SNAP = {"state":{"state":{"cb":{"trips":0,"consec":0,"cooldownUntil":0},"cfg":{"EXIT_MODE":"HOLD","RISK_SCALE":{"D_THRUST":1,"HTF_TREND":1,"SWEEP_REV":0,"TREND_MTF":0.5,"D_BEARTRAP":1,"SESSION_BO":0,"VWAP_REVERT":0},"MIN_STOP_BY":{"TREND_MTF":0.012},"REGIME_GATE":{"HTF_TREND":0.03,"TREND_MTF":0.03,"D_BEARTRAP":0.03},"HTF_DONCHIAN":55},"day":{"pnl":0,"date":"2026-10-22","trades":1,"startEquity":352.56},"pos":{"id":"V5-1792682161585","dir":"short","tp1":81067.56399661326,"tp2":80628.53257322652,"tp3":79969.98543814641,"why":["NY break of London range","Volume ≥1.3×","4H aligned","Funding 0.0013%/h (+5)","F&G 68 (+5)","ROC momentum (+5)"],"stop":81506.59542,"entry":81506.59542,"openT":1792682161585,"score":89,"stop0":81945.62684338674,"riskAmt":1.7628,"tp1Done":true,"tp2Done":false,"tp3Done":false,"strategy":"SESSION_BO","remainingQty":0.0016662443120658082},"peak":352.56,"maxDD":0,"stats":{"by":{},"all":{"n":0,"net":0,"sumR":0,"wins":0,"losses":0}},"equity":353.15413561347225,"enabled":{"D_THRUST":true,"HTF_TREND":true,"SWEEP_REV":false,"TREND_MTF":true,"D_BEARTRAP":true,"SESSION_BO":true,"VWAP_REVERT":true},"version":"5.1.0","startEquity":352.56},"carried":{"from":"DeskBot v3 cloud (Supabase bot_state)","v3Equity":352.55836833,"v3Trades":3,"v3StartEquity":300},"last_run":{"ms":546,"ts":"2026-10-22T18:01:47.762Z","risk":0.02,"upnl":0.51,"action":"HOLD","market":{"oi":43281.6914,"fng":68,"poc":82841.1,"st5":-1,"atr5":136.1,"mark":81141,"st15":-1,"st1h":-1,"st4h":-1,"vwap":82257.1,"atr15":243.3,"chop5":48.6,"price":81202,"rsi15":36.1,"rsi1h":25.9,"chop15":48.6,"ema50D":80736.2,"regime":"TREND","funding":0.0000125,"vwapDev":-1.32,"fngLabel":"Greed"},"source":"hyperliquid","decision":null},"updated_at":"2026-10-22T18:01:48.308+00:00"},
+"events":[{"ts":"2026-10-22T18:01:47.529295+00:00","kind":"CONFIG","strategy":null,"msg":"Switched to v5.1 (ML lessons): daily regime gate 3% on trend strategies, TREND_MTF 1.2% min stop, HOLD exits, sweep/session/VWAP off. 3.5y backtest PF 1.21 vs 1.02; past year +0.03R vs −0.08R/trade."},{"ts":"2026-10-22T18:00:55.632342+00:00","kind":"BACKTEST","strategy":null,"msg":"Backtest v5.0-live-cfg 365d (binance): 82 trades, -0.08R avg, $1000→$963"},{"ts":"2026-10-22T18:00:19.574054+00:00","kind":"BACKTEST","strategy":null,"msg":"Backtest v5.1-ml-lessons 365d (binance): 35 trades, 0.03R avg, $1000→$998"},{"ts":"2026-10-22T16:51:02.074814+00:00","kind":"TP1","strategy":"SESSION_BO","msg":"TP1 filled @ 81067.6 · stop → 81506.6"},{"ts":"2026-10-22T15:16:02.542067+00:00","kind":"OPEN","strategy":"SESSION_BO","msg":"SESSION_BO SHORT @ 81506.6 · stop 81945.6 · TP 81068/80629/79970 · risk $1.76 · score 89"},{"ts":"2026-10-22T01:50:50.632209+00:00","kind":"INIT","strategy":null,"msg":"DeskBot 5.0.0 initialised at $352.56 (carried from v3)"}],
+"trades":[],
+"curve":[{"ts":"2026-10-22T02:33:39Z","equity":352.56},{"ts":"2026-10-22T08:01:00Z","equity":352.56},{"ts":"2026-10-22T14:01:01Z","equity":352.56},{"ts":"2026-10-22T15:31:00Z","equity":352.44},{"ts":"2026-10-22T16:31:00Z","equity":352.44},{"ts":"2026-10-22T17:01:00Z","equity":353.15},{"ts":"2026-10-22T18:01:47Z","equity":353.15}],
+"bt":{"label":"LIVE_CONFIG_v5.1","ran_at":"2026-10-22T18:00:19Z","a":{"n":35,"pf":0.993,"wr":0.3714,"net":-1.54,"expR":0.0282,"sumR":0.988,"wins":13,"losses":22},"by":{"D_THRUST":{"n":1,"net":9.98,"expR":0.831},"HTF_TREND":{"n":22,"net":-23.30,"expR":-0.045},"TREND_MTF":{"n":10,"net":2.92,"expR":0.041},"D_BEARTRAP":{"n":2,"net":8.86,"expR":0.374}},"mdd":0.0914,"eq":998.46,"f":"2025-10-22T18:00:00.000Z","t":"2026-10-22T17:54:59.999Z","curve":[[1761156299999,1000],[1761811499999,1000],[1762139099999,987.98],[1762466699999,997.97],[1763121899999,1007.99],[1763449499999,1029.12],[1764432299999,1019.21],[1765742699999,1019.21],[1766070299999,1006.73],[1766397899999,994.62],[1766725499999,979.64],[1768691099999,978.61],[1769018699999,949.43],[1769673899999,935.09],[1770001499999,954.87],[1770329099999,980.29],[1772294699999,982.63],[1773932699999,985.7],[1774260299999,995.74],[1775243099999,980.66],[1776225899999,973.08],[1777863899999,982.69],[1778191499999,987.21],[1778846699999,979.42],[1780157099999,979.06],[1780484699999,989.29],[1780812299999,1012.3],[1782122699999,1008.04],[1783105499999,995.03],[1784088299999,987.51],[1786053899999,979.78],[1787036699999,979.78],[1787364299999,1000.44],[1789657499999,998.49],[1789985099999,1015.71],[1790312699999,1008.02],[1790967899999,1023.08],[1791950699999,1022.86],[1792278299999,1010.66],[1792605899999,1010.38]]},
+"now":"2026-10-22T18:03:38Z"};
 const PROJECT = "xevymbzgpcsdhygswxlk";
 
 const STRATS = [
@@ -699,5 +748,76 @@ $("runBtn").addEventListener("click", async () => {
   document.addEventListener("visibilitychange", () => { if (!document.hidden) pull(); });
   setInterval(() => { const S = DATA.state || {}; if (S.updated_at) $("hdrAge").textContent = (LIVE ? "live · bot " : "snapshot · ") + ago(S.updated_at); }, 10000);
 })();
+
+// ---- AI chat (talks to the cloud bot's free-LLM assistant; proposals need Backtest + Apply) ----
+const CHAT = { hist: [], busy: false };
+const lsGet = (k) => { try { return localStorage.getItem(k) || ""; } catch (e) { return ""; } };
+const lsSet = (k, v) => { try { v ? localStorage.setItem(k, v) : localStorage.removeItem(k); } catch (e) {} };
+let chatPw = lsGet("deskbot_chat_pw");
+function chatAdd(cls, html) { const d = document.createElement("div"); d.className = "msg " + cls; d.innerHTML = html; $("chatLog").appendChild(d); $("chatLog").scrollTop = 1e9; return d; }
+function pwUI() { $("pwRow").hidden = !!chatPw; }
+async function chatCall(body) {
+  if (!chatPw) { $("pwRow").hidden = false; throw { code: "no_pw" }; }
+  const r = await fetch(API, { method: "POST", headers: { "Content-Type": "application/json", "x-chat-key": chatPw }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({ ok: false, error: "HTTP " + r.status }));
+  if (r.status === 401) { chatPw = ""; lsSet("deskbot_chat_pw", ""); pwUI(); throw { code: "bad_password" }; }
+  return j;
+}
+const chatErr = (e) => e && e.code === "bad_password" ? "Wrong chat password, or DESKBOT_CHAT_KEY isn't set in Supabase yet. Enter it again below."
+  : e && e.code === "no_pw" ? "Enter the chat password first (the value you set as DESKBOT_CHAT_KEY in Supabase)."
+  : "Couldn't reach the bot just now. Try again in a moment.";
+function propCard(p) {
+  const d = chatAdd("a prop", `<b>Proposed change</b> <span class="muted">(not applied)</span><pre>${esc(JSON.stringify(p.patch, null, 1))}</pre><div class="muted">${esc(p.why || "")}</div>
+    <div class="row"><button class="btn" data-a="bt" type="button">Backtest 180d</button><button class="btn primary" data-a="ap" type="button">Apply</button></div><div class="res"></div>`);
+  d.querySelector('[data-a="bt"]').onclick = async (ev) => {
+    const b = ev.target; b.disabled = true; d.querySelector(".res").innerHTML = '<div class="muted" style="margin-top:6px">Backtesting current vs proposed on 180 days of Binance candles (≈30–60 s)…</div>';
+    try {
+      const r = await chatCall({ action: "chat_backtest", patch: p.patch, days: 180 });
+      if (!r.ok) throw { msg: (r.errors || [r.error]).join("; ") };
+      const row = (k, x) => `<tr><td>${k}</td><td>${x.trades}</td><td class="${x.expR >= 0 ? "up" : "down"}">${x.expR >= 0 ? "+" : ""}${x.expR.toFixed(3)}R</td><td>${isFinite(x.pf) ? x.pf.toFixed(2) : "∞"}</td><td>$${x.endEquity.toFixed(0)}</td><td>${(x.maxDD * 100).toFixed(1)}%</td></tr>`;
+      const better = r.proposed.endEquity > r.current.endEquity && r.proposed.maxDD <= r.current.maxDD * 1.25;
+      d.querySelector(".res").innerHTML = `<table><tr><th></th><th>trades</th><th>avg</th><th>PF</th><th>$1000→</th><th>maxDD</th></tr>${row("Current", r.current)}${row("Proposed", r.proposed)}</table>
+        <div class="${better ? "up" : "muted"}" style="margin-top:6px">${better ? "Proposed did better on this window. Still one window — weigh it before applying." : "Proposed did not clearly beat the current setup on this window."}</div>`;
+    } catch (e) { d.querySelector(".res").innerHTML = `<div class="down" style="margin-top:6px">${esc(e.msg || chatErr(e))}</div>`; }
+    b.disabled = false;
+  };
+  d.querySelector('[data-a="ap"]').onclick = async (ev) => {
+    const b = ev.target; b.disabled = true;
+    try {
+      const r = await chatCall({ action: "chat_apply", patch: p.patch, why: p.why });
+      if (!r.ok) throw { msg: r.reply || (r.errors || [r.error]).join("; ") };
+      d.querySelector(".row").innerHTML = '<span class="up">Applied. The bot uses it from its next 5-minute run.</span> <button class="btn" type="button" data-a="un">Undo</button>';
+      d.querySelector('[data-a="un"]').onclick = async (e2) => { e2.target.disabled = true; try { const u = await chatCall({ action: "chat_undo" }); d.querySelector(".row").innerHTML = u.ok ? '<span class="muted">Undone — previous config restored.</span>' : `<span class="down">${esc(u.error)}</span>`; } catch (e) { e2.target.disabled = false; } };
+      pull();
+    } catch (e) { b.disabled = false; d.querySelector(".res").innerHTML = `<div class="down" style="margin-top:6px">${esc(e.msg || chatErr(e))}</div>`; }
+  };
+}
+async function chatSend(text) {
+  text = (text || "").trim(); if (!text || CHAT.busy) return;
+  CHAT.busy = true; $("chatSend").disabled = true; $("chatIn").value = "";
+  chatAdd("u", esc(text));
+  const wait = chatAdd("a", '<span class="muted">Thinking…</span>');
+  try {
+    const r = await chatCall({ action: "chat", message: text, history: CHAT.hist.slice(-8) });
+    wait.innerHTML = esc(r.reply || r.error || "No answer.") + (r.by ? `<span class="by">${esc(r.by)}</span>` : "");
+    if (r.ok) { CHAT.hist.push({ role: "user", content: text }, { role: "assistant", content: r.reply }); if (r.proposal) propCard(r.proposal); }
+    if (r.proposalErrors) chatAdd("sys", "The AI suggested a change that isn't allowed, so it was dropped: " + esc(r.proposalErrors.join("; ")));
+  } catch (e) { wait.className = "msg sys"; wait.textContent = chatErr(e); }
+  CHAT.busy = false; $("chatSend").disabled = false;
+}
+function chatOpen(open) {
+  $("chat").hidden = !open; $("chatFab").hidden = open; $("chatFab").setAttribute("aria-expanded", String(open));
+  if (open && !$("chatLog").children.length) chatAdd("sys", "Ask about trades, skips, strategies or settings. It reads the live bot. If it suggests a change, you can backtest it and only you can press Apply. It can't touch leverage, the daily loss limit, risk per trade or paper mode, and it can't place orders.");
+  if (open) { pwUI(); setTimeout(() => $(chatPw ? "chatIn" : "chatPw").focus(), 50); }
+}
+$("chatFab").onclick = () => chatOpen(true);
+$("chatX").onclick = () => chatOpen(false);
+$("pwSave").onclick = () => { chatPw = $("chatPw").value.trim(); lsSet("deskbot_chat_pw", chatPw); $("chatPw").value = ""; pwUI(); $("chatIn").focus(); };
+$("chatPw").addEventListener("keydown", (e) => { if (e.key === "Enter") $("pwSave").click(); });
+$("chatSend").onclick = () => chatSend($("chatIn").value);
+$("chatIn").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); chatSend($("chatIn").value); } });
+$("chatChips").addEventListener("click", (e) => { if (e.target.tagName === "BUTTON") chatSend(e.target.textContent); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("chat").hidden) chatOpen(false); });
 </script>
+
 </body></html>

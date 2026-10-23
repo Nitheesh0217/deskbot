@@ -13,6 +13,7 @@ import {
 import { candles, candlesRange, candlesRangeBinance, hlContext, fearGreed, orderFlow } from "./data.ts";
 import { readNews, newsBlocks, type NewsRead } from "./news.ts";
 import { providersFromEnv, type Usage } from "./ai.ts";
+import { chat, validatePatch, mergeCfg, EDITABLE, type ChatTurn } from "./chat.ts";
 
 const SB = Deno.env.get("SUPABASE_URL")!;
 const KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -21,7 +22,9 @@ const NTFY = Deno.env.get("DESKBOT_NTFY_TOPIC") ?? ""; // optional phone push vi
 const NEWS_MODE = Deno.env.get("NEWS_MODE") ?? "shadow";            // off | shadow | gate
 const NEWS_EVERY_MIN = +(Deno.env.get("NEWS_EVERY_MIN") ?? 30);
 const NEWS_AI = (Deno.env.get("NEWS_AI") ?? "on") !== "off";
-const CORS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "content-type, x-deskbot-key", "Access-Control-Allow-Methods": "GET, POST, OPTIONS" };
+const CHAT_KEY = Deno.env.get("DESKBOT_CHAT_KEY") ?? "";
+const CHAT_DAILY_CAP = +(Deno.env.get("CHAT_DAILY_CAP") ?? 150);
+const CORS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "content-type, x-deskbot-key, x-chat-key", "Access-Control-Allow-Methods": "GET, POST, OPTIONS" };
 
 // ─── tiny PostgREST client ──────────────────────────────────────────────────
 async function rest(path: string, init: RequestInit = {}) {
@@ -230,11 +233,81 @@ async function status() {
   return { version: VERSION, mode: "PAPER", now: new Date().toISOString(), updated: s?.[0]?.updated_at ?? null, state: st, lastRun: s?.[0]?.last_run ?? null, events: ev, trades: tr, curve, backtest: bt?.[0] ?? null, config: { ...CFG } };
 }
 
+// ─── AI assistant (owner only; password = DESKBOT_CHAT_KEY secret) ─────────
+const chatUsage: Usage = {};
+async function chatContext() {
+  const [s, tr, bt, nw] = await Promise.all([
+    select("dbv5_state?id=eq.main&select=state,last_run,updated_at"),
+    select("dbv5_trades?select=strategy,dir,entry,exit_avg,net,r,reason,open_t,close_t&order=close_t.desc&limit=20"),
+    select("dbv5_backtests?select=ran_at,results->label,results->combined->all,results->combined->maxDD,results->combined->endEquity,results->from,results->to&order=id.desc&limit=4"),
+    select("dbv5_news?select=ts,risk,bias,reason,by&order=id.desc&limit=3"),
+  ]);
+  const st = s?.[0]?.state ?? {}, lr = s?.[0]?.last_run ?? {};
+  return {
+    version: VERSION, mode: "PAPER", updated: s?.[0]?.updated_at,
+    equity: st.equity, startEquity: st.startEquity, maxDD: st.maxDD, openPosition: st.pos ? { strategy: st.pos.strategy, dir: st.pos.dir, entry: st.pos.entry, stop: st.pos.stop, tp1: st.pos.tp1, tp2: st.pos.tp2, tp3: st.pos.tp3, tp1Done: st.pos.tp1Done } : null,
+    stats: st.stats, enabled: st.enabled, circuitBreaker: st.cb, liveConfig: st.cfg ?? {},
+    market: lr.market, lastAction: lr.action, lastDecision: lr.decision, news: lr.news,
+    recentTrades: tr, recentBacktests: bt, newsHistory: nw, editableKeys: Object.keys(EDITABLE),
+  };
+}
+async function chatRoute(body: Record<string, unknown>) {
+  const now = Date.now();
+  if (body.action === "chat") {
+    const today = new Date(now).toISOString().slice(0, 10);
+    const used = await select(`dbv5_events?select=id&kind=eq.CHAT&ts=gte.${today}T00:00:00Z&limit=${CHAT_DAILY_CAP + 1}`);
+    if ((used?.length ?? 0) >= CHAT_DAILY_CAP) return { ok: false, error: "cap", reply: `Daily chat limit (${CHAT_DAILY_CAP}) reached. Resets at 00:00 UTC.` };
+    const msg = String(body.message ?? "").trim(); if (!msg) return { ok: false, error: "empty" };
+    const hist = (Array.isArray(body.history) ? body.history : []).filter((h: ChatTurn) => h && (h.role === "user" || h.role === "assistant")) as ChatTurn[];
+    const r = await chat(msg, hist, await chatContext(), chatUsage, now);
+    await events([{ kind: "CHAT", msg: `Q: ${msg.slice(0, 140)}`, data: { ok: r.ok, by: (r as { by?: string }).by ?? null, proposal: (r as { proposal?: unknown }).proposal ?? null } }]);
+    return r;
+  }
+  if (body.action === "chat_backtest") {
+    const v = validatePatch(body.patch); if (!v.ok) return { ok: false, errors: v.errors };
+    const s = await select("dbv5_state?id=eq.main&select=state"); const live = s?.[0]?.state?.cfg ?? {};
+    const days = Math.min(365, Math.max(30, +(body.days ?? 180)));
+    const cand = await runBacktest({ source: "binance", days, cfg: mergeCfg(live, v.patch) as Partial<typeof CFG>, combinedOnly: true, label: `CHAT_TEST ${new Date(now).toISOString().slice(0, 16)}` });
+    const base = await runBacktest({ source: "binance", days, cfg: live as Partial<typeof CFG>, combinedOnly: true, label: `CHAT_BASE ${new Date(now).toISOString().slice(0, 16)}`, save: false });
+    const pick = (r: typeof cand) => ({ trades: r.combined.all.n, expR: r.combined.all.expR, pf: r.combined.all.pf, endEquity: r.combined.endEquity, maxDD: r.combined.maxDD, outOfSample: r.combinedOut });
+    return { ok: true, days, from: cand.from, to: cand.to, current: pick(base), proposed: pick(cand) };
+  }
+  if (body.action === "chat_apply" || body.action === "chat_undo") {
+    const owner = "chat-" + crypto.randomUUID();
+    let got = false;
+    for (let i = 0; i < 10 && !got; i++) { got = await rest("rpc/dbv5_lease", { method: "POST", headers: { Prefer: "" }, body: JSON.stringify({ owner, seconds: 30 }) }) === true; if (!got) await new Promise((r) => setTimeout(r, 2000)); }
+    if (!got) return { ok: false, error: "busy", reply: "The bot is mid-run; try again in a few seconds." };
+    try {
+      const st = await loadState(); if (!st) return { ok: false, error: "no_state" };
+      const sx = st as State & { cfgHistory?: { t: number; cfg: unknown; note: string }[] };
+      sx.cfgHistory ??= [];
+      let msg: string;
+      if (body.action === "chat_apply") {
+        const v = validatePatch(body.patch); if (!v.ok) return { ok: false, errors: v.errors };
+        sx.cfgHistory.push({ t: now, cfg: st.cfg ?? {}, note: String(body.why ?? "chat apply").slice(0, 200) }); sx.cfgHistory = sx.cfgHistory.slice(-10);
+        st.cfg = mergeCfg(st.cfg as Record<string, unknown> ?? {}, v.patch) as State["cfg"];
+        msg = `Owner applied AI proposal: ${JSON.stringify(v.patch)}${body.why ? " — " + String(body.why).slice(0, 160) : ""}`;
+      } else {
+        const prev = sx.cfgHistory.pop(); if (!prev) return { ok: false, error: "nothing_to_undo" };
+        st.cfg = prev.cfg as State["cfg"]; msg = `Owner undid last config change (back to ${new Date(prev.t).toISOString().slice(0, 16)} UTC)`;
+      }
+      await rest("dbv5_state?id=eq.main", { method: "PATCH", body: JSON.stringify({ state: st }) });
+      await events([{ kind: "CONFIG", msg }]);
+      return { ok: true, cfg: st.cfg, history: sx.cfgHistory.length };
+    } finally { try { await rest("rpc/dbv5_release", { method: "POST", body: JSON.stringify({ owner }) }); } catch { /* expires */ } }
+  }
+  return { ok: false, error: "unknown action" };
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
   const json = (b: unknown, code = 200) => new Response(JSON.stringify(b), { status: code, headers: { ...CORS, "Content-Type": "application/json", "Cache-Control": "no-store" } });
   try {
     if (req.method === "GET") return json(await status());
+    if (req.headers.get("x-chat-key") !== null) {
+      if (!CHAT_KEY || req.headers.get("x-chat-key") !== CHAT_KEY) return json({ ok: false, error: "bad_password" }, 401);
+      return json(await chatRoute(await req.json().catch(() => ({}))));
+    }
     const expected = SECRET || await cronKey();
     if (!expected || req.headers.get("x-deskbot-key") !== expected) return json({ ok: false, error: "unauthorized" }, 401);
     const body = await req.json().catch(() => ({}));

@@ -102,3 +102,17 @@ Free limits change often. Check the provider consoles before relying on them. We
 - **`pine/deskbot_v51_levels.pine`:** paste this into TradingView's Pine Editor and add it to a BTCUSDT chart. It draws the same regime gate, the 4H breakout levels and the Asian range, and marks HTF long/short signals. It also has alert conditions, so TradingView's own servers can send you alerts 24/7. I haven't compiled it here; if the Pine Editor shows an error, send it to me.
 - **TradingView MCP server (community, e.g. `tradesdontlie/tradingview-mcp`):** this drives the *TradingView Desktop app on your PC* through a debug port, and an AI client (Claude) has to operate it. So it can't run 24/7 from GitHub or the cloud. It's optional for hands-on sessions on your laptop and is deliberately not vendored into this repo.
 - **AI "predictions":** in walk-forward tests (docs/ML_REPORT.md), direction models trained on candles alone were coin-flip accurate out-of-sample. The chart therefore shows rule-based levels and the news-risk label, not an AI price forecast.
+
+## 10. AI chat assistant (v5.4)
+
+The dashboard has an **Ask the bot** button. It talks to the cloud bot, which answers with a free LLM (Groq first, then Gemini). It reads the live state, recent trades, backtests and news.
+
+Setup: in Supabase → Edge Functions → Secrets, add
+- `DESKBOT_CHAT_KEY`: any password you choose. The dashboard asks for it once and keeps it in your browser.
+- `GROQ_API_KEY` (free at console.groq.com/keys) and/or `GEMINI_API_KEY` (free at aistudio.google.com/apikey).
+
+Guardrails:
+- The AI can only **propose** changes, and only to whitelisted keys inside hard bounds (`chat.ts` → `EDITABLE`).
+- You press **Backtest** to compare current vs proposed on 180 days of candles, and **Apply** to use it. **Undo** restores the previous config; the last 10 configs are kept.
+- It can never change leverage, the daily loss limit, risk per trade or paper mode, and it can never place orders.
+- There is a cap of 150 chats a day (`CHAT_DAILY_CAP`).

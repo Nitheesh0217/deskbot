@@ -15,7 +15,7 @@
 //    • the same evaluate()/manage() code drives live runs AND the backtester
 // ═══════════════════════════════════════════════════════════════════════════
 
-export const VERSION = "5.3.0";
+export const VERSION = "5.4.0";
 
 export type Bar = { t: number; o: number; h: number; l: number; c: number; v: number; ct: number };
 export type Dir = "long" | "short";
