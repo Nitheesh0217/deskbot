@@ -40,3 +40,8 @@ Browser-console bot. Fixed sizing and partial-exit bugs; 53/53 tests. Never ran 
 
 ## v3 (2026-10-17), retired
 TradingView injection + Vercel `deskbot-v3` + Google Sheet / Supabase `bot_state`, driven by an hourly Claude task. 3 paper trades, $300 → $352.56.
+
+## 2026-10-23 (owner request, config only, gold book)
+- TREND_MTF minimum stop 1.2% → 0.4% on GOLD. Gold moves about a third as much as BTC, so the 1.2% floor put targets out of reach.
+- EMA_CROSS (15m EMA20/50) switched on for GOLD at 25% size as a paper experiment. It is near break-even on BTC research and untested on gold.
+- 1m Asian-range scalping not added: tight stops lose 0.3–0.5R/trade to fees in every test (ML_REPORT §1).
