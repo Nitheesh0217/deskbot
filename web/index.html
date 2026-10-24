@@ -233,6 +233,12 @@ nav.tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 25; backgroun
       <p class="note" style="margin-top:4px">What each strategy said on the last 5-minute check.</p>
       <div class="why" id="why"></div>
     </div>
+
+    <div class="card" id="deskCard">
+      <h2>Agent desk</h2>
+      <p class="note" style="margin-top:4px">Specialist agents run inside every 5-minute cloud check. This is what each one saw.</p>
+      <div id="deskBody"></div>
+    </div>
   </section>
 
   <!-- STRATEGIES -->
@@ -466,6 +472,21 @@ function renderDesk() {
   const seen = new Set();
   (dec.rejects || []).forEach((r) => { if (seen.has(r.strategy)) return; seen.add(r.strategy); rows.push(`<div><span class="s">${esc(r.strategy)}</span><span class="muted">${esc(r.reason)}</span></div>`); });
   $("why").innerHTML = rows.join("") || `<p class="note">Waiting for the next check.</p>`;
+  renderAgents(lr);
+}
+function renderAgents(lr) {
+  const d = (lr && lr.desk) || null, box = $("deskBody");
+  if (!d) { box.innerHTML = `<p class="note">The desk reports after the next cloud check (v5.8).</p>`; return; }
+  const c = d.chart || {}, tr = c.trend || {}, arrow = (v) => (v === 1 ? "▲" : v === -1 ? "▼" : "·");
+  const chip = (name, on) => `<span class="chip" style="margin-right:6px;opacity:${on ? 1 : 0.55}">${name} ${on ? "ON" : "off"}</span>`;
+  const lv = (x) => (x ? `${esc(x.name)} $${fmtPx(x.px)} <span class="faint">(${x.atr} ATR)</span>` : "—");
+  const ago2 = (ts) => ago(ts);
+  box.innerHTML =
+    `<div style="margin:8px 0">${chip("Body stop", d.body)}${chip("Re-entry", !!d.reentry)}${chip("Validator", d.validator)}</div>` +
+    `<div class="grid2"><div><div class="k">Chart agent · bias</div><div class="v ${c.bias === "bull" ? "up" : c.bias === "bear" ? "down" : ""}">${esc((c.bias || "—").toUpperCase())} · 1m${arrow(tr.m1)} 5m${arrow(tr.m5)} 15m${arrow(tr.m15)} 1h${arrow(tr.h1)} 4h${arrow(tr.h4)}</div></div>` +
+    `<div><div class="k">Nearest support</div><div class="v">${lv(c.support)}</div></div><div><div class="k">Nearest resistance</div><div class="v">${lv(c.resistance)}</div></div>` +
+    `<div><div class="k">Re-entry</div><div class="v">${d.reentry && d.reentry.armed ? `armed · reclaim $${fmtPx(d.reentry.armed.level)}` : "not armed"}</div></div></div>` +
+    `<div class="note" style="margin-top:10px"><b>Recent agent activity</b>${(DATA.agents || []).filter((a) => a.agent !== "chart").slice(0, 8).map((a) => `<div>${esc(ago2(a.ts))} · <b>${esc(a.agent)}</b> · ${esc(a.input_summary || "")}${a.output && a.output.verdict ? ` — ${esc(a.output.verdict)}: ${esc(a.output.reason || "")}` : ""}${a.error ? ` <span class="down">${esc(a.error)}</span>` : ""}</div>`).join("") || `<div class="muted">No signals or adjustments yet. Agents log when they have something to say.</div>`}</div>`;
 }
 
 function renderStrategies() {
@@ -617,6 +638,8 @@ async function chartDraw() {
     const legend = [];
     if (dc) { PL(dc.hi, "#5aa9e6", "4H 55-bar high", 1); PL(dc.lo, "#5aa9e6", "4H 55-bar low", 1); }
     if (m.asian && tf !== "1d" && tf !== "4h") { PL(m.asian.hi, cssVar("--fg-3"), "Asian high", 3); PL(m.asian.lo, cssVar("--fg-3"), "Asian low", 3); }
+    const dl = (((S.last_run || {}).desk || {}).chart || {}).levels || [];
+    dl.filter((x) => x.blocks && Math.abs(x.px - b[b.length - 1].c) / b[b.length - 1].c < 0.04).forEach((x) => PL(x.px, x.side === "support" ? cssVar("--up") : cssVar("--down"), "agent: " + x.name, 2));
     if (p) { PL(p.entry, cssVar("--fg"), `${p.dir.toUpperCase()} entry`, 0, 2); PL(p.stop, cssVar("--down"), "Stop", 0, 2);
       [["tp1", "TP1"], ["tp2", "TP2"], ["tp3", "TP3"]].forEach(([k, t]) => PL(p[k], cssVar("--up"), t + (p[k + "Done"] ? " ✓" : ""), p[k + "Done"] ? 2 : 0)); }
     // markers: closed trades + open entry
@@ -703,6 +726,7 @@ function fromApi(g) {
   return {
     state: { state: st, carried: st.carried, integrity: gold ? bk.integrity : g.integrity, last_run: gold ? bk.lastRun : g.lastRun, updated_at: gold ? bk.updated : g.updated },
     events: (g.events || []).filter((e) => mine(e) && (e.kind !== "SKIP" || Date.now() - new Date(e.ts).getTime() < 1800000)).slice(0, 40),
+    agents: (g.agents || []).filter(mine).slice(0, 30),
     trades: (g.trades || []).filter(mine), curve: (gold ? bk.curve : g.curve) || [],
     bt: r && /^LIVE_CONFIG/.test(r.label || "") ? { label: r.label, ran_at: g.backtest.ran_at, a: r.combined.all, by: r.combined.by, mdd: r.combined.maxDD, eq: r.combined.endEquity, f: r.from, t: r.to, curve: r.curve } : DATA.bt,
   };

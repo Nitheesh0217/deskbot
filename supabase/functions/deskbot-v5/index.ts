@@ -15,6 +15,7 @@ import { readNews, newsBlocks, type NewsRead } from "./news.ts";
 import { providersFromEnv, type Usage } from "./ai.ts";
 import { chat, validatePatch, mergeCfg, EDITABLE, type ChatTurn } from "./chat.ts";
 import { configIntegrity, serialExecutor } from "./runtime.ts";
+import { runDesk, aiReview, type AgentRow } from "./agents.ts";
 
 // Module config belongs to one request at a time. This is isolate-local; the
 // existing database lease still coordinates state writes across edge isolates.
@@ -28,6 +29,7 @@ const NTFY = Deno.env.get("DESKBOT_NTFY_TOPIC") ?? ""; // optional phone push vi
 const NEWS_MODE = Deno.env.get("NEWS_MODE") ?? "shadow";            // off | shadow | gate
 const NEWS_EVERY_MIN = +(Deno.env.get("NEWS_EVERY_MIN") ?? 30);
 const NEWS_AI = (Deno.env.get("NEWS_AI") ?? "on") !== "off";
+const AGENT_AI = (Deno.env.get("AGENT_AI") ?? "shadow") !== "off";   // optional free-LLM review of trades just taken (never blocks)
 const CHAT_KEY = Deno.env.get("DESKBOT_CHAT_KEY") ?? "";
 const CHAT_DAILY_CAP = +(Deno.env.get("CHAT_DAILY_CAP") ?? 150);
 // Each book is a separate paper account (own equity, position, stats, cfg) in its own dbv5_state row.
@@ -162,13 +164,14 @@ async function runOnce(sym: Sym = "BTC") {
     if (r.closed) { closed.push(r.closed); const t = r.closed; evs.push({ kind: t.net > 0 ? "WIN" : "LOSS", strategy: t.strategy, msg: `${tag}${t.strategy} ${t.dir.toUpperCase()} closed by trade manager · net $${t.net.toFixed(2)} (${t.r >= 0 ? "+" : ""}${t.r.toFixed(2)}R)`, symbol: sym }); }
   }
   let action = st.pos ? "HOLD" : "SKIP"; let decision: unknown = null;
+  let deskSignals: Awaited<ReturnType<typeof evaluate>>["signals"] = []; let deskRejects: Awaited<ReturnType<typeof evaluate>>["rejects"] = [];
+  let opened: { strategy: string; dir: string; entry: number; stop: number; reentry?: boolean; why: string[] } | null = null;
   if (snap.T > st.lastEvalT) {
     st.lastEvalT = snap.T;
-    const { signals, rejects } = evaluate(snap, st.enabled, S);
+    const { signals, rejects } = evaluate(snap, st.enabled, S, st); deskSignals = signals; deskRejects = rejects;
     if (flow) for (const sg of signals) { const a = flow.imb24 * (sg.dir === "long" ? 1 : -1); sg.why.push(`Order flow 24h ${a > 0 ? "with" : "against"} trade (${(flow.imb24 * 100).toFixed(1)}%, shadow)`); }
     decision = { signals: signals.map(s => ({ strategy: s.strategy, dir: s.dir, score: s.score, why: s.why })), rejects };
     if (!st.pos) {
-      let opened = false;
       if (newsBlock) notes.push(`Entries paused: ${newsBlock}`);
       if (newsShadow && signals.length) notes.push(`(shadow) news filter would pause: ${newsShadow}`);
       const enforce = (Deno.env.get("DESKBOT_ENFORCE_APPROVAL") ?? "off") === "on";
@@ -180,7 +183,7 @@ async function runOnce(sym: Sym = "BTC") {
         const p = openPosition(st, sig, fillRef, now);
         if (!p) { notes.push(`${sig.strategy}: price already through stop`); continue; }
         if (sym !== "BTC") p.id = `${sym}-${now}`;
-        opened = true; action = `OPEN_${sig.dir.toUpperCase()}`;
+        opened = { strategy: sig.strategy, dir: sig.dir, entry: p.entry, stop: p.stop, reentry: !!sig.reentry, why: sig.why }; action = `OPEN_${sig.dir.toUpperCase()}`;
         const msg = `${sig.strategy} ${sig.dir.toUpperCase()} @ ${p.entry.toFixed(1)} · stop ${p.stop.toFixed(1)} · TP ${p.tp1.toFixed(0)}/${p.tp2.toFixed(0)}/${p.tp3.toFixed(0)} · risk $${p.riskAmt.toFixed(2)} · score ${sig.score}`;
         evs.push({ kind: "OPEN", strategy: sig.strategy, msg: tag + msg, data: { why: sig.why, regime: sig.regime, qty: p.originalQty, flow }, symbol: sym });
         await push(`DeskBot ${tag}${action}`, msg);
@@ -188,7 +191,7 @@ async function runOnce(sym: Sym = "BTC") {
       }
       if (!opened) {
         const top = rejects.filter(r => !/Waits for 15m close/.test(r.reason)).slice(0, 4).map(r => `${r.strategy}: ${r.reason}`);
-        evs.push({ kind: "SKIP", msg: tag + (notes[0] ?? top[0] ?? "No setup"), data: { notes, top, regime: snap.regime }, symbol: sym });
+        evs.push({ kind: "SKIP", msg: tag + (notes.find((n) => !n.startsWith("Warning")) ?? top[0] ?? "No setup"), data: { notes, top, regime: snap.regime }, symbol: sym });
       }
     }
   }
@@ -205,13 +208,18 @@ async function runOnce(sym: Sym = "BTC") {
   };
   const nw = sx._news;
   const news = nw ? { t: nw.t, risk: nw.risk, bias: nw.bias, event: nw.event, reason: nw.reason, by: nw.by, mode: NEWS_MODE, top: nw.headlines.slice(0, 5).map((h) => ({ src: h.src, title: h.title, t: h.t })), errors: nw.aiErrors ?? [] } : null;
+  // desk agents: chart read + validator/risk/re-entry views, persisted to dbv5_agent_log (never allowed to break a run)
+  const desk = runDesk({ snap, S, m1, st, signals: deskSignals, rejects: deskRejects, traderActs, opened, closedNow: closed.length, ms: Date.now() - now });
+  const rows: AgentRow[] = [...desk.rows];
+  if (opened && AGENT_AI) { try { const r = await aiReview(opened, opened.why, desk.chart, { providers: providersFromEnv(), usage: (sx._aiUsage ??= {}), now }); if (r) rows.push(r); } catch { /* optional, shadow only */ } }
   const ai = { providers: providersFromEnv().map((p) => p.name), usage: sx._aiUsage ?? {} };
-  const lastRun = { ts: new Date(now).toISOString(), sym, action, trader: { acts: traderActs, plan: st.pos?.plan ?? [] }, source, integrity, news, ai, upnl: +upnl.toFixed(2), market, decision, risk: dynamicRisk(st.equity), ms: Date.now() - now };
+  const lastRun = { ts: new Date(now).toISOString(), sym, action, trader: { acts: traderActs, plan: st.pos?.plan ?? [] }, source, integrity, news, ai, upnl: +upnl.toFixed(2), market, decision, risk: dynamicRisk(st.equity), desk: desk.summary, ms: Date.now() - now };
   st.version = VERSION;
   await saveState(st, lastRun, sym);
   await upsert("dbv5_equity", [{ symbol: sym, ts: new Date(now).toISOString(), equity: +st.equity.toFixed(4), upnl: +upnl.toFixed(4), price: snap.price }]);
   await events(evs);
-  return { ok: true, sym, version: VERSION, integrity, action, equity: +st.equity.toFixed(2), upnl: +upnl.toFixed(2), pos: st.pos ? { strategy: st.pos.strategy, dir: st.pos.dir, entry: st.pos.entry, stop: st.pos.stop } : null, closed: closed.length, source, news: news ? { risk: news.risk, by: news.by } : null, ms: Date.now() - now };
+  if (rows.length) { try { await insert("dbv5_agent_log", rows.map((r) => ({ symbol: sym, agent: r.agent, input_summary: r.input_summary, output: r.output, provider: r.provider ?? null, ms: r.ms ?? null, error: r.error ?? null }))); } catch (e) { notes.push(`agent log: ${(e as Error).message}`.slice(0, 120)); } }
+  return { ok: true, sym, version: VERSION, integrity, action, equity: +st.equity.toFixed(2), upnl: +upnl.toFixed(2), pos: st.pos ? { strategy: st.pos.strategy, dir: st.pos.dir, entry: st.pos.entry, stop: st.pos.stop, tp1: st.pos.tp1 } : null, trader: traderActs, closed: closed.length, source, news: news ? { risk: news.risk, by: news.by } : null, ms: Date.now() - now };
 }
 
 // ─── backtest (walk-forward; in-sample = first 2/3, out-of-sample = last 1/3) ──
@@ -243,24 +251,25 @@ async function runBacktest(o: BtOpts) {
     unseenSep2026: summarize(all.trades.filter(t => t.openT >= unseenFrom), 1000).all,
     perStrategy: per, curve: all.curve.filter((_, i) => i % Math.max(1, Math.round(days / 4)) === 0),
     trades: all.trades.slice(-80).map(t => ({ s: t.strategy, d: t.dir, r: +t.r.toFixed(2), net: +t.net.toFixed(2), o: t.openT, c: t.closeT, why: t.reason })),
-    assumptions: `${source === "binance" ? "Binance spot " + SYMBOLS[sym].bn : "Hyperliquid " + SYMBOLS[sym].hl + " perp"} candles. Start $1000. Entries at next 5m open, taker ${CFG.TAKER_FEE * 100}% + ${CFG.SLIPPAGE * 100}% slippage; TPs maker ${CFG.MAKER_FEE * 100}%; funding ${CFG.BT_FUNDING_PER_HOUR * 100}%/h charged as cost. Stop-first on ambiguous bars. Funding/F&G context neutral (no history).`,
+    assumptions: `${source === "binance" ? "Binance spot " + SYMBOLS[sym].bn : "Hyperliquid " + SYMBOLS[sym].hl + " perp"} candles. Start $1000. Entries at next 5m open, taker ${CFG.TAKER_FEE * 100}% + ${CFG.SLIPPAGE * 100}% slippage; TPs maker ${CFG.MAKER_FEE * 100}%; funding ${CFG.BT_FUNDING_PER_HOUR * 100}%/h charged as cost. Moved stop first on ambiguous bars.`,
     cpuMs: Date.now() - t0,
   };
   if (o.save !== false) {
     await insert("dbv5_backtests", [{ days, results: res }]);
-    await events([{ kind: "BACKTEST", msg: `Backtest ${sym} ${res.label} ${days}d (${source}): ${res.combined.all.n} trades, ${res.combined.all.expR.toFixed(2)}R avg, $1000→$${res.combined.endEquity.toFixed(0)}` }]);
+    await events([{ kind: "BACKTEST", symbol: sym, msg: `Backtest ${sym} ${res.label} ${days}d (${source}): ${res.combined.all.n} trades, ${res.combined.all.expR.toFixed(2)}R avg, $1000→$${res.combined.endEquity.toFixed(0)}` }]);
   }
   return res;
 }
 
 // ─── public status bundle for the dashboard ─────────────────────────────────
 async function status() {
-  const [s, ev, tr, eq, bt] = await Promise.all([
+  const [s, ev, tr, eq, bt, agents] = await Promise.all([
     select("dbv5_state?id=eq.main&select=state,last_run,updated_at"),
     select("dbv5_events?select=ts,kind,strategy,msg,data,symbol&order=id.desc&limit=60"),
     select("dbv5_trades?select=id,symbol,strategy,dir,entry,exit_avg,net,r,fees,funding,open_t,close_t,reason&order=close_t.desc&limit=100"),
     select(`dbv5_equity?select=ts,equity,upnl,price&symbol=eq.BTC&ts=gte.${new Date(Date.now() - 14 * 86400_000).toISOString()}&order=ts.asc`),
     select("dbv5_backtests?select=ran_at,days,results&results->>label=like.LIVE_CONFIG*&order=id.desc&limit=1"),
+    select("dbv5_agent_log?select=ts,symbol,agent,input_summary,output,provider,error&order=id.desc&limit=60").catch(() => []),
   ]);
   const st = s?.[0]?.state ?? null;
   const config = resolvedCfg(st?.cfg);
@@ -276,7 +285,7 @@ async function status() {
     books[sym] = r?.[0] ? { name: SYMBOLS[sym].name, hl: SYMBOLS[sym].hl, integrity: await integrityFor(sym, resolvedCfg(r[0].state?.cfg)), state: r[0].state, lastRun: r[0].last_run, updated: r[0].updated_at, curve: c } : { name: SYMBOLS[sym].name, hl: SYMBOLS[sym].hl, state: null };
   }
   const curve = (eq ?? []).filter((_: unknown, i: number, a: unknown[]) => a.length < 600 || i % Math.ceil(a.length / 600) === 0 || i === a.length - 1);
-  return { version: VERSION, mode: "PAPER", now: new Date().toISOString(), updated: s?.[0]?.updated_at ?? null, integrity, state: st, lastRun: s?.[0]?.last_run ?? null, events: ev, trades: tr, curve, books, backtest: bt?.[0] ?? null, config, chat: { enabled: !!CHAT_KEY, ai: providersFromEnv().map((p) => p.name) } };
+  return { version: VERSION, mode: "PAPER", now: new Date().toISOString(), updated: s?.[0]?.updated_at ?? null, integrity, state: st, lastRun: s?.[0]?.last_run ?? null, events: ev, agents: agents ?? [], trades: tr, curve, books, backtest: bt?.[0] ?? null, config, chat: { enabled: !!CHAT_KEY, ai: providersFromEnv().map((p) => p.name) } };
 }
 
 // ─── AI assistant (owner only; password = DESKBOT_CHAT_KEY secret) ─────────

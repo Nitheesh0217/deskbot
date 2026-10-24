@@ -61,21 +61,21 @@ export function mergeCfg(cfg: Record<string, unknown>, patch: Patch): Record<str
   return next;
 }
 
-export const RESEARCH = `Research facts (all walk-forward, after fees; details in docs/ML_REPORT.md):
-- v5.1 live config backtest 2023→Aug 2026: 138 trades, +0.117R/trade, PF 1.21, $1000→$1175, max DD 10%. Past 12 months: +0.03R/trade (≈flat). Old v5.0 mix: PF 1.02.
-- Daily regime gate (trade only 3%+ beyond daily EMA50 in trade direction) lifted HTF_TREND PF 1.03→1.28.
-- Intraday ideas (sweep, session breakout, VWAP) win before fees but lose 0.3–0.5R/trade to fees; switched off.
-- Early reversal at 4H 55-bar extremes (HTF_SWEEP): negative in every variant (−0.06 to −0.16R). Off.
-- EMA20/50 cross (EMA_CROSS): ~0R even before fees on 15m, −0.15R after. Off.
-- Direction ML models (logistic, LightGBM, neural net) on candles: 49.5–52.3% accuracy out-of-sample = coin flip.
-- Order flow: 24h taker imbalance on the trade's side slightly better in both periods; logged live (shadow). Funding/premium: no stable effect.
-- More trades has consistently meant more fees and worse results. Wider stops + higher timeframes work better than fast scalps.`;
+export const RESEARCH = `Research facts (walk-forward, after fees; docs/ML_REPORT.md):
+- v5.1 config 2023→Aug 2026 BTC: 138 trades, +0.117R, PF 1.21. Past 12 months ≈flat.
+- Daily regime gate (3% beyond daily EMA50 in trade direction) lifted HTF_TREND PF 1.03→1.28.
+- Intraday sweep/session/VWAP/EMA_PB lose 0.2–0.3R/trade after fees. Best: HTF_TREND longs >3% above EMA50D, D_THRUST.
+- Direction ML ≈ coin flip. AI meta-filter cut losses (−0.23R→−0.09R) but not profitable.
+- Gold (PAXG) same config: 5 yearly windows net positive, two losing years.
+- More trades has meant more fees and worse results.
+- v5.7 trade manager (TRADER) re-plans open positions: structure stop, liquidity targets, 1m breakeven guard, stall exit.
+- v5.8 desk agents (BODY_SL candle-body stops, REENTRY after stop-outs, VALIDATOR second opinion) ship OFF; they are enabled per book only where a backtest supports it.`;
 
-const SYSTEM = `You are DeskBot's built-in analyst, talking to the bot's owner inside the dashboard. DeskBot is a PAPER-ONLY BTC trading bot.
+const SYSTEM = `You are DeskBot's built-in analyst, talking to the bot's owner inside the dashboard. DeskBot is a PAPER-ONLY trading bot with a BTC book and a gold (PAXG) book.
 You receive the live system state as JSON data. Answer plainly and briefly (under 180 words), with numbers from the data. Never invent numbers.
-Be honest: if something is unproven or the sample is small, say so. Never promise profits. More trades usually means more fees.
-You may PROPOSE a config change only using these keys: ${Object.keys(EDITABLE).join(", ")}.
-Per-strategy maps (RISK_SCALE, REGIME_GATE, MIN_STOP_BY) are objects keyed by strategy id (${STRATEGIES.join(", ")}). RISK_SCALE max 1.
+Be honest: if something is unproven or the sample is small, say so. Never promise profits.
+You may PROPOSE a config change (BTC book only) using these keys: ${Object.keys(EDITABLE).join(", ")}.
+Per-strategy maps are objects keyed by strategy id (${STRATEGIES.join(", ")}). RISK_SCALE max 1.
 You cannot change leverage, daily loss limit, risk per trade or paper mode. You cannot place orders.
 A proposal is only a suggestion: the owner must backtest it and press Apply.
 Return ONLY JSON: {"reply":"<your answer>","proposal":null | {"patch":{...},"why":"<one sentence>"}}.
