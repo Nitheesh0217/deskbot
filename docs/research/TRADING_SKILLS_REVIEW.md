@@ -52,3 +52,7 @@ The README positions agents/skills/connectors around investment banking, equity 
 4. Consider a selected skill/SDK only if it measurably reduces review effort and passes tool-permission, auxiliary-code, license and cost checks.
 
 Not reviewed in depth in this increment: Qlib/RD-Agent, the remaining large skill catalogs, every referenced script, hosted connector behavior or the alleged professional profitability of any author. Existing engine/framework research should not be treated as a completed integration. No source inspected establishes a repeatable $300→20× outcome or an income guarantee.
+
+
+## 29 Oct 2026 follow-up
+A second, run-based evaluation of the most-starred trading-skill repositories (what was installed, what each tool found on DeskBot data, and what was rejected and why) is in [SKILL_EVALUATION.md](SKILL_EVALUATION.md).

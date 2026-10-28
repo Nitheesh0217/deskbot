@@ -1,0 +1,48 @@
+{
+ "file": "/tmp/claude-0/-home-user-deskbot/86fbe500-d980-5331-9924-a190793760a9/scratchpad/data/kline5_PAXG.csv.gz",
+ "bars": 352800,
+ "checks": {
+  "schema": {
+   "status": "PASS",
+   "detail": "6 numeric columns"
+  },
+  "timestamps_unique_monotonic": {
+   "status": "PASS",
+   "detail": "duplicates 0, non-increasing 0"
+  },
+  "timestamps_aligned_to_timeframe": {
+   "status": "PASS",
+   "detail": "all multiples of 300000 ms (UTC epoch, no timezone/DST ambiguity)"
+  },
+  "no_gaps_24x7": {
+   "status": "PASS",
+   "detail": "0 gaps"
+  },
+  "ohlc_integrity": {
+   "status": "PASS",
+   "detail": "0 bars violate low<=open/close<=high"
+  },
+  "volume_non_negative": {
+   "status": "PASS",
+   "detail": "min volume 0.0"
+  },
+  "no_nan_inf": {
+   "status": "PASS",
+   "detail": "0 non-finite values"
+  },
+  "no_stale_synthetic_bars": {
+   "status": "FAIL",
+   "detail": "zero-volume flat bars 1633"
+  },
+  "no_return_outliers_over_20pct": {
+   "status": "PASS",
+   "detail": "0 bars with |return|>20%"
+  }
+ },
+ "info_flat_bars_with_volume": 17222,
+ "info_volume_spikes_over_20x_median30": 8345,
+ "range_utc": [
+  "2023-06-15T00:00:00+00:00",
+  "2026-10-21T23:55:00+00:00"
+ ]
+}

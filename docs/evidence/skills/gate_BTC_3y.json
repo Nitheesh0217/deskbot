@@ -1,0 +1,18 @@
+{
+ "tool": "backtest-expert evaluate_backtest.py (tradermonty, c9b84196)",
+ "diagnostic_only": true,
+ "results": {
+  "BTC": {
+   "trades": 281,
+   "years": 3,
+   "maxDDpct": 31.2,
+   "decision": "REJECT",
+   "quality_score": 47,
+   "blocking_reasons": [
+    "negative_expectancy",
+    "short_test_period"
+   ],
+   "summary": "Quality score: 47/100 \u2014 Decision: REJECT (legacy verdict: Abandon)"
+  }
+ }
+}

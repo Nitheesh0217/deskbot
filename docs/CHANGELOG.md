@@ -1,5 +1,8 @@
 # Changelog
 
+## Unreleased — third-party skill evaluation (no change to the bot)
+- Installed five audited, pinned skills (backtest-expert, backtest-review, data-scrub, strategy-critique, risk-report); added `scripts/data_scrub.py` and `scripts/backtest_expert_gate.py`; evaluation and findings in [research/SKILL_EVALUATION.md](research/SKILL_EVALUATION.md). Finding: the PAXG research dataset has stale bars concentrated in 2023-2024.
+
 ## v5.8.0 — desk agents (2026-10-24)
 - New `agents.ts` + engine functions: chart agent (levels across 1m–4H), signal validator, risk agent (candle-body stop), re-entry agent, optional shadow-only AI review. All logged to `dbv5_agent_log`; dashboard gets an **Agent desk** card and `agent:` level lines on the Chart tab. See [AGENTS.md](AGENTS.md).
 - Chart agent is on. **Body-stop, re-entry and validator ship OFF**: in 1-year backtests (BTC two years, gold one year) every combination was worse than the live config. Numbers in AGENTS.md.

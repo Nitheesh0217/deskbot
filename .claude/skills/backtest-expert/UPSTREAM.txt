@@ -1,0 +1,5 @@
+Source: https://github.com/tradermonty/claude-trading-skills/tree/c9b84196a44a56a553293114fdae1f30bdd08c58/skills/backtest-expert
+Stars at selection: 3.4k (GitHub page, 29 Oct 2026). License: MIT (LICENSE copied).
+Installed: SKILL.md, references/, scripts/evaluate_backtest.py (standard library only, no network, writes only to --output-dir). Tests directory not copied.
+Audit: imports argparse/json/math/sys/datetime/decimal/pathlib only. Reviewed 29 Oct 2026. Run results and limits: docs/research/SKILL_EVALUATION.md.
+Use: diagnostic after a frozen-protocol run. It cannot override frozen decision rules.

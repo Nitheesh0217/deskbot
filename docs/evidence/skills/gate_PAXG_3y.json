@@ -1,0 +1,18 @@
+{
+ "tool": "backtest-expert evaluate_backtest.py (tradermonty, c9b84196)",
+ "diagnostic_only": true,
+ "results": {
+  "PAXG": {
+   "trades": 284,
+   "years": 3,
+   "maxDDpct": 29.5,
+   "decision": "REJECT",
+   "quality_score": 48,
+   "blocking_reasons": [
+    "negative_expectancy",
+    "short_test_period"
+   ],
+   "summary": "Quality score: 48/100 \u2014 Decision: REJECT (legacy verdict: Abandon)"
+  }
+ }
+}
