@@ -22,3 +22,15 @@ Evidence classifications: source inspected, software test, public runtime observ
 No changes to edge-function modules, migrations, workflows, risk settings, credentials or existing strategy code are included in T001. Generated audit output is local and ignored. Git commit/PR identifies the published version; avoid self-referential commit hashes inside this file.
 
 Verification status: T001 local implementation VERIFIED; GitHub publication BLOCKED by access. T002 BLOCKED by missing authorized project/deployment read access. Neither blocker is a financial-performance finding. No full six-workspace dashboard or profitable predictor is marked complete.
+
+## October 28, 2026 — T003 website truthfulness and optional-AI budget patch
+
+User authorized deployment, but renewed GitHub write and Supabase project checks still fail with the same 403/permission errors. Vercel tools became available and listed three DeskBot projects; target-team project/deployment details require team consent. An authorization link was generated; that does not itself authorize the team.
+
+Changes prepared: website System evidence panel (per-book timestamps, PAXG identity, optional provider presence, historical-validation warning); missing approval no longer asserts entries are paused; failed public refresh clears LIVE and exposes disconnected data. Historical v5.1 text is labeled historical. AI per-attempt cap prevents a retry overrun; invalid caps disable calls. No direction/strategy/risk change, model install, new provider or key change.
+
+Checks before the final refresh-failure regression: npm test PASS 78/78; npm run typecheck PASS; git diff --check PASS. Final run after that regression is recorded below. Tests cover browser helper logic, inline JS parsing, quotas and mocked failure states. Real browser visual QA was attempted but Chromium is unavailable and the download did not complete; no visual pass is claimed.
+
+Free-AI sources were checked against provider documentation; no paid inference performed. See ../research/FREE_AI_OPTIONS.md and DEPLOYMENT_HANDOFF.md. Actual release remains BLOCKED until access/team consent and exact target verification succeed.
+
+Final T003 verification: npm test PASS 79/79, zero failures; npm run typecheck PASS exit 0; git diff --check PASS. Includes failed-refresh clearing LIVE. Public read-only capture at 2026-10-28T05:22:30.379Z returned PAPER v5.8.0 and recent per-book runs; bounded closed rows reconcile, both approval flags are false, and GOLD has an open position. No real deployment or financial improvement is claimed.

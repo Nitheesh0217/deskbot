@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { decideJSON, type Provider, type Usage } from "../supabase/functions/deskbot-v5/ai.ts";
+import { decideJSON, providersFromEnv, type Provider, type Usage } from "../supabase/functions/deskbot-v5/ai.ts";
 import { parseRss, ruleRead, validateAi, newsBlocks, readNews, type NewsRead } from "../supabase/functions/deskbot-v5/news.ts";
 
 const P = (name: string, cap = 100): Provider => ({ name, url: `https://${name}.test/v1/chat/completions`, model: `${name}-model`, key: "k", dailyCap: cap });
@@ -52,6 +52,37 @@ test("daily quota cap respected", async () => {
   let groqCalls = 0;
   const r = await run(async (u) => { if (u.includes("groq")) groqCalls++; return ok(GOOD); }, [P("groq", 5), P("gemini")], usage);
   assert.equal(groqCalls, 0); assert.equal((r as any).provider, "gemini");
+});
+test("a retry cannot exceed the remaining daily call budget", async () => {
+  const usage: Usage = {}; let calls = 0;
+  const r = await run(async (url) => {
+    if (url.includes("groq")) { calls++; return new Response("", { status: 503 }); }
+    return ok(GOOD);
+  }, [P("groq", 1), P("gemini")], usage);
+  assert.equal(calls, 1); assert.equal(usage.groq.calls, 1);
+  assert.equal((r as any).provider, "gemini");
+});
+test("invalid provider budgets disable calls rather than removing the cap", async () => {
+  for (const cap of [NaN, Infinity, -1, 0.5, 0]) {
+    let calls = 0;
+    const r = await run(async () => { calls++; return ok(GOOD); }, [P("groq", cap)]);
+    assert.equal(calls, 0); assert.equal(r.value, null);
+  }
+});
+test("environment budgets fail closed and preserve explicit zero", () => {
+  const key = process.env.GROQ_API_KEY, cap = process.env.GROQ_DAILY_CAP;
+  try {
+    process.env.GROQ_API_KEY = "test";
+    for (const value of ["invalid", "Infinity", "-1", "0.5", "0"]) {
+      process.env.GROQ_DAILY_CAP = value;
+      assert.equal(providersFromEnv().find(p => p.name === "groq")?.dailyCap, 0);
+    }
+    delete process.env.GROQ_DAILY_CAP;
+    assert.equal(providersFromEnv().find(p => p.name === "groq")?.dailyCap, 300);
+  } finally {
+    if (key === undefined) delete process.env.GROQ_API_KEY; else process.env.GROQ_API_KEY = key;
+    if (cap === undefined) delete process.env.GROQ_DAILY_CAP; else process.env.GROQ_DAILY_CAP = cap;
+  }
 });
 test("all providers unavailable → null with reasons, never throws", async () => {
   const r = await run(async () => { throw new Error("down"); });

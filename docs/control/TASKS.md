@@ -40,6 +40,8 @@ Objective: compare deployed artifact to recovered v5.8 source and inventory real
 
 ## Next coding-agent prompt
 
+Latest T003 status: local website evidence/disconnection fixes and optional-AI quota fix VERIFIED by 79 tests/typecheck. Deployment BLOCKED by service authorization. See DEPLOYMENT_HANDOFF.md for exact targets, release order, smoke checks and rollback. T002's exact-artifact dependency remains before backend release; a separately reviewed website-only preview does not change trading behavior.
+
 ```text
 Resume DeskBot from docs/control/HANDOFF.md and EVIDENCE_LOG.md. Inspect the
 worktree, branch and applicable instructions before editing. Keep changes

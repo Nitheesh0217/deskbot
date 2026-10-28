@@ -9,11 +9,16 @@ export type Usage = Record<string, { day: string; calls: number; fails: number; 
 export type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
 
 const env = (k: string) => { try { return (globalThis as any).Deno?.env.get(k) ?? (globalThis as any).process?.env?.[k] ?? ""; } catch { return ""; } };
+const dailyCap = (key: string, fallback: number) => {
+  const raw = env(key); if (raw === "") return fallback;
+  const cap = Number(raw);
+  return Number.isSafeInteger(cap) && cap >= 0 ? cap : 0; // malformed config disables calls
+};
 
 export function providersFromEnv(): Provider[] {
   const out: Provider[] = [];
-  if (env("GROQ_API_KEY")) out.push({ name: "groq", url: "https://api.groq.com/openai/v1/chat/completions", model: env("GROQ_MODEL") || "llama-3.3-70b-versatile", key: env("GROQ_API_KEY"), dailyCap: +(env("GROQ_DAILY_CAP") || 300) });
-  if (env("GEMINI_API_KEY")) out.push({ name: "gemini", url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", model: env("GEMINI_MODEL") || "gemini-2.5-flash", key: env("GEMINI_API_KEY"), dailyCap: +(env("GEMINI_DAILY_CAP") || 200) });
+  if (env("GROQ_API_KEY")) out.push({ name: "groq", url: "https://api.groq.com/openai/v1/chat/completions", model: env("GROQ_MODEL") || "llama-3.3-70b-versatile", key: env("GROQ_API_KEY"), dailyCap: dailyCap("GROQ_DAILY_CAP", 300) });
+  if (env("GEMINI_API_KEY")) out.push({ name: "gemini", url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", model: env("GEMINI_MODEL") || "gemini-2.5-flash", key: env("GEMINI_API_KEY"), dailyCap: dailyCap("GEMINI_DAILY_CAP", 200) });
   return out;
 }
 
@@ -33,11 +38,13 @@ export async function decideJSON<T>(
   const t0 = Date.now(), end = t0 + (opts.deadlineMs ?? 20000), day = new Date(opts.now).toISOString().slice(0, 10);
   const errors: string[] = [];
   for (const p of opts.providers) {
+    if (!Number.isSafeInteger(p.dailyCap) || p.dailyCap < 0) { errors.push(`${p.name}: invalid daily cap`); continue; }
     const u = (opts.usage[p.name] ??= { day, calls: 0, fails: 0, coolUntil: 0 });
     if (u.day !== day) { u.day = day; u.calls = 0; u.fails = 0; }
     if (u.coolUntil > opts.now) { errors.push(`${p.name}: cooling down`); continue; }
     if (u.calls >= p.dailyCap) { errors.push(`${p.name}: daily cap ${p.dailyCap} reached`); continue; }
     for (let attempt = 0; attempt < 2; attempt++) {
+      if (u.calls >= p.dailyCap) { errors.push(`${p.name}: daily cap ${p.dailyCap} reached`); break; }
       const left = end - Date.now(); if (left < 1500) { errors.push("deadline"); return { value: null, errors }; }
       u.calls++;
       const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), Math.min(opts.timeoutMs ?? 8000, left));

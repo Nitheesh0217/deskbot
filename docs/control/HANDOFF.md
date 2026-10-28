@@ -11,3 +11,5 @@ Run npm ci --ignore-scripts, npm test, npm run typecheck. To observe: npm run au
 Next critical task: T002 exact artifact/config/schema reconciliation with authorized read access. Only then implement one immutable instrument/decision/outcome trace (M2). Do not replace the engine with a collection of Python frameworks. Skill-review findings and candidates live in ../research/TRADING_SKILLS_REVIEW.md.
 
 Publication means source pushed to a review branch; it does not mean deployed, profitable, or approved for funded trading. Current task verification and unresolved checks are recorded in EVIDENCE_LOG.md. This handoff is durable repo context, not a promise that chat memory persists.
+
+Latest local increment T003 adds the existing website's evidence panel and a quota-retry fix in ai.ts. Source is prepared, not deployed. Read DEPLOYMENT_HANDOFF.md before release. Vercel can list projects but needs team grant; GitHub writes and Supabase project reads still fail. Do not present missing approval as an enforced entry pause. A new LLM or profitable model is not part of this patch.
