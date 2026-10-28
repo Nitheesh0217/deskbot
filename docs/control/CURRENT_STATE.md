@@ -28,7 +28,7 @@ Audit date: October 28, 2026. Source base: `cd81d6f45eac9fe72bf6862cdcdd2f84cff1
 2. Confusing PAXG/spot/perpetual/XAUUSD instrument results or a heuristic score with probability.
 3. Inferring an edge from small samples, agent agreement or software-test success.
 4. Required context requests can fail before open-position management runs; persistence is multi-request.
-5. Heartbeat has been red on every run because of missing config approval, not staleness (fixed on this branch; takes effect once merged to main).
+5. GitHub Actions jobs for this repo never reach a runner (all CI and heartbeat runs fail in ~2 s with no steps): the GitHub heartbeat has never executed and CI is not providing evidence. Cause unconfirmed (billing/policy suspected). A latent heartbeat defect (fails on missing config approval) is fixed but untested on a runner.
 6. Runtime public status is bounded; count-matching is internal consistency, not complete provenance or broker verification.
 
 See EVIDENCE_LOG.md for actual checks and remaining gaps. Historical October 26 financial observations should not be presented as current balances.

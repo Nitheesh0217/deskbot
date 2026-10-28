@@ -38,6 +38,10 @@ Evidence: EVIDENCE_LOG.md and actual command results. Local implementation VERIF
 
 Objective: compare deployed artifact to recovered v5.8 source and inventory real schema/jobs/config history. Read-only. Return redacted deployment identity, config history, schema/grants/RLS, cron/lease definitions and diagnostic logs. Do not run committed migrations over production.
 
+## T005 — Restore GitHub Actions (OWNER ACTION)
+
+All CI and heartbeat runs fail in ~2 s with no runner assigned (see EVIDENCE_LOG). Open one failed run page and Settings → Billing and plans → Actions; the banner there names the cause. Until fixed: CI does not validate PRs, the independent heartbeat does not run, and `deploy.yml` cannot deploy. After it is fixed, re-run the latest heartbeat and CI manually and record the result.
+
 ## T004 — Per-strategy attribution under the frozen baseline (NEXT)
 
 Objective: decide with evidence whether SWEEP_REV, SESSION_BO, VWAP_REVERT (both books) and gold EMA_CROSS belong on the paper books. Method: for each active strategy and book, run the existing backtester with `only:<strategy>` on 365-day Binance windows (last year and prior year) using each book's exact live cfg, record n, expR, PF, OOS expR, maxDD and fees share; compare with the live per-strategy stats in `dbv5_state.stats.by`. Pre-register the rule before running: a strategy stays on only if expR > 0 after costs in both windows. Retain failures. No config change until results are reviewed; ignore the 5m-vs-1m manager difference by running with TRADER off for attribution.

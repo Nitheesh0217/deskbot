@@ -38,7 +38,7 @@ Targets confirmed with authorized access: GitHub `Nitheesh0217/deskbot`; Vercel 
 | Edge function `deskbot-v5` | v17 (`ezbr badda0e6…b33703`) | **v18** (`ezbr 37adb6e8…6ff2e6`) | branch build of `1ec864d` | 8/8 files byte-identical to the build; run 200, both books ok, balances unchanged |
 | Website preview | n/a | `dpl_DZCdCjmhhKPz6anRCfipdh2wn3SN` | `1ec864d` | `evidence.js` + `index.html` 200; content checks; local Chromium smoke |
 | Website production | `dpl_48ewRjcToSuEnL4LPRWLPoX2rV8C` (main@`5bb0271`) | built by Vercel git integration on merge to main | merge commit (see PR #1) | recorded in the follow-up commit |
-| Heartbeat | red on every run | fixed on merge (workflows run from main) | `1ec864d` | unit-tested; first post-merge scheduled run to be checked |
+| Heartbeat | has never executed (jobs get no runner) | latent approval-failure defect fixed on merge | `1ec864d` | unit-tested only; blocked on GitHub Actions account state |
 
 Database: no migration was applied for this release. (24 Oct: `agent_log_rls_index_prune`. A DROP of two duplicate `dbv5_agent_log` indexes was requested on 28 Oct and is pending the owner's approval.)
 
@@ -48,4 +48,4 @@ Database: no migration was applied for this release. (24 Oct: `agent_log_rls_ind
 - **Heartbeat:** revert `scripts/check_health.mjs`; it will go red again for the approval reason.
 
 ### Smoke tests still owed after the production website deploy
-Alias serves the new `index.html`/`evidence.js` pair; System tab shows the evidence panel; the next scheduled heartbeat run passes.
+Alias serves the new `index.html`/`evidence.js` pair; System tab shows the evidence panel; the heartbeat runs at all (requires fixing GitHub Actions account state first).
