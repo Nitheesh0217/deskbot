@@ -2,7 +2,7 @@
 // (2) fail closed when the evidence write fails, and (3) be replayable from exactly the rows the handler wrote.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { initState, applyCfg, buildSeries, snapshot, evaluate, ensureState, type Bar, type State } from "../supabase/functions/deskbot-v5/engine.ts";
+import { initState, openPosition, applyCfg, buildSeries, snapshot, evaluate, ensureState, type Bar, type State } from "../supabase/functions/deskbot-v5/engine.ts";
 import { replayDecision, decisionIdFor } from "../supabase/functions/deskbot-v5/provenance.ts";
 
 const M5 = 300_000, T0 = Date.UTC(2026, 0, 1);
@@ -32,7 +32,7 @@ async function runAt(i5: number, failDecision: boolean, w: World = newWorld()) {
   let handler!: (req: Request) => Promise<Response>;
   const pDeno = (globalThis as any).Deno, pFetch = globalThis.fetch, pNow = Date.now;
   (globalThis as any).Deno = { env: { get: (k: string) => env[k] }, serve: (h: typeof handler) => { handler = h; } };
-  Date.now = () => nowMs;
+  let tick = 0; Date.now = () => nowMs + tick++;   // advances 1 ms per call so run start, receipts and completion are distinguishable
   const json = (x: unknown, status = 200) => new Response(x == null ? "" : JSON.stringify(x), { status });
   globalThis.fetch = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
     const url = String(input), body = init.body ? JSON.parse(String(init.body)) : null;
@@ -76,18 +76,61 @@ test("a new entry writes its decision first, links events, and replays from the 
   assert.deepEqual(out.diffs, []);
   assert.equal(decision.d.record.plan.entry, state.pos!.entry); assert.equal(decision.d.record.plan.riskAmt, state.pos!.riskAmt); assert.equal(decision.d.record.plan.stop0, state.pos!.stop0);
   assert.equal(decision.d.record.governance.experimentApproval.status, "unapproved");
+  const tm = decision.d.record.timing, rx = tm.inputReceivedAtMs;
+  assert.equal(tm.evaluationTimeMs, tm.runStartMs); assert.equal(decision.d.record.plan.openT, tm.evaluationTimeMs);
+  for (const k of ["m5", "m15", "h1", "h4", "ctx", "flow"]) assert.ok(rx[k] != null && rx[k] > tm.runStartMs, `${k} receipt is a real later time, not run start`);
+  assert.ok(tm.decisionCompletedMs > Math.max(...["m5", "m15", "h1", "h4", "ctx", "flow"].map((k) => rx[k])), "completion after every receipt");
+  assert.equal(decision.d.ts, decision.d.record.decidedAt); assert.equal(decision.d.record.dataAvailability.fetchedAtMs, undefined);
 });
 
-test("if the decision write fails the run aborts before state is saved: no position without evidence", async () => {
+test("a failed decision write rejects the entry only: the run still persists and the failure is visible", async () => {
   let checked = false;
   for (const i of candidateBars()) {
     const ok = await runAt(i, false); if (!ok.decision) continue;
     const r = await runAt(i, true); checked = true;
-    assert.equal(r.res.books.BTC.ok, false); assert.match(r.res.books.BTC.error, /record_decision/);
-    assert.equal(r.state.pos, null, "no position persisted"); assert.ok(!r.calls.includes("dbv5_state?id=eq.main"), "state not saved");
-    assert.ok(!r.events.some((e) => e.kind === "OPEN"), "no OPEN event"); break;
+    assert.equal(r.res.books.BTC.ok, true); assert.match(r.res.books.BTC.provenanceError, /decision evidence not recorded/);
+    assert.equal(r.state.pos, null, "no position persisted"); assert.ok(r.calls.includes("dbv5_state"), "run state saved");
+    assert.ok(!r.events.some((e) => e.kind === "OPEN"), "no OPEN event"); assert.ok(r.events.some((e) => e.kind === "ERROR" && e.data?.provenance), "ERROR event is visible");
+    assert.equal(r.state.day.trades, 0, "replacement not counted"); break;
   }
   assert.ok(checked, "found an entry bar to test");
+});
+
+/** A long that was opened a few bars earlier with its stop moved ABOVE the market (test setup only) so management closes it on this run. */
+function worldWithClosingPosition(i5: number) {
+  const w = newWorld(), st = w.state; applyCfg(LOOSE as never);
+  const openT = m5[i5 - 6].ct + 1000, entry = closes[i5 - 6];
+  const p = openPosition(st, { strategy: "TREND_MTF", dir: "long", entryRef: entry, stop: entry * 0.99, score: 90, why: [], regime: "TREND", barT: m5[i5 - 6].ct } as never, entry, openT)!;
+  p.stop = closes[i5] * 1.2; st.lastBarT = openT; st.lastEvalT = m5[i5 - 1].ct; applyCfg();
+  return { w, p };
+}
+
+test("close + replacement: a failed replacement decision never discards the completed closure, and a retry does not double-realize it", async () => {
+  let done = false;
+  for (const i of candidateBars()) {
+    const base = worldWithClosingPosition(i); const ok = await runAt(i, false, base.w);
+    if (!ok.decision || ok.trades.length !== 1 || !ok.state.pos) continue;      // need: closure AND a replacement entry in the baseline run
+    const f = worldWithClosingPosition(i); const r = await runAt(i, true, f.w);
+    // 1. the original closure is persisted exactly as in the baseline run
+    assert.equal(r.trades.length, 1); assert.equal(r.trades[0].id, base.p.id); assert.equal(r.trades[0].id, ok.trades[0].id);
+    for (const k of ["net", "r", "fees", "funding", "entry", "exit_avg"] as const) assert.equal(r.trades[0][k], ok.trades[0][k], `closure ${k} identical to the run without the failure`);
+    assert.deepEqual(r.trades[0].data.exits, ok.trades[0].data.exits); assert.equal(r.trades[0].data.originalQty, ok.trades[0].data.originalQty);
+    assert.equal(r.state.stats.all.n, 1); assert.equal(r.state.stats.all.net, ok.trades[0].net);
+    assert.ok(Math.abs(r.state.equity - (350 + ok.trades[0].net)) < 1e-9, "equity = 350 start + closure net; the rejected replacement charged no entry fee");
+    assert.ok(Math.abs(ok.state.equity + ok.state.pos!.entryFee - r.state.equity) < 1e-9, "failed-run equity = baseline equity before the replacement's entry fee");
+    // 2. the replacement is not persisted and was not counted
+    assert.equal(r.state.pos, null); assert.ok(!r.events.some((e) => e.kind === "OPEN")); assert.equal(r.state.day.trades, ok.state.day.trades - 1);
+    // management events for the closure are persisted and linked to the ORIGINAL decision id
+    const closeEv = r.events.find((e) => e.kind === "LOSS" || e.kind === "WIN"); assert.ok(closeEv, "closure event persisted"); assert.equal(closeEv.data.decisionId, `D-${base.p.id}`);
+    // 3. the failure is visible
+    assert.match(r.res.books.BTC.provenanceError, /decision evidence not recorded/); assert.ok(r.events.some((e) => e.kind === "ERROR" && e.data?.provenance));
+    assert.equal(r.res.books.BTC.closed, 1);
+    // 4. retry on the same bar: nothing is realized twice
+    const equityAfter = r.state.equity, nTrades = r.trades.length; const again = await runAt(i, false, f.w);
+    assert.equal(again.trades.length, nTrades, "no second trade write for the same closure"); assert.equal(again.state.equity, equityAfter); assert.equal(again.state.stats.all.n, 1);
+    assert.equal(again.decision, null, "the consumed bar is not re-evaluated"); done = true; break;
+  }
+  assert.ok(done, "found a bar with closure + replacement to test");
 });
 
 test("full lifecycle: decision -> management events -> closed trade, all linked and reconciled to the original plan", async () => {
@@ -98,7 +141,7 @@ test("full lifecycle: decision -> management events -> closed trade, all linked 
     if (!w.trades.length) continue;
     const dec = w.decision.d, tr = w.trades[0], t = tr.data;
     assert.equal(t.decisionId, dec.id); assert.equal(tr.id, dec.record.positionId);
-    assert.deepEqual(reconcileOutcome(dec.record, t), [], "closed trade reconciles to the original plan");
+    assert.deepEqual(reconcileOutcome(dec.record, t).diffs, [], "closed trade reconciles to the original plan");
     const linked = w.events.filter((e) => e.data?.decisionId === dec.id).map((e) => e.kind);
     assert.ok(linked.includes("OPEN") && (linked.includes("WIN") || linked.includes("LOSS")), `events linked to the decision: ${linked}`);
     if (process.env.PROVENANCE_BUNDLE) { const { writeFileSync } = await import("node:fs"); writeFileSync(process.env.PROVENANCE_BUNDLE, JSON.stringify({ note: "SYNTHETIC-MARKET lifecycle produced by the real edge handler against a mocked database; not a live decision", decision: dec, inputs: w.decision.inputs, trade: t, events: linked })); }

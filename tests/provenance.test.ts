@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { createHash } from "node:crypto";
 import {
-  applyCfg, CFG, ML_IS_GOLD, setMlAsset, buildSeries, snapshot, evaluate, initState, ensureState, managePosition, resolvedCfg, type Bar, type State, type Signal,
+  applyCfg, CFG, ML_IS_GOLD, setMlAsset, buildSeries, snapshot, evaluate, initState, ensureState, managePosition, resolvedCfg, type Bar, type State, type Signal, type Trade,
 } from "../supabase/functions/deskbot-v5/engine.ts";
-import { captureDecision, replayDecision, reconcileOutcome, pickEntry, assertNoSecrets, decisionIdFor } from "../supabase/functions/deskbot-v5/provenance.ts";
+import { captureDecision, replayDecision, reconcileOutcome, verifyLifecycle, pickEntry, assertNoSecrets, decisionIdFor } from "../supabase/functions/deskbot-v5/provenance.ts";
 import { BUILD } from "../supabase/functions/deskbot-v5/build_info.ts";
 
 const M5 = 300_000, H4 = 14_400_000, T0 = Date.UTC(2026, 0, 1);
@@ -99,18 +99,70 @@ test("build identity: build_info.ts matches the source files it describes", () =
   assert.equal(sha(Object.entries(files).map(([f, h]) => `${f}:${h}`).join("\n")), BUILD.sourceSha256);
 });
 
-test("outcome reconciliation uses the ORIGINAL plan: a stop moved to breakeven never rewrites risk or R", async () => {
+/** Opens the scenario's position, takes TP1 (stop moves to breakeven), then stops out the runner. Returns the record and the closed trade. */
+async function closedScenario() {
   const s = await scenario(); const st = s.stateAfter, p = st.pos!; const rec = JSON.parse(JSON.stringify(s.cap.record));
   const d = p.dir === "long" ? 1 : -1, bar = (n: number, o: number, h: number, l: number, c: number): Bar => ({ t: p.openT + n * 60_000, o, h, l, c, v: 1, ct: p.openT + (n + 1) * 60_000 - 1 });
   const mid = (p.entry + p.tp1) / 2;   // low/high stays on the profit side of the new breakeven stop
   const hit = d === 1 ? bar(1, p.entry, p.tp1 + 0.01, mid, p.tp1) : bar(1, p.entry, mid, p.tp1 - 0.01, p.tp1);
   assert.equal(managePosition(st, [hit], 0).length, 0); assert.ok(st.pos && st.pos.tp1Done, "TP1 filled, runner still open");
-  assert.notEqual(st.pos!.stop, p.stop0, "stop was moved by exit management"); const moved = st.pos!.stop;
+  const moved = st.pos!.stop; assert.notEqual(moved, p.stop0, "stop was moved by exit management");
   const back = d === 1 ? bar(2, p.tp1, p.tp1, moved - 1, moved) : bar(2, p.tp1, moved + 1, p.tp1, moved);
-  const closed = managePosition(st, [back], 0); assert.equal(closed.length, 1); const t = closed[0];
+  const closed = managePosition(st, [back], 0); assert.equal(closed.length, 1);
+  return { s, rec, t: closed[0] as Trade, moved };
+}
+const cloneT = (t: Trade) => JSON.parse(JSON.stringify(t)) as Trade;
+
+test("outcome reconciliation uses the ORIGINAL plan: a stop moved to breakeven never rewrites risk or R", async () => {
+  const { rec, t, moved } = await closedScenario();
   assert.equal(t.stop0, rec.plan.stop0, "original stop retained"); assert.equal(t.riskAmt, rec.plan.riskAmt, "original dollar risk retained");
-  assert.deepEqual(reconcileOutcome(rec, t), []);
+  const ok = reconcileOutcome(rec, t); assert.deepEqual(ok.diffs, []); assert.ok(ok.checks > 15);
+  assert.ok(ok.unverified.some((u) => /funding/.test(u)), "funding is reported as NOT independently verified");
   assert.ok(Math.abs(t.r - t.net / rec.plan.riskAmt) < 1e-12);
   const forged = { ...t, stop0: moved, riskAmt: t.riskAmt * 0.5, r: t.net / (t.riskAmt * 0.5) };   // what a stop-tightening rewrite would produce
-  const diffs = reconcileOutcome(rec, forged); assert.ok(diffs.some((x) => x.field === "trade.stop0") && diffs.some((x) => x.field === "trade.riskAmt"));
+  const diffs = reconcileOutcome(rec, forged).diffs; assert.ok(diffs.some((x) => x.field === "trade.stop0") && diffs.some((x) => x.field === "trade.riskAmt"));
+});
+
+test("exit economics are rebuilt, not trusted: each tampering is caught independently", async () => {
+  const { rec, t } = await closedScenario(); const fields = (x: Trade) => reconcileOutcome(rec, x).diffs.map((d) => d.field);
+  // (a) the reviewer's case: exit.pnl +100 with aggregate gross/net/R adjusted to match, prices and quantities unchanged
+  const a = cloneT(t); a.exits[0].pnl += 100; a.gross += 100; a.net += 100; a.r = a.net / a.riskAmt; assert.ok(fields(a).includes("exit[0].pnl"), "pnl tampering with consistent aggregates is caught");
+  // (b) exit price changed, pnl left alone
+  const b = cloneT(t); b.exits[0].px *= 1.01; assert.ok(fields(b).some((f) => /exit\[0\]\.px/.test(f)) && fields(b).includes("exit[0].pnl"));
+  // (c) exit price AND pnl changed consistently: planned TP level no longer matches
+  const c = cloneT(t); c.exits[0].px *= 1.01; c.exits[0].pnl = (c.exits[0].px - rec.plan.entry) * (rec.plan.dir === "long" ? 1 : -1) * c.exits[0].qty; assert.ok(fields(c).some((f) => /exit\[0\]\.px/.test(f)));
+  // (d) quantity changed
+  const d = cloneT(t); d.exits[0].qty *= 0.9; assert.ok(fields(d).some((f) => /exit\[0\]\.qty/.test(f)));
+  // (e) fee changed
+  const e = cloneT(t); e.exits[1].fee += 0.5; assert.ok(fields(e).includes("exit[1].fee"));
+  // (f) direction: trade.dir flipped, and the pnl sign flipped to look consistent for the opposite side
+  const f = cloneT(t); f.dir = f.dir === "long" ? "short" : "long"; f.exits.forEach((x) => { x.pnl = -x.pnl; }); assert.ok(fields(f).includes("trade.dir") && fields(f).includes("exit[0].pnl"));
+  // (g) aggregate-only edits
+  for (const k of ["gross", "fees", "net", "r"] as const) { const g = cloneT(t); g[k] += 0.01; assert.ok(fields(g).some((x) => x.startsWith(`trade.${k}`)), `aggregate ${k} edit caught`); }
+  // (h) funding edit is carried through net, but net stays consistent with the recorded funding, so it is reported unverified rather than silently accepted
+  const h = cloneT(t); h.funding += 1; h.net -= 1; h.r = h.net / h.riskAmt; const oh = reconcileOutcome(rec, h); assert.deepEqual(oh.diffs, []); assert.ok(oh.unverified.some((u) => /funding/.test(u)));
+});
+
+test("lifecycle verification is binding on source identity and distinguishes entry, outcome, open and missing", async () => {
+  const { s, rec, t } = await closedScenario(); const rows = rowsOf(s.cap), base = { record: JSON.parse(JSON.stringify(rec)), recordSha256: s.cap.recordSha256, inputs: rows };
+  const full = await verifyLifecycle({ ...base, trade: t }); assert.equal(full.overall, "LIFECYCLE_VERIFIED_FUNDING_UNVERIFIED"); assert.equal(full.exitCode, 0); assert.ok(full.source.matches);
+  assert.equal((await verifyLifecycle({ ...base, positionOpen: true })).overall, "ENTRY_VERIFIED_POSITION_OPEN");
+  const miss = await verifyLifecycle({ ...base }); assert.equal(miss.overall, "ENTRY_VERIFIED_OUTCOME_MISSING"); assert.equal(miss.exitCode, 4);
+  const bad = cloneT(t); bad.exits[0].pnl += 100; bad.gross += 100; bad.net += 100; bad.r = bad.net / bad.riskAmt;
+  const o = await verifyLifecycle({ ...base, trade: bad }); assert.equal(o.overall, "OUTCOME_DISAGREEMENT"); assert.equal(o.exitCode, 1);
+  // different recorded source: the entry still replays, but the result can never be verified (hash must be re-supplied because the record changed)
+  const other = JSON.parse(JSON.stringify(rec)); other.build.sourceSha256 = "0".repeat(64);
+  const sm = await verifyLifecycle({ record: other, inputs: rows, trade: t }); assert.equal(sm.entryReplay.status, "REPRODUCED"); assert.equal(sm.source.matches, false);
+  assert.equal(sm.overall, "SOURCE_MISMATCH_NOT_VERIFIED"); assert.equal(sm.exitCode, 3);
+  const dg = await verifyLifecycle({ record: other, inputs: rows, trade: t, allowSourceMismatch: true }); assert.equal(dg.overall, "DIAGNOSTIC_CROSS_VERSION_ONLY"); assert.equal(dg.exitCode, 3, "diagnostic replay never exits 0");
+  const ed = JSON.parse(JSON.stringify(rec)); ed.plan.entry += 1; const e = await verifyLifecycle({ record: ed, inputs: rows, trade: t }); assert.equal(e.overall, "ENTRY_DISAGREEMENT"); assert.equal(e.exitCode, 1);
+});
+
+test("timing evidence separates run start, evaluation time, per-input receipt and completion; unknown stays null", async () => {
+  const s = await scenario(); const tm = (s.cap.record as any).timing;
+  assert.equal(tm.runStartMs, s.now); assert.equal(tm.evaluationTimeMs, s.now); assert.ok(tm.decisionCompletedMs >= Date.now() - 5000);
+  assert.deepEqual(Object.keys(tm.inputReceivedAtMs).sort(), ["ctx", "flow", "fng", "h1", "h4", "m15", "m5"]);
+  assert.ok(Object.values(tm.inputReceivedAtMs).every((v) => v === null), "no receipt times supplied -> unknown (null), not run-start");
+  assert.equal((s.cap.record as any).dataAvailability.fetchedAtMs, undefined); assert.match(tm.note, /not a data-receipt time/);
+  assert.match(tm.persistenceAck, /created_at/);
 });

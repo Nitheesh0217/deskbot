@@ -35,11 +35,18 @@ export function assertNoSecrets(x: unknown, path = "$"): void {
 const encBars = (b: Bar[]) => b.map((x) => [x.t, x.o, x.h, x.l, x.c, x.v, x.ct]);
 const decBars = (a: number[][]): Bar[] => a.map(([t, o, h, l, c, v, ct]) => ({ t, o, h, l, c, v, ct }));
 
-export type FramesIn = Record<TF, { bars: Bar[]; source: string }>;
+export type FramesIn = Record<TF, { bars: Bar[]; source: string; receivedAtMs?: number | null }>;
 export type InputRow = { decisionId: string; tf: TF; source: string; bars: number[][]; barsSha256: string };
 export type CaptureArgs = {
-  sym: Sym; now: number; experimentId: string; frames: FramesIn; snapT: number;
+  sym: Sym;
+  /** Engine evaluation time: the `now` used for entry gates and the modeled fill time (= run start). NOT a data-receipt time. */
+  now: number;
+  /** Wall-clock completion of the decision (when capture runs). Defaults to Date.now(). */
+  completedMs?: number;
+  experimentId: string; frames: FramesIn; snapT: number;
   external: { ctx: Context | null; markPxUsed: number; fng: number | null; flow: unknown };
+  /** Actual receipt times (ms) of the optional external reads; missing = unknown. */
+  externalReceivedAtMs?: { ctx?: number | null; fng?: number | null; fngCached?: boolean; flow?: number | null };
   stateBefore: State; cfgResolved: unknown; integrity: { hash: string; approved: boolean; reason: string | null };
   signals: Signal[]; rejects: Reject[]; gateNotes: string[]; newsBlock: string | null;
   chosen: Signal; fillRef: number; position: Position; equityBefore: number; approvalEnforced?: boolean;
@@ -53,7 +60,7 @@ const accountView = (st: State) => {
 
 /** Builds the immutable record + its input rows. Everything is deep-copied: later mutation of live objects cannot change evidence. */
 export async function captureDecision(a: CaptureArgs): Promise<{ record: Record<string, unknown>; recordSha256: string; inputs: InputRow[] }> {
-  const p = a.position, decisionId = decisionIdFor(p.id);
+  const p = a.position, decisionId = decisionIdFor(p.id), completedMs = a.completedMs ?? Date.now();
   const inputs: InputRow[] = []; const inputRefs: Record<string, unknown> = {};
   for (const tf of TFS) {
     const f = a.frames[tf], bars = encBars(f.bars), h = await sha256(canonical(bars));
@@ -69,8 +76,15 @@ export async function captureDecision(a: CaptureArgs): Promise<{ record: Record<
   const qtyUncapped = p.riskAmt / (stopDist + costPerUnit), qtyCap = (a.equityBefore * CFG.MAX_LEVERAGE) / p.entry;
   const record: Record<string, unknown> = {
     schema: DECISION_SCHEMA, decisionId, positionId: p.id, sym: a.sym,
-    decidedAt: new Date(a.now).toISOString(), decidedAtMs: a.now,
-    dataAvailability: { fetchedAtMs: a.now, snapshotBarClose: a.snapT, lagMs: a.now - a.snapT, note: "bars are closed bars only; fetch time = decision time" },
+    decidedAt: new Date(completedMs).toISOString(),
+    timing: {
+      runStartMs: a.now, evaluationTimeMs: a.now, decisionCompletedMs: completedMs, snapshotBarClose: a.snapT, evaluationLagMs: a.now - a.snapT,
+      inputReceivedAtMs: Object.fromEntries([...TFS.map((tf) => [tf, a.frames[tf].receivedAtMs ?? null]), ["ctx", a.externalReceivedAtMs?.ctx ?? null], ["fng", a.externalReceivedAtMs?.fng ?? null], ["flow", a.externalReceivedAtMs?.flow ?? null]]),
+      fngCached: a.externalReceivedAtMs?.fngCached ?? null,
+      persistenceAck: "dbv5_decisions.created_at (database clock) after the atomic RPC commits; not part of the hashed record",
+      note: "evaluationTimeMs is the engine's run-start time used for entry gates and the modeled fill (plan.openT). It is not a data-receipt time. null = unknown. Provider candle responses carry no server timestamp, so receipt is the local time the response was read.",
+    },
+    dataAvailability: { snapshotBarClose: a.snapT, note: "closed bars only" },
     mode: "PAPER", portfolio: `deskbot-v5/${a.sym}`, experiment: a.experimentId,
     instrument: {
       book: a.sym, name: SYMBOLS[a.sym].name, venue: "hyperliquid", nativeSymbol: SYMBOLS[a.sym].hl, fallbackVenue: "binance-spot", fallbackSymbol: SYMBOLS[a.sym].bn,
@@ -147,7 +161,7 @@ export async function replayDecision(record: Record<string, any>, rows: Pick<Inp
     if (signals.length !== recSig.length) add("candidates.count", recSig.length, signals.length);
     signals.forEach((s, i) => { const r = recSig[i]; if (!r) return; for (const k of ["strategy", "dir", "score", "regime", "barT"] as const) if (r[k] !== (s as any)[k]) add(`candidates[${i}].${k}`, r[k], (s as any)[k]); if (!close(r.stop, s.stop)) add(`candidates[${i}].stop`, r.stop, s.stop); if (JSON.stringify(stripShadow(r.why)) !== JSON.stringify(stripShadow(s.why))) add(`candidates[${i}].why`, r.why, s.why); });
     const refFor = () => ex.markPxUsed;
-    const got = pickEntry(st, signals, record.decidedAtMs, refFor, []);
+    const got = pickEntry(st, signals, record.timing.evaluationTimeMs, refFor, []);
     if (!got) { add("chosen", record.chosen.strategy, "no entry"); return { diffs, reproduced: false }; }
     const pl = record.plan;
     if (got.sig.strategy !== record.chosen.strategy || got.sig.dir !== record.chosen.dir) add("chosen", `${record.chosen.strategy} ${record.chosen.dir}`, `${got.sig.strategy} ${got.sig.dir}`);
@@ -158,23 +172,76 @@ export async function replayDecision(record: Record<string, any>, rows: Pick<Inp
   return { diffs, reproduced: diffs.length === 0 };
 }
 
-/** Links a closed trade back to its original plan. Never recomputes risk from a moved stop: R uses the original dollar risk. */
-export function reconcileOutcome(record: Record<string, any>, t: Trade): Diff[] {
-  const diffs: Diff[] = []; const add = (field: string, recorded: unknown, actual: unknown) => diffs.push({ field, recorded, replayed: actual });
-  const pl = record.plan;
-  if (t.id !== record.positionId) add("trade.id", record.positionId, t.id);
-  if (decisionIdFor(t.id) !== record.decisionId) add("decisionId", record.decisionId, decisionIdFor(t.id));
-  if (!close(t.entry, pl.entry)) add("trade.entry", pl.entry, t.entry);
-  if (!close(t.stop0, pl.stop0)) add("trade.stop0", pl.stop0, t.stop0);
-  if (!close(t.riskAmt, pl.riskAmt)) add("trade.riskAmt", pl.riskAmt, t.riskAmt);
-  if (!close(t.originalQty, pl.originalQty)) add("trade.originalQty", pl.originalQty, t.originalQty);
-  if (t.openT !== pl.openT) add("trade.openT", pl.openT, t.openT);
-  const q = t.exits.reduce((s, e) => s + e.qty, 0); if (!close(q, t.originalQty)) add("exits.qtySum", t.originalQty, q);
-  const gross = t.exits.reduce((s, e) => s + e.pnl, 0), fees = pl.modeledCosts.entryFee + t.exits.reduce((s, e) => s + e.fee, 0);
-  if (!close(gross, t.gross)) add("trade.gross", gross, t.gross);
-  if (!close(fees, t.fees)) add("trade.fees", fees, t.fees);
-  if (!close(gross - fees - t.funding, t.net)) add("trade.net", gross - fees - t.funding, t.net);
-  if (!close(t.net / pl.riskAmt, t.r)) add("trade.r", t.net / pl.riskAmt, t.r);
-  if (t.closeT > pl.expiryMs + 5 * 60_000 && !/TIME|MANUAL/i.test(t.reason)) add("trade.closeT", `<= expiry ${pl.expiryMs}`, t.closeT);
-  return diffs;
+export type Outcome = { diffs: Diff[]; unverified: string[]; checks: number };
+/**
+ * Links a closed trade to its original plan and INDEPENDENTLY rebuilds its economics from direction, entry, executed quantity and price,
+ * and the fee/slippage model recorded with the decision. Stored pnl/fee/gross/net/R are compared with the rebuild, never trusted.
+ * R always uses the original dollar risk and stop0. Things that cannot be rebuilt from stored evidence are listed in `unverified`.
+ */
+export function reconcileOutcome(record: Record<string, any>, t: Trade): Outcome {
+  const diffs: Diff[] = []; const unverified: string[] = []; let checks = 0;
+  const eq = (field: string, recorded: unknown, actual: unknown, ok: boolean) => { checks++; if (!ok) diffs.push({ field, recorded, replayed: actual }); };
+  const pl = record.plan, mc = pl.modeledCosts, d = pl.dir === "long" ? 1 : -1;
+  eq("trade.id", record.positionId, t.id, t.id === record.positionId);
+  eq("decisionId", record.decisionId, decisionIdFor(t.id), decisionIdFor(t.id) === record.decisionId);
+  eq("trade.dir", pl.dir, t.dir, t.dir === pl.dir);
+  eq("trade.entry", pl.entry, t.entry, close(t.entry, pl.entry));
+  eq("trade.stop0", pl.stop0, t.stop0, close(t.stop0, pl.stop0));
+  eq("trade.riskAmt", pl.riskAmt, t.riskAmt, close(t.riskAmt, pl.riskAmt));
+  eq("trade.originalQty", pl.originalQty, t.originalQty, close(t.originalQty, pl.originalQty));
+  eq("trade.openT", pl.openT, t.openT, t.openT === pl.openT);
+  // entry fill and fee from the recorded model
+  const entryRebuilt = pl.fillRef * (1 + d * mc.slippage); eq("entry = fillRef x (1 + dir x slippage)", pl.entry, entryRebuilt, close(pl.entry, entryRebuilt));
+  const entryFee = pl.originalQty * pl.entry * mc.takerFee; eq("entryFee = qty x entry x taker", mc.entryFee, entryFee, close(mc.entryFee, entryFee));
+  // each exit: quantity rule, price rule, pnl and fee rebuilt
+  const CUM: Record<string, number> = { tp1: 0.5, tp2: 0.75, tp3: 1 }, level: Record<string, number> = { tp1: pl.tp1, tp2: pl.tp2, tp3: pl.tp3 };
+  let closedQty = 0, gross = 0, fees = entryFee;
+  t.exits.forEach((e, i) => {
+    const tp = e.kind in CUM, remaining = pl.originalQty - closedQty;
+    const expQty = tp ? Math.max(0, Math.min(pl.originalQty * CUM[e.kind] - closedQty, remaining)) : remaining;
+    eq(`exit[${i}].qty (${e.kind})`, expQty, e.qty, close(e.qty, expQty));
+    if (tp) eq(`exit[${i}].px (${e.kind} = planned level)`, level[e.kind], e.px, close(e.px, level[e.kind]));
+    else unverified.push(`exit[${i}] ${e.kind} price: the stop/market level in force at that moment comes from the management path, which is not stored yet`);
+    const pnl = (e.px - pl.entry) * d * e.qty; eq(`exit[${i}].pnl`, e.pnl, pnl, close(e.pnl, pnl));
+    const fee = e.qty * e.px * (tp ? mc.makerFee : mc.takerFee); eq(`exit[${i}].fee`, e.fee, fee, close(e.fee, fee));
+    closedQty += e.qty; gross += pnl; fees += fee;
+  });
+  eq("exits.qtySum = originalQty", pl.originalQty, closedQty, close(pl.originalQty, closedQty));
+  eq("trade.gross (rebuilt)", t.gross, gross, close(t.gross, gross));
+  eq("trade.fees (rebuilt)", t.fees, fees, close(t.fees, fees));
+  const net = gross - fees - t.funding; eq("trade.net = gross - fees - funding", t.net, net, close(t.net, net));
+  eq("trade.r = net / original risk", t.r, net / pl.riskAmt, close(t.r, net / pl.riskAmt));
+  const avg = t.exits.reduce((s2, e) => s2 + e.px * e.qty, 0) / pl.originalQty; eq("trade.exitAvg (rebuilt)", t.exitAvg, avg, close(t.exitAvg, avg));
+  eq("trade.closeT within plan expiry (or a time/manual exit)", `<= ${pl.expiryMs}`, t.closeT, t.closeT <= pl.expiryMs + 5 * 60_000 || /TIME|MANUAL/i.test(t.reason));
+  unverified.push("funding: hourly rates over the holding period are not stored, so the funding amount is taken as recorded and is NOT independently verified");
+  return { diffs, unverified, checks };
+}
+
+export type LifecycleInput = {
+  record: Record<string, any>; recordSha256?: string; inputs: Pick<InputRow, "tf" | "source" | "bars" | "barsSha256">[];
+  trade?: Trade | null; positionOpen?: boolean; allowSourceMismatch?: boolean;
+};
+export type Lifecycle = {
+  overall: "LIFECYCLE_VERIFIED_FUNDING_UNVERIFIED" | "ENTRY_VERIFIED_POSITION_OPEN" | "ENTRY_VERIFIED_OUTCOME_MISSING" | "ENTRY_DISAGREEMENT" | "OUTCOME_DISAGREEMENT" | "SOURCE_MISMATCH_NOT_VERIFIED" | "DIAGNOSTIC_CROSS_VERSION_ONLY";
+  exitCode: number;
+  source: { recorded: string; current: string; matches: boolean };
+  entryReplay: { status: "REPRODUCED" | "DISAGREEMENT"; diffs: Diff[] };
+  outcome: { status: "RECONCILED" | "DISAGREEMENT" | "OPEN_POSITION" | "MISSING"; diffs: Diff[]; unverified: string[]; checks: number };
+};
+/** Binding verification: a result is only "verified" when the recorded source identity equals the running source. */
+export async function verifyLifecycle(x: LifecycleInput): Promise<Lifecycle> {
+  const rec = x.record, source = { recorded: rec.build?.sourceSha256 as string, current: BUILD.sourceSha256 as string, matches: rec.build?.sourceSha256 === BUILD.sourceSha256 };
+  const rep = await replayDecision(rec, x.inputs, x.recordSha256);
+  const entryReplay = { status: (rep.reproduced ? "REPRODUCED" : "DISAGREEMENT") as "REPRODUCED" | "DISAGREEMENT", diffs: rep.diffs };
+  let outcome: Lifecycle["outcome"];
+  if (x.trade) { const o = reconcileOutcome(rec, x.trade); outcome = { status: o.diffs.length ? "DISAGREEMENT" : "RECONCILED", ...o }; }
+  else outcome = { status: x.positionOpen ? "OPEN_POSITION" : "MISSING", diffs: [], unverified: [], checks: 0 };
+  let overall: Lifecycle["overall"], exitCode: number;
+  if (!source.matches) { overall = x.allowSourceMismatch ? "DIAGNOSTIC_CROSS_VERSION_ONLY" : "SOURCE_MISMATCH_NOT_VERIFIED"; exitCode = 3; }
+  else if (entryReplay.status !== "REPRODUCED") { overall = "ENTRY_DISAGREEMENT"; exitCode = 1; }
+  else if (outcome.status === "DISAGREEMENT") { overall = "OUTCOME_DISAGREEMENT"; exitCode = 1; }
+  else if (outcome.status === "OPEN_POSITION") { overall = "ENTRY_VERIFIED_POSITION_OPEN"; exitCode = 0; }
+  else if (outcome.status === "MISSING") { overall = "ENTRY_VERIFIED_OUTCOME_MISSING"; exitCode = 4; }
+  else { overall = "LIFECYCLE_VERIFIED_FUNDING_UNVERIFIED"; exitCode = 0; }
+  return { overall, exitCode, source, entryReplay, outcome };
 }

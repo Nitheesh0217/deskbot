@@ -1,0 +1,50 @@
+== migration applied; applying again to prove idempotence
+PASS  RLS enabled on both tables
+PASS  no RLS policies defined
+PASS  anon cannot select decisions [permission denied for table dbv5_decisions]
+PASS  authenticated cannot select inputs [permission denied for table dbv5_decision_inputs]
+PASS  anon cannot call the writer [permission denied for function dbv5_record_decision]
+PASS  authenticated cannot call the writer [permission denied for function dbv5_record_decision]
+PASS  service_role cannot insert directly [permission denied for table dbv5_decisions]
+PASS  service_role cannot update [permission denied for table dbv5_decisions]
+PASS  service_role cannot delete [permission denied for table dbv5_decisions]
+PASS  counts start at 0/0
+PASS  3 input rows rejected [exactly 4 input rows are required]
+PASS  5 input rows rejected [exactly 4 input rows are required]
+PASS  duplicate timeframe (4 rows, m5 twice) [timeframe m5 must appear exactly once (found 2)]
+PASS  input row for another decision id [input row decision_id does not match]
+PASS  input hash differs from record reference [input h1 does not match the record reference (hash/source/count)]
+PASS  input source differs from record reference [input m5 does not match the record reference (hash/source/count)]
+PASS  bar count differs from record reference [input m5 does not match the record reference (hash/source/count)]
+PASS  empty bars rejected [input bars missing]
+PASS  wrong schema rejected [unsupported decision schema other/9]
+PASS  record decisionId must equal id [record decisionId does not match id]
+PASS  decidedAt must equal ts [record decidedAt does not match ts]
+PASS  malformed record hash rejected [record_sha256 malformed]
+PASS  nothing was written by any rejected call
+PASS  injected failure during input insert [injected failure on h4]
+PASS  decision row rolled back together with the partial inputs
+PASS  first write returns true
+PASS  counts are 1/4 after the write
+PASS  identical retry returns false and changes nothing
+PASS  same id, different record content, is rejected [decision D-V5-1777455903999 already recorded with different content]
+PASS  same id, same record, different input BARS (hash string reused) is rejected [decision D-V5-1777455903999 already recorded with different inputs]
+PASS  conflicting retries changed nothing
+PASS  a second, distinct decision is accepted
+PASS  service_role can read what was written
+PASS  owner UPDATE on decisions blocked [dbv5 decision evidence is append-only (UPDATE on dbv5_decisions)]
+PASS  owner DELETE on decisions blocked [dbv5 decision evidence is append-only (DELETE on dbv5_decisions)]
+PASS  owner TRUNCATE on decisions blocked [dbv5 decision evidence is append-only (TRUNCATE on dbv5_decisions)]
+PASS  owner UPDATE on inputs blocked [dbv5 decision evidence is append-only (UPDATE on dbv5_decision_inputs)]
+PASS  owner DELETE on inputs blocked [dbv5 decision evidence is append-only (DELETE on dbv5_decision_inputs)]
+PASS  owner TRUNCATE on inputs blocked [dbv5 decision evidence is append-only (TRUNCATE on dbv5_decision_input]
+PASS  evidence intact after attempted tampering
+PASS  writer is SECURITY DEFINER with a pinned search_path
+PASS  only service_role (and the owner) may execute the writer
+== concurrency (two real sessions)
+identical concurrent: A=t B=f (B waited 1.17s)
+PASS  identical concurrent writers: one insert, one no-op, rows 1/4
+PASS  conflicting concurrent writer rejected after waiting for the first commit
+PASS  distinct concurrent decisions both recorded
+ALL SQL CHECKS PASSED
+PostgreSQL: 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)

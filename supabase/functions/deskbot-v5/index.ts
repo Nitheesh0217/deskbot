@@ -121,9 +121,12 @@ async function runOnce(sym: Sym = "BTC") {
   ensureState(st); applyCfg(st.cfg); setMlAsset(sym === "GOLD");
   const integrity = await integrityFor(sym, resolvedCfg(st.cfg));
 
+  // actual receipt time of each input (ms), kept for the decision record; unknown stays undefined
+  const rx: { m5?: number; m15?: number; h1?: number; h4?: number; ctx?: number; fng?: number; flow?: number; fngCached?: boolean } = {};
+  const stamp = <T,>(k: "m5" | "m15" | "h1" | "h4" | "ctx" | "flow", p: Promise<T>) => p.then((v) => { rx[k] = Date.now(); return v; });
   const [m1v, m5, m15, h1, h4, ctx, fng, flow] = await Promise.all([
-    candles("1m", 240, now, "hyperliquid", sym).catch(() => ({ bars: [] as Bar[], source: "hyperliquid" as const })), candles("5m", 400, now, "hyperliquid", sym), candles("15m", 400, now, "hyperliquid", sym), candles("1h", 300, now, "hyperliquid", sym), candles("4h", 700, now, "hyperliquid", sym), hlContext(sym),
-    (async () => { if (!isCrypto) return null; const c = (st as State & { _fng?: { v: number; l: string; t: number } })._fng; if (c && now - c.t < 3 * 3600_000) return { value: c.v, label: c.l }; return await fearGreed(); })(), orderFlow(now, sym),
+    candles("1m", 240, now, "hyperliquid", sym).catch(() => ({ bars: [] as Bar[], source: "hyperliquid" as const })), stamp("m5", candles("5m", 400, now, "hyperliquid", sym)), stamp("m15", candles("15m", 400, now, "hyperliquid", sym)), stamp("h1", candles("1h", 300, now, "hyperliquid", sym)), stamp("h4", candles("4h", 700, now, "hyperliquid", sym)), stamp("ctx", hlContext(sym)),
+    (async () => { if (!isCrypto) return null; const c = (st as State & { _fng?: { v: number; l: string; t: number } })._fng; if (c && now - c.t < 3 * 3600_000) { rx.fng = c.t; rx.fngCached = true; return { value: c.v, label: c.l }; } const r = await fearGreed(); rx.fng = Date.now(); rx.fngCached = false; return r; })(), stamp("flow", orderFlow(now, sym)),
   ]);
   if (fng) (st as State & { _fng?: unknown })._fng = { v: fng.value, l: fng.label, t: now };
   const source = m5.source;
@@ -170,10 +173,11 @@ async function runOnce(sym: Sym = "BTC") {
   if (st.pos) {
     const r = traderManage(st, snap, S, m1, snap.price, now); traderActs = r.acts;
     for (const a of r.acts) evs.push({ kind: "MANAGE", strategy: st.pos?.strategy ?? r.closed?.strategy ?? null, msg: tag + a, symbol: sym, data: { decisionId: decisionIdFor((st.pos?.id ?? r.closed?.id)!), stop: st.pos?.stop ?? null } });
-    if (r.closed) { closed.push(r.closed); const t = r.closed; evs.push({ kind: t.net > 0 ? "WIN" : "LOSS", strategy: t.strategy, msg: `${tag}${t.strategy} ${t.dir.toUpperCase()} closed by trade manager · net $${t.net.toFixed(2)} (${t.r >= 0 ? "+" : ""}${t.r.toFixed(2)}R)`, symbol: sym }); }
+    if (r.closed) { closed.push(r.closed); const t = r.closed; evs.push({ kind: t.net > 0 ? "WIN" : "LOSS", strategy: t.strategy, msg: `${tag}${t.strategy} ${t.dir.toUpperCase()} closed by trade manager · net $${t.net.toFixed(2)} (${t.r >= 0 ? "+" : ""}${t.r.toFixed(2)}R)`, data: { r: t.r, net: t.net, decisionId: decisionIdFor(t.id) }, symbol: sym }); }
   }
   let action = st.pos ? "HOLD" : "SKIP"; let decision: unknown = null;
   let deskSignals: Awaited<ReturnType<typeof evaluate>>["signals"] = []; let deskRejects: Awaited<ReturnType<typeof evaluate>>["rejects"] = [];
+  let provenanceError: string | null = null;
   let opened: { strategy: string; dir: string; entry: number; stop: number; reentry?: boolean; why: string[] } | null = null;
   if (snap.T > st.lastEvalT) {
     st.lastEvalT = snap.T;
@@ -188,15 +192,30 @@ async function runOnce(sym: Sym = "BTC") {
       if (!integrity.approved) notes.push(`${enforce ? "New entries paused" : "Warning (not enforced)"}: ${integrity.reason}`);
       const refFor = () => (ctx?.markPx && Math.abs(ctx.markPx - snap.price) / snap.price < 0.01 ? ctx.markPx : snap.price);
       const stateBefore = stBeforeEval;
-      const picked = newsBlock || (enforce && !integrity.approved) ? null : pickEntry(st, signals, now, refFor, notes);
+      // Pre-entry boundary: the entry is tried on a COPY of the state. Management results already applied to `st` (closed trades, equity,
+      // events) are untouched whatever happens here. Only when the decision evidence is durably recorded is the copy adopted.
+      const trial = JSON.parse(JSON.stringify(st)) as State;
+      let picked = newsBlock || (enforce && !integrity.approved) ? null : pickEntry(trial, signals, now, refFor, notes);
       if (picked) {
         const { sig, p, fillRef } = picked;
         if (sym !== "BTC") p.id = `${sym}-${now}`;
-        await recordDecision(await captureDecision({
-          sym, now, experimentId: EXPERIMENT_ID, frames: { m5, m15, h1, h4 }, snapT: snap.T,
-          external: { ctx: ctx ? { funding: ctx.funding ?? null, oi: ctx.oi ?? null, markPx: ctx.markPx ?? null } : null, markPxUsed: fillRef, fng: fng?.value ?? null, flow: flow ?? null },
-          stateBefore, cfgResolved: resolvedCfg(st.cfg), integrity, signals, rejects, gateNotes: notes, newsBlock, chosen: sig, fillRef, position: p, equityBefore: stateBefore.equity, approvalEnforced: enforce,
-        }));
+        try {
+          await recordDecision(await captureDecision({
+            sym, now, experimentId: EXPERIMENT_ID, frames: { m5: { ...m5, receivedAtMs: rx.m5 ?? null }, m15: { ...m15, receivedAtMs: rx.m15 ?? null }, h1: { ...h1, receivedAtMs: rx.h1 ?? null }, h4: { ...h4, receivedAtMs: rx.h4 ?? null } }, snapT: snap.T,
+            external: { ctx: ctx ? { funding: ctx.funding ?? null, oi: ctx.oi ?? null, markPx: ctx.markPx ?? null } : null, markPxUsed: fillRef, fng: fng?.value ?? null, flow: flow ?? null },
+            externalReceivedAtMs: { ctx: rx.ctx ?? null, fng: rx.fng ?? null, fngCached: rx.fngCached, flow: rx.flow ?? null },
+            stateBefore, cfgResolved: resolvedCfg(st.cfg), integrity, signals, rejects, gateNotes: notes, newsBlock, chosen: sig, fillRef, position: p, equityBefore: stateBefore.equity, approvalEnforced: enforce,
+          }));
+          for (const k of Object.keys(st)) delete (st as unknown as Record<string, unknown>)[k];
+          Object.assign(st, trial);
+        } catch (e) {
+          // Fail closed for the REPLACEMENT entry only: no position, no OPEN event; the run (and any closure above) still persists, and the failure is visible.
+          const msg = `entry rejected, decision evidence not recorded: ${(e as Error).message}`.slice(0, 300);
+          provenanceError = msg; notes.push(msg); evs.push({ kind: "ERROR", strategy: sig.strategy, msg: tag + msg, data: { provenance: true }, symbol: sym }); picked = null;
+        }
+      }
+      if (picked) {
+        const { sig, p } = picked;
         opened = { strategy: sig.strategy, dir: sig.dir, entry: p.entry, stop: p.stop, reentry: !!sig.reentry, why: sig.why }; action = `OPEN_${sig.dir.toUpperCase()}`;
         const msg = `${sig.strategy} ${sig.dir.toUpperCase()} @ ${p.entry.toFixed(1)} · stop ${p.stop.toFixed(1)} · TP ${p.tp1.toFixed(0)}/${p.tp2.toFixed(0)}/${p.tp3.toFixed(0)} · risk $${p.riskAmt.toFixed(2)} · score ${sig.score}`;
         evs.push({ kind: "OPEN", strategy: sig.strategy, msg: tag + msg, data: { why: sig.why, regime: sig.regime, qty: p.originalQty, flow, decisionId: decisionIdFor(p.id) }, symbol: sym });
@@ -226,13 +245,13 @@ async function runOnce(sym: Sym = "BTC") {
   const rows: AgentRow[] = [...desk.rows];
   if (opened && AGENT_AI) { try { const r = await aiReview(opened, opened.why, desk.chart, { providers: providersFromEnv(), usage: (sx._aiUsage ??= {}), now }); if (r) rows.push(r); } catch { /* optional, shadow only */ } }
   const ai = { providers: providersFromEnv().map((p) => p.name), usage: sx._aiUsage ?? {} };
-  const lastRun = { ts: new Date(now).toISOString(), sym, action, trader: { acts: traderActs, plan: st.pos?.plan ?? [] }, source, integrity, news, ai, upnl: +upnl.toFixed(2), market, decision, risk: dynamicRisk(st.equity), desk: desk.summary, ms: Date.now() - now };
+  const lastRun = { ts: new Date(now).toISOString(), sym, action, trader: { acts: traderActs, plan: st.pos?.plan ?? [] }, source, integrity, news, ai, upnl: +upnl.toFixed(2), market, decision, risk: dynamicRisk(st.equity), desk: desk.summary, provenanceError, ms: Date.now() - now };
   st.version = VERSION;
   await saveState(st, lastRun, sym);
   await upsert("dbv5_equity", [{ symbol: sym, ts: new Date(now).toISOString(), equity: +st.equity.toFixed(4), upnl: +upnl.toFixed(4), price: snap.price }]);
   await events(evs);
   if (rows.length) { try { await insert("dbv5_agent_log", rows.map((r) => ({ symbol: sym, agent: r.agent, input_summary: r.input_summary, output: r.output, provider: r.provider ?? null, ms: r.ms ?? null, error: r.error ?? null }))); } catch (e) { notes.push(`agent log: ${(e as Error).message}`.slice(0, 120)); } }
-  return { ok: true, sym, version: VERSION, integrity, action, equity: +st.equity.toFixed(2), upnl: +upnl.toFixed(2), pos: st.pos ? { strategy: st.pos.strategy, dir: st.pos.dir, entry: st.pos.entry, stop: st.pos.stop, tp1: st.pos.tp1 } : null, trader: traderActs, closed: closed.length, source, news: news ? { risk: news.risk, by: news.by } : null, ms: Date.now() - now };
+  return { ok: true, sym, version: VERSION, integrity, action, equity: +st.equity.toFixed(2), upnl: +upnl.toFixed(2), pos: st.pos ? { strategy: st.pos.strategy, dir: st.pos.dir, entry: st.pos.entry, stop: st.pos.stop, tp1: st.pos.tp1 } : null, trader: traderActs, closed: closed.length, source, news: news ? { risk: news.risk, by: news.by } : null, provenanceError, ms: Date.now() - now };
 }
 
 // ─── backtest (walk-forward; in-sample = first 2/3, out-of-sample = last 1/3) ──
