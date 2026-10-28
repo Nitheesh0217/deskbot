@@ -13,3 +13,5 @@ Next critical task: T002 exact artifact/config/schema reconciliation with author
 Publication means source pushed to a review branch; it does not mean deployed, profitable, or approved for funded trading. Current task verification and unresolved checks are recorded in EVIDENCE_LOG.md. This handoff is durable repo context, not a promise that chat memory persists.
 
 Latest local increment T003 adds the existing website's evidence panel and a quota-retry fix in ai.ts. Source is prepared, not deployed. Read DEPLOYMENT_HANDOFF.md before release. Vercel can list projects but needs team grant; GitHub writes and Supabase project reads still fail. Do not present missing approval as an enforced entry pause. A new LLM or profitable model is not part of this patch.
+
+**Update 28 Oct 2026 (Claude):** source = branch `research/deskbot-evidence-desk`. Backend v18 deployed and verified byte-identical to its source; website verified on a Vercel preview; heartbeat false-alarm fixed. See EVIDENCE_LOG.md (reconciliation), SCHEMA_SNAPSHOT.md, DEPLOYMENT_HANDOFF.md (release record). Next: T004.

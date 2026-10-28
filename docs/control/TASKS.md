@@ -34,9 +34,13 @@ Rollback: revert this observer/docs commit or stop invoking the CLI. No producti
 
 Evidence: EVIDENCE_LOG.md and actual command results. Local implementation VERIFIED: 69 tests and typecheck pass. Publication BLOCKED: GitHub branch creation returned HTTP 403. No remote publication is claimed.
 
-## T002 — Reconcile exact deployed source (BLOCKED: authorized DB/deployment read access)
+## T002 — Reconcile exact deployed source (DONE 28 Oct 2026; see EVIDENCE_LOG and SCHEMA_SNAPSHOT.md)
 
 Objective: compare deployed artifact to recovered v5.8 source and inventory real schema/jobs/config history. Read-only. Return redacted deployment identity, config history, schema/grants/RLS, cron/lease definitions and diagnostic logs. Do not run committed migrations over production.
+
+## T004 — Per-strategy attribution under the frozen baseline (NEXT)
+
+Objective: decide with evidence whether SWEEP_REV, SESSION_BO, VWAP_REVERT (both books) and gold EMA_CROSS belong on the paper books. Method: for each active strategy and book, run the existing backtester with `only:<strategy>` on 365-day Binance windows (last year and prior year) using each book's exact live cfg, record n, expR, PF, OOS expR, maxDD and fees share; compare with the live per-strategy stats in `dbv5_state.stats.by`. Pre-register the rule before running: a strategy stays on only if expR > 0 after costs in both windows. Retain failures. No config change until results are reviewed; ignore the 5m-vs-1m manager difference by running with TRADER off for attribution.
 
 ## Next coding-agent prompt
 
