@@ -1,4 +1,6 @@
 # DeskBot profit-improvement research brief — 2026-10-28
+> **Read CORRECTIONS.md** (appended 2026-10-28 after review): bootstrap fractions are resampling results, the "holdout" is contaminated for the baseline, live groupings are descriptive, equity gaps and dollars-vs-R are reconciled there.
+
 
 Paper/research only. Nothing here changes the live bot, risk, credentials or balances. Passing or failing a backtest here does not establish future profitability.
 
