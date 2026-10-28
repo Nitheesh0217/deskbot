@@ -4,3 +4,4 @@ node_modules/
 ml/data/
 *.csv
 *.parquet
+reports/

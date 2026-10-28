@@ -15,3 +15,26 @@ docs/           ML_REPORT.md · ONLINE_RUNBOOK.md · STRATEGIES.md · RISK.md   
 Research results, all walk-forward and after fees, are in [docs/ML_REPORT.md](docs/ML_REPORT.md).
 
 Run the tests with `npx tsx --test tests/*.test.ts`. Run research locally with `npx tsx ml/wf_local.ts <5m.csv> BTC`.
+
+## Evidence desk (read-only)
+
+Start with [the project control pack](docs/control/HANDOFF.md) and the
+[audited trading-skill shortlist](docs/research/TRADING_SKILLS_REVIEW.md).
+The existing engine remains the primary evaluator; no third-party skill is installed.
+
+```bash
+npm ci --ignore-scripts
+npm test
+npm run typecheck
+# Offline captured status, or an explicit public GET (no credentials):
+npm run audit:status -- --input snapshot.json --output reports/audit
+npm run audit:status -- --fetch --output reports/audit
+```
+
+Open `reports/audit/status-audit.html` locally. It is a static, redacted evidence
+console with source identity, per-book freshness, bounded-ledger reconciliation,
+and unresolved checks. Generated reports are gitignored. No raw status, secrets,
+news, chat, or trade IDs are exported. Exit 2 means the report was generated but
+evidence remains incomplete; exit 1 means capture/input/I/O failed. WAIT is an
+evidence gate, not a market prediction. This observer cannot certify a deployed
+artifact, full ledger, broker fills, or profitable strategy.

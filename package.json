@@ -5,6 +5,7 @@
   "description": "DeskBot v5 \u2014 24/7 BTC paper-trading bot (Supabase Edge Function + pg_cron). Paper only.",
   "type": "module",
   "scripts": {
+    "audit:status": "node scripts/audit_status.mjs",
     "test": "node --import tsx --test tests/*.test.ts",
     "typecheck": "tsc --noEmit --strict --target es2022 --lib es2022,dom --module esnext --moduleResolution bundler --allowImportingTsExtensions --skipLibCheck tests/deno_globals.d.ts supabase/functions/deskbot-v5/*.ts"
   },
