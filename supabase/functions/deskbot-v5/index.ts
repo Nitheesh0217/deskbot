@@ -15,7 +15,8 @@ import { readNews, newsBlocks, type NewsRead } from "./news.ts";
 import { providersFromEnv, type Usage } from "./ai.ts";
 import { chat, validatePatch, mergeCfg, EDITABLE, type ChatTurn } from "./chat.ts";
 import { configIntegrity, serialExecutor } from "./runtime.ts";
-import { runDesk, aiReview, type AgentRow } from "./agents.ts";
+import { runDesk, deskChart, type AgentRow } from "./agents.ts";
+import { preTradeChecks, postTradeReview, runDeskWorkflow } from "./desk.ts";
 
 // Module config belongs to one request at a time. This is isolate-local; the
 // existing database lease still coordinates state writes across edge isolates.
@@ -29,7 +30,8 @@ const NTFY = Deno.env.get("DESKBOT_NTFY_TOPIC") ?? ""; // optional phone push vi
 const NEWS_MODE = Deno.env.get("NEWS_MODE") ?? "shadow";            // off | shadow | gate
 const NEWS_EVERY_MIN = +(Deno.env.get("NEWS_EVERY_MIN") ?? 30);
 const NEWS_AI = (Deno.env.get("NEWS_AI") ?? "on") !== "off";
-const AGENT_AI = (Deno.env.get("AGENT_AI") ?? "shadow") !== "off";   // optional free-LLM review of trades just taken (never blocks)
+const AGENT_AI = (Deno.env.get("AGENT_AI") ?? "shadow") !== "off";   // optional free-LLM stages of the desk review (advisory, never blocks)
+const DESK_WORKFLOW = (Deno.env.get("DESK_WORKFLOW") ?? "shadow") !== "off";   // deterministic pre-trade checks + post-trade reviews + optional LLM roles; advisory only
 const CHAT_KEY = Deno.env.get("DESKBOT_CHAT_KEY") ?? "";
 const CHAT_DAILY_CAP = +(Deno.env.get("CHAT_DAILY_CAP") ?? 150);
 // Each book is a separate paper account (own equity, position, stats, cfg) in its own dbv5_state row.
@@ -211,13 +213,29 @@ async function runOnce(sym: Sym = "BTC") {
   // desk agents: chart read + validator/risk/re-entry views, persisted to dbv5_agent_log (never allowed to break a run)
   const desk = runDesk({ snap, S, m1, st, signals: deskSignals, rejects: deskRejects, traderActs, opened, closedNow: closed.length, ms: Date.now() - now });
   const rows: AgentRow[] = [...desk.rows];
-  if (opened && AGENT_AI) { try { const r = await aiReview(opened, opened.why, desk.chart, { providers: providersFromEnv(), usage: (sx._aiUsage ??= {}), now }); if (r) rows.push(r); } catch { /* optional, shadow only */ } }
   const ai = { providers: providersFromEnv().map((p) => p.name), usage: sx._aiUsage ?? {} };
   const lastRun = { ts: new Date(now).toISOString(), sym, action, trader: { acts: traderActs, plan: st.pos?.plan ?? [] }, source, integrity, news, ai, upnl: +upnl.toFixed(2), market, decision, risk: dynamicRisk(st.equity), desk: desk.summary, ms: Date.now() - now };
   st.version = VERSION;
   await saveState(st, lastRun, sym);
   await upsert("dbv5_equity", [{ symbol: sym, ts: new Date(now).toISOString(), equity: +st.equity.toFixed(4), upnl: +upnl.toFixed(4), price: snap.price }]);
   await events(evs);
+  // Desk review layer (advisory). Runs AFTER state and ledger are saved so slow or failing providers can never cost a persisted trade.
+  // Post-trade reviews are deterministic and free; the LLM roles run only for a trade opened this run and only when a provider is configured.
+  if (DESK_WORKFLOW) {
+    try {
+      for (const t of closed) rows.push({ agent: "desk-postmortem", input_summary: `${t.id} ${t.strategy} ${t.dir}`, output: { ref: t.id, authority: "advisory", ...postTradeReview({ ...t, why: t.why }) } });
+      const p = opened ? st.pos : null;
+      if (p) {
+        const checks = preTradeChecks({ plan: { dir: p.dir, entry: p.entry, stop0: p.stop0, tp1: p.tp1, maxHoldH: p.maxHoldH, strategy: p.strategy }, atr15: snap.atr15, hour: snap.hour, funding: ctx?.funding ?? null, costs: { taker: CFG.TAKER_FEE, slippage: CFG.SLIPPAGE }, newsRisk: sx._news?.risk ?? null, levels: desk.chart.levels });
+        const usageBefore = JSON.stringify(sx._aiUsage ?? {});
+        const wf = await runDeskWorkflow({ ref: p.id, sym, strategy: p.strategy, dir: p.dir, regime: p.regime, why: p.why, newsRisk: sx._news?.risk ?? null, chart: deskChart(desk.chart), checks,
+          plan: { dir: p.dir, entry: p.entry, stop0: p.stop0, tp1: p.tp1, tp2: p.tp2, tp3: p.tp3, maxHoldH: p.maxHoldH, strategy: p.strategy, riskAmt: p.riskAmt } },
+          { providers: AGENT_AI ? providersFromEnv() : [], usage: (sx._aiUsage ??= {}), now });
+        rows.push(...wf.rows);
+        if (JSON.stringify(sx._aiUsage ?? {}) !== usageBefore) await saveState(st, lastRun, sym);   // persist the provider call counters (daily caps) after the LLM stages
+      }
+    } catch (e) { notes.push(`desk review: ${(e as Error).message}`.slice(0, 120)); }
+  }
   if (rows.length) { try { await insert("dbv5_agent_log", rows.map((r) => ({ symbol: sym, agent: r.agent, input_summary: r.input_summary, output: r.output, provider: r.provider ?? null, ms: r.ms ?? null, error: r.error ?? null }))); } catch (e) { notes.push(`agent log: ${(e as Error).message}`.slice(0, 120)); } }
   return { ok: true, sym, version: VERSION, integrity, action, equity: +st.equity.toFixed(2), upnl: +upnl.toFixed(2), pos: st.pos ? { strategy: st.pos.strategy, dir: st.pos.dir, entry: st.pos.entry, stop: st.pos.stop, tp1: st.pos.tp1 } : null, trader: traderActs, closed: closed.length, source, news: news ? { risk: news.risk, by: news.by } : null, ms: Date.now() - now };
 }

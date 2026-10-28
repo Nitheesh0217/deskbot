@@ -1,5 +1,8 @@
 # Changelog
 
+## Unreleased — desk review layer (advisory; entries, sizing, exits and risk unchanged)
+- After a trade is opened: deterministic pre-trade checks and optional analyst, bear, bull, judge roles (free providers, shadow); after a trade closes: deterministic post-trade review. All rows go to `dbv5_agent_log`, joined to the trade by position id. Runs after state is saved; the old pre-save single-call ai-review is replaced. See [AGENT_WORKFLOWS.md](AGENT_WORKFLOWS.md).
+
 ## v5.8.0 — desk agents (2026-10-24)
 - New `agents.ts` + engine functions: chart agent (levels across 1m–4H), signal validator, risk agent (candle-body stop), re-entry agent, optional shadow-only AI review. All logged to `dbv5_agent_log`; dashboard gets an **Agent desk** card and `agent:` level lines on the Chart tab. See [AGENTS.md](AGENTS.md).
 - Chart agent is on. **Body-stop, re-entry and validator ship OFF**: in 1-year backtests (BTC two years, gold one year) every combination was worse than the live config. Numbers in AGENTS.md.
