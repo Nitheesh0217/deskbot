@@ -10,8 +10,8 @@ create table if not exists public.dbv5_agent_log (
   ms integer,
   error text
 );
-create index if not exists dbv5_agent_log_ts_idx on public.dbv5_agent_log (ts desc);
-create index if not exists dbv5_agent_log_symbol_ts_idx on public.dbv5_agent_log (symbol, ts desc);
+create index if not exists dbv5_agent_log_ts on public.dbv5_agent_log (ts desc);
+create index if not exists dbv5_agent_log_sym on public.dbv5_agent_log (symbol, ts desc);
 -- same posture as the other dbv5_* tables: no anon/authenticated access; the edge function uses the service role (bypasses RLS)
 alter table public.dbv5_agent_log enable row level security;
 -- keep 14 days of agent rows
