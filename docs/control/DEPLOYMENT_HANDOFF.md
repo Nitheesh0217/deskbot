@@ -27,3 +27,25 @@ Rollback website to the recorded prior deployment; keep evidence.js paired with 
 ## Claude resumption
 
 Resume from HANDOFF.md, inspect CURRENT_STATE.md and EVIDENCE_LOG.md, then resolve access and exact artifacts before production edits. New code corrects UI truthfulness and bounded AI retries; it does not validate a new prediction model or certify profitability. Free AI assessment is in ../research/FREE_AI_OPTIONS.md.
+
+
+## Release record — 28 Oct 2026 (supersedes the "blocked" sections above)
+
+Targets confirmed with authorized access: GitHub `Nitheesh0217/deskbot`; Vercel team `team_jB1ghJBqclkgtBynRKZS5TlV`, project `deskbot` (`prj_d86L2qLplfP4U44p9mpJIYy9M8CI`, no framework, static `web/`), production alias `deskbot-azure.vercel.app` (also `deskbot-nitheesh-donepudis-projects.vercel.app`, `deskbot-git-main-…`); Supabase project `xevymbzgpcsdhygswxlk`, function `deskbot-v5`. The projects `deskbot-live` and `deskbot-v3` were not touched.
+
+| Component | Before | After | Source revision | Verification |
+|---|---|---|---|---|
+| Edge function `deskbot-v5` | v17 (`ezbr badda0e6…b33703`) | **v18** (`ezbr 37adb6e8…6ff2e6`) | branch build of `1ec864d` | 8/8 files byte-identical to the build; run 200, both books ok, balances unchanged |
+| Website preview | n/a | `dpl_DZCdCjmhhKPz6anRCfipdh2wn3SN` | `1ec864d` | `evidence.js` + `index.html` 200; content checks; local Chromium smoke |
+| Website production | `dpl_48ewRjcToSuEnL4LPRWLPoX2rV8C` (main@`5bb0271`) | built by Vercel git integration on merge to main | merge commit (see PR #1) | recorded in the follow-up commit |
+| Heartbeat | red on every run | fixed on merge (workflows run from main) | `1ec864d` | unit-tested; first post-merge scheduled run to be checked |
+
+Database: no migration was applied for this release. (24 Oct: `agent_log_rls_index_prune`. A DROP of two duplicate `dbv5_agent_log` indexes was requested on 28 Oct and is pending the owner's approval.)
+
+### Rollback targets
+- **Website:** promote `dpl_48ewRjcToSuEnL4LPRWLPoX2rV8C` (marked rollback candidate) with `request_rollback`/dashboard Promote. `evidence.js` rolls back with its `index.html`.
+- **Backend:** v17 was a build of `cd81d6f` plus a prompt-escape defect in `chat.ts`. To roll back, build `cd81d6f` (`for f in index engine agents data news ai chat runtime; do git show cd81d6f:supabase/functions/deskbot-v5/$f.ts | npx esbuild --loader=ts --format=esm --target=es2022 --charset=utf8 --minify-whitespace > out/$f.ts; done`) and redeploy those 8 files with `verify_jwt=false`. The quota fix is the only behavioural difference, so a rollback only re-allows a retry to exceed the per-provider daily cap by one call (providers are not configured today). Never restore an old `dbv5_state` snapshot over later fills.
+- **Heartbeat:** revert `scripts/check_health.mjs`; it will go red again for the approval reason.
+
+### Smoke tests still owed after the production website deploy
+Alias serves the new `index.html`/`evidence.js` pair; System tab shows the evidence panel; the next scheduled heartbeat run passes.
