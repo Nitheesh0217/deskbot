@@ -15,7 +15,7 @@
 //    • the same evaluate()/manage() code drives live runs AND the backtester
 // ═══════════════════════════════════════════════════════════════════════════
 
-export const VERSION = "5.7.0";
+export const VERSION = "5.8.0";
 
 export type Bar = { t: number; o: number; h: number; l: number; c: number; v: number; ct: number };
 export type Dir = "long" | "short";
@@ -78,6 +78,16 @@ export const CFG = {
   ML_FILTER: null as null | { names: string[]; mean: number[]; std: number[]; w: number[]; b: number; thr: number; ver?: string },
   TRADER: true,
   TRADER_PARTS: "",      // v5.7 trade manager: re-plans open positions (never widens stop, never adds size)
+  // v5.8 desk agents. All three default OFF so a deploy never changes a running book; enable per book from backtest evidence.
+  //  BODY_SL  (risk agent): stop just beyond the candle BODY extreme (open/close, not the wick) of the last `n` trigger-timeframe
+  //           candles, `buf`×ATR beyond it, never closer than `minPct` of price. Only ever tightens the strategy's own stop.
+  //  REENTRY  (re-entry agent): after a losing stop-out, the same setup may be re-taken if price reclaims the stopped level with the
+  //           trend still aligned and a score ≥ minScore, within `windowH` hours, at most `max` times in a row.
+  //  VALIDATOR (signal validator agent): rejects a signal with less than `minRoomR`×R of clear space to the next opposing liquidity level,
+  //           or (trend strategies) one fighting both the 1H and 4H trend.
+  BODY_SL: { on: false, n: 3, buf: 0.1, minPct: 0.003 },
+  REENTRY: { on: false, windowH: 3, max: 2, minScore: 78 },
+  VALIDATOR: { on: false, minRoomR: 1, htfVeto: true },
   ML_SHADOW: false,   // true = compute + log p(win) but never block
   PROBATION_MIN_TRADES: 10,
   DISABLE_MIN_TRADES: 20,
@@ -86,8 +96,15 @@ export const CFG = {
 
 export const CFG_DEFAULTS = JSON.parse(JSON.stringify(CFG)) as typeof CFG;
 // Pure resolution is also used by GET status: a read must never change a running book.
+// Nested option groups merge key-by-key so a partial override (e.g. {BODY_SL:{on:true}}) keeps the other defaults.
+const NESTED = ["BODY_SL", "REENTRY", "VALIDATOR"] as const;
+function overlayNested(base: typeof CFG, over?: Partial<typeof CFG>): Partial<typeof CFG> {
+  const o: Record<string, unknown> = { ...over };
+  for (const k of NESTED) if (over && over[k]) o[k] = { ...base[k], ...over[k] };
+  return o as Partial<typeof CFG>;
+}
 export function resolvedCfg(over?: Partial<typeof CFG>): typeof CFG {
-  return JSON.parse(JSON.stringify({ ...CFG_DEFAULTS, ...over }));
+  return JSON.parse(JSON.stringify({ ...CFG_DEFAULTS, ...overlayNested(CFG_DEFAULTS, over) }));
 }
 export function applyCfg(over?: Partial<typeof CFG>) { Object.assign(CFG, resolvedCfg(over)); }
 
@@ -320,6 +337,8 @@ export function snapshot(S: Series, i5: number, ctx: Context = {}) {
 export type Signal = {
   strategy: StrategyId; dir: Dir; entryRef: number; stop: number; score: number;
   why: string[]; regime: string; barT: number;
+  bodyStop?: boolean;   // stop was set by the risk agent (candle-body rule): skip the MIN_STOP floor widening
+  reentry?: boolean;    // re-entry after a stop-out
 };
 export type Reject = { strategy: StrategyId; reason: string };
 
@@ -514,10 +533,10 @@ function sHtfSweep(s: Snap, S: Series, rej: Reject[]): Signal | null {
   let dir: Dir | null = null, ext = 0;
   if (b.h > hi && b.c < hi && (b.h - Math.max(b.o, b.c)) >= CFG.HSW_WICK * rng) { dir = "short"; ext = b.h; }
   else if (b.l < lo && b.c > lo && (Math.min(b.o, b.c) - b.l) >= CFG.HSW_WICK * rng) { dir = "long"; ext = b.l; }
-  if (!dir) { rej.push({ strategy: id, reason: `No failed break of 4H 55-bar ${"high/low"} ($${hi.toFixed(0)}/$${lo.toFixed(0)})` }); return null; }
+  if (!dir) { rej.push({ strategy: id, reason: `No failed break of 4H high/low ($${hi.toFixed(0)}/$${lo.toFixed(0)})` }); return null; }
   const d = sgn(dir), stop = ext - d * 0.1 * s.atr4h, risk = Math.abs(s.price - stop);
   if (!(risk > 0) || risk > CFG.HSW_MAX_RISK_ATR * s.atr4h) { rej.push({ strategy: id, reason: "Sweep stop too wide" }); return null; }
-  const why = [`${tf.toUpperCase()} bar swept the 4H 55-bar ${dir === "short" ? "high" : "low"} ($${(dir === "short" ? hi : lo).toFixed(0)}) and closed back inside`, "Rejection wick", "Stop beyond the wick"];
+  const why = [`${tf.toUpperCase()} bar swept the 4H ${dir === "short" ? "high" : "low"} ($${(dir === "short" ? hi : lo).toFixed(0)}) and closed back inside`, "Rejection wick", "Stop beyond the wick"];
   return { strategy: id, dir, entryRef: s.price, stop, score: 80 + contextScore(s, dir, "revert", why), why, regime: s.regime, barT: s.T };
 }
 
@@ -642,29 +661,133 @@ const RUNNERS: Record<StrategyId, (s: Snap, S: Series, r: Reject[]) => Signal | 
   HTF_TREND: (s, _S, r) => sHtf(s, r), TREND_MTF: (s, _S, r) => sTrend(s, r), SWEEP_REV: (s, _S, r) => sSweep(s, r), VWAP_REVERT: (s, _S, r) => sVwap(s, r), SESSION_BO: (s, _S, r) => sSession(s, r), HTF_SWEEP: sHtfSweep, EMA_CROSS: sEmaCross, SSR: sSSR, EMA_PB: sEmaPb,
 };
 
-export function evaluate(s: Snap, enabled: Record<string, boolean> = {}, S?: Series): { signals: Signal[]; rejects: Reject[] } {
+// ─── v5.8 desk agents (pure functions; the same code runs live and in the backtester) ──────────────
+// Chart agent — reads every timeframe and lists the levels the bot respects, nearest first.
+export type ChartLevel = { px: number; name: string; side: "support" | "resistance"; distAtr: number; blocks: boolean };
+export type ChartRead = {
+  price: number; bias: "bull" | "bear" | "mixed"; regime: string;
+  trend: { m1: number | null; m5: number; m15: number; h1: number; h4: number };
+  levels: ChartLevel[]; support: ChartLevel | null; resistance: ChartLevel | null;
+};
+// levels that physically block a move (swing / session / prior-day / 4H extremes); VWAP, POC and EMAs are reference only
+const BLOCKING = /high|low/i;
+export function chartLevels(s: Snap, S: Series): { px: number; name: string; blocks: boolean }[] {
+  const out = liquidityLevels(s, S).map((l) => ({ ...l, blocks: BLOCKING.test(l.name) }));
+  if (isFinite(s.hi4h)) out.push({ px: s.hi4h, name: "4H 55-bar high", blocks: true });
+  if (isFinite(s.lo4h)) out.push({ px: s.lo4h, name: "4H 55-bar low", blocks: true });
+  if (isFinite(s.ema50_4h)) out.push({ px: s.ema50_4h, name: "4H EMA50", blocks: false });
+  if (s.i1d >= 0 && isFinite(S.ema50D[s.i1d])) out.push({ px: S.ema50D[s.i1d], name: "Daily EMA50", blocks: false });
+  return out.filter((l) => isFinite(l.px));
+}
+export function chartRead(s: Snap, S: Series, m1: M1View = null): ChartRead {
+  const atr = s.atr15 > 0 ? s.atr15 : s.price * 0.003, seen: ChartLevel[] = [];
+  const all = chartLevels(s, S).map((l) => ({ ...l, side: (l.px >= s.price ? "resistance" : "support") as ChartLevel["side"], distAtr: Math.abs(l.px - s.price) / atr }))
+    .sort((a, b) => a.distAtr - b.distAtr);
+  for (const l of all) if (!seen.some((x) => Math.abs(x.px - l.px) < 0.1 * atr)) seen.push(l);
+  const levels = seen.slice(0, 14), score = s.st15 + s.st1h + s.st4h;
+  return {
+    price: s.price, regime: s.regime, bias: score >= 2 ? "bull" : score <= -2 ? "bear" : "mixed",
+    trend: { m1: m1 ? m1.st : null, m5: s.st5, m15: s.st15, h1: s.st1h, h4: s.st4h },
+    levels, support: levels.find((l) => l.side === "support") ?? null, resistance: levels.find((l) => l.side === "resistance") ?? null,
+  };
+}
+
+// Risk agent — stop at the candle BODY, not the wick. Trigger timeframe depends on the strategy.
+const BODY_TF: Record<StrategyId, "5m" | "15m" | "1h"> = {
+  TREND_MTF: "5m", EMA_PB: "5m", SWEEP_REV: "15m", VWAP_REVERT: "15m", SESSION_BO: "15m", EMA_CROSS: "15m", SSR: "15m",
+  HTF_TREND: "1h", HTF_SWEEP: "1h", D_BEARTRAP: "1h", D_THRUST: "1h",
+};
+/** Returns a stop strictly tighter than sig.stop, or null when the body rule can't improve it. */
+export function bodyStop(s: Snap, S: Series, sig: Signal): { stop: number; tf: string; basis: string } | null {
+  const tf = BODY_TF[sig.strategy], d = sgn(sig.dir), C = CFG.BODY_SL;
+  const bars = tf === "5m" ? S.f.m5 : tf === "15m" ? S.f.m15 : S.f.h1;
+  const i = tf === "5m" ? s.i5 : tf === "15m" ? s.i15 : s.i1h;
+  const atr = tf === "5m" ? s.atr5 : tf === "15m" ? s.atr15 : (i >= 0 ? S.atr1h[i] : NaN);
+  if (i < C.n || !isFinite(atr)) return null;
+  let ext = d === 1 ? Infinity : -Infinity;
+  for (let j = i - C.n + 1; j <= i; j++) ext = d === 1 ? Math.min(ext, Math.min(bars[j].o, bars[j].c)) : Math.max(ext, Math.max(bars[j].o, bars[j].c));
+  let stop = ext - d * C.buf * atr;
+  const floor = C.minPct * s.price;
+  if ((s.price - stop) * d < floor) stop = s.price - d * floor;           // never tighter than the noise floor
+  if ((s.price - stop) * d <= 0) return null;
+  if (!((stop - sig.stop) * d > 0)) return null;                           // only ever tighten
+  return { stop, tf, basis: `${C.n}×${tf} body ${d === 1 ? "low" : "high"} ${ext.toFixed(ext > 1000 ? 0 : 2)}` };
+}
+
+// Signal validator agent — independent second opinion on a signal that already passed its strategy rules.
+export type Vote = { check: string; pass: boolean; note: string };
+export function validateSignal(s: Snap, S: Series, sig: Signal): { ok: boolean; votes: Vote[]; roomR: number | null } {
+  const d = sgn(sig.dir), R = Math.abs(s.price - sig.stop), V = CFG.VALIDATOR, votes: Vote[] = [];
+  let roomR: number | null = null;
+  if (R > 0) {
+    const ahead = chartLevels(s, S).filter((l) => l.blocks && (l.px - s.price) * d > 0.05 * s.atr15).sort((a, b) => (a.px - b.px) * d)[0];
+    roomR = ahead ? Math.abs(ahead.px - s.price) / R : null;
+    votes.push({ check: "room", pass: roomR === null || roomR >= V.minRoomR, note: ahead ? `${roomR!.toFixed(2)}R to ${ahead.name} ${ahead.px.toFixed(ahead.px > 1000 ? 0 : 2)} (needs ≥${V.minRoomR}R)` : "open space ahead" });
+  }
+  if (V.htfVeto && !STRAT_FAMILY_REV.includes(sig.strategy)) {
+    const against = s.st1h === -d && s.st4h === -d;
+    votes.push({ check: "htf", pass: !against, note: against ? "1H and 4H trend both against a trend-following entry" : "higher timeframes not both against" });
+  }
+  return { ok: votes.every((v) => v.pass), votes, roomR };
+}
+
+// Re-entry agent — after a losing stop-out, re-take the same setup if price reclaims the stopped level and the trend still agrees.
+function sReentry(s: Snap, S: Series, st: State, rej: Reject[]): Signal | null {
+  const r = st.reentry, C = CFG.REENTRY; if (!r) return null;
+  const id = r.strategy;
+  if (s.T - r.t > C.windowH * 3600_000) { rej.push({ strategy: id, reason: "Re-entry window expired" }); return null; }
+  if (r.n > C.max) { rej.push({ strategy: id, reason: `Re-entry limit (${C.max}) reached` }); return null; }
+  const d = sgn(r.dir);
+  if ((s.price - r.level) * d <= 0) { rej.push({ strategy: id, reason: `Re-entry waits for reclaim of ${r.level.toFixed(r.level > 1000 ? 0 : 2)}` }); return null; }
+  if (s.st15 !== d || s.st1h !== d) { rej.push({ strategy: id, reason: "Re-entry: 15m/1h no longer aligned" }); return null; }
+  if (s.st4h === -d || s.st5 !== d || (s.ema20 - s.ema50) * d <= 0 || !(s.chop5 < 55) || !inSession(s)) { rej.push({ strategy: id, reason: "Re-entry: 5m trend/chop/session not clean" }); return null; }
+  const swing = r.dir === "long" ? s.swingLo5 - 0.15 * s.atr5 : s.swingHi5 + 0.15 * s.atr5;
+  const stop = r.dir === "long" ? Math.min(swing, s.price - 0.5 * s.atr5) : Math.max(swing, s.price + 0.5 * s.atr5);
+  const risk = Math.abs(s.price - stop); if (!(risk > 0) || risk > 4 * s.atr5) { rej.push({ strategy: id, reason: "Re-entry stop out of bounds" }); return null; }
+  const why = [`RE-ENTRY #${r.n} after stop at ${r.level.toFixed(r.level > 1000 ? 0 : 2)}`, "Level reclaimed", "5m/15m/1h aligned", s.st4h === d ? "4H bias aligned" : "4H neutral"];
+  const score = 68 + (s.st4h === d ? 6 : 0) + 4 + contextScore(s, r.dir, "trend", why);
+  return { strategy: id, dir: r.dir, entryRef: s.price, stop, score, why, regime: s.regime, barT: s.T, reentry: true };
+}
+
+export function evaluate(s: Snap, enabled: Record<string, boolean> = {}, S?: Series, st?: State): { signals: Signal[]; rejects: Reject[] } {
   const signals: Signal[] = [], rejects: Reject[] = [];
   if (!isFinite(s.atr5) || !isFinite(s.atr15) || !isFinite(s.chop15) || !isFinite(s.price)) { rejects.push({ strategy: "TREND_MTF", reason: "Indicators warming up" }); return { signals, rejects }; }
-  for (const id of STRATEGIES) {
-    if (enabled[id] === false || CFG.RISK_SCALE[id] === 0 || (OPT_IN.includes(id) && !(CFG.RISK_SCALE[id] > 0))) { rejects.push({ strategy: id, reason: "Strategy switched off" }); continue; }
-    if (!S && (id === "D_BEARTRAP" || id === "D_THRUST" || id === "HTF_SWEEP" || id === "EMA_CROSS" || id === "SSR" || id === "EMA_PB")) continue;
-    const sig = RUNNERS[id](s, S as Series, rejects);
+  const off = (id: StrategyId) => enabled[id] === false || CFG.RISK_SCALE[id] === 0 || (OPT_IN.includes(id) && !(CFG.RISK_SCALE[id] > 0));
+  // shared pipeline for every candidate: regime gate → AI filter → risk agent (body stop) → validator agent
+  const admit = (id: StrategyId, sig: Signal) => {
     const gate = CFG.REGIME_GATE[id];
-    if (sig && gate !== undefined && S) {
+    if (gate !== undefined && S) {
       const e = s.i1d >= 0 ? S.ema50D[s.i1d] : NaN, dist = isFinite(e) ? ((s.price - e) / s.price) * sgn(sig.dir) : NaN;
-      if (!(dist > gate)) { rejects.push({ strategy: id, reason: `Daily regime gate: ${isFinite(dist) ? (dist * 100).toFixed(1) + "%" : "n/a"} vs EMA50D, needs >${(gate * 100).toFixed(1)}% in trade direction` }); continue; }
+      if (!(dist > gate)) { rejects.push({ strategy: id, reason: `Daily regime gate: ${isFinite(dist) ? (dist * 100).toFixed(1) + "%" : "n/a"} vs EMA50D, needs >${(gate * 100).toFixed(1)}% in trade direction` }); return; }
       sig.why.push(`Daily regime aligned (${(dist * 100).toFixed(1)}% beyond EMA50D)`);
     }
-    if (sig) {
-      sig.score = Math.max(10, Math.min(97, Math.round(sig.score)));
-      const M = CFG.ML_FILTER;
-      if (M && S) {
-        const p = mlProb(modelInput(signalFeatures(s, S, sig), id, ML_IS_GOLD), M);
-        sig.why.push(`AI filter p(win) ${(p * 100).toFixed(0)}% vs ${(M.thr * 100).toFixed(0)}% needed${CFG.ML_SHADOW ? " (shadow)" : ""}`);
-        if (p < M.thr && !CFG.ML_SHADOW) { rejects.push({ strategy: id, reason: `AI filter: p(win) ${(p * 100).toFixed(0)}% < ${(M.thr * 100).toFixed(0)}%` }); continue; }
-      }
-      signals.push(sig);
+    sig.score = Math.max(10, Math.min(97, Math.round(sig.score)));
+    const M = CFG.ML_FILTER;
+    if (M && S) {
+      const p = mlProb(modelInput(signalFeatures(s, S, sig), id, ML_IS_GOLD), M);
+      sig.why.push(`AI filter p(win) ${(p * 100).toFixed(0)}% vs ${(M.thr * 100).toFixed(0)}% needed${CFG.ML_SHADOW ? " (shadow)" : ""}`);
+      if (p < M.thr && !CFG.ML_SHADOW) { rejects.push({ strategy: id, reason: `AI filter: p(win) ${(p * 100).toFixed(0)}% < ${(M.thr * 100).toFixed(0)}%` }); return; }
     }
+    if (CFG.BODY_SL.on && S) {
+      const b = bodyStop(s, S, sig);
+      if (b) { sig.why.push(`Body stop ${b.stop.toFixed(b.stop > 1000 ? 0 : 2)} (${b.basis}) vs ${sig.stop.toFixed(sig.stop > 1000 ? 0 : 2)}`); sig.stop = b.stop; sig.bodyStop = true; }
+    }
+    if (CFG.VALIDATOR.on && S) {
+      const v = validateSignal(s, S, sig);
+      if (!v.ok) { rejects.push({ strategy: id, reason: "Validator: " + v.votes.filter((x) => !x.pass).map((x) => x.note).join("; ") }); return; }
+      sig.why.push("Validator agreed" + (v.roomR !== null ? ` (${v.roomR.toFixed(1)}R of room)` : ""));
+    }
+    signals.push(sig);
+  };
+  for (const id of STRATEGIES) {
+    if (off(id)) { rejects.push({ strategy: id, reason: "Strategy switched off" }); continue; }
+    if (!S && (id === "D_BEARTRAP" || id === "D_THRUST" || id === "HTF_SWEEP" || id === "EMA_CROSS" || id === "SSR" || id === "EMA_PB")) continue;
+    const sig = RUNNERS[id](s, S as Series, rejects);
+    if (sig) admit(id, sig);
+  }
+  if (CFG.REENTRY.on && st?.reentry && S && !st.pos && !off(st.reentry.strategy)) {
+    const sig = sReentry(s, S, st, rejects);
+    if (sig) admit(sig.strategy, sig);
   }
   signals.sort((a, b) => b.score - a.score);
   return { signals, rejects };
@@ -678,6 +801,7 @@ export type Position = {
   riskAmt: number; entryFee: number; fundingPaid: number; exits: Exit[];
   tp1Done: boolean; tp2Done: boolean; tp3Done: boolean; openT: number; lastFundT: number; maxHoldH: number;
   plan?: { t: number; msg: string }[]; planned?: boolean;
+  reN?: number; bodyStop?: boolean; // re-entry chain depth; stop came from the candle-body rule
   score: number; why: string[]; regime: string;
 };
 export type Trade = {
@@ -694,6 +818,7 @@ export type State = {
   cb: { consec: number; cooldownUntil: number; trips: number };
   stats: { all: Stat; by: Record<string, Stat> };
   enabled: Record<string, boolean>; created: number;
+  reentry?: { strategy: StrategyId; dir: Dir; level: number; t: number; n: number } | null; // armed by a losing stop-out (REENTRY)
   cfg?: Partial<typeof CFG>; // live overrides chosen from backtests (applied each run)
 };
 
@@ -752,6 +877,7 @@ export function entryGates(st: State, sig: Signal, t: number): GateResult {
   if (st.day.trades >= CFG.MAX_TRADES_PER_DAY) return { ok: false, reason: "Daily trade cap reached" };
   if (st.day.halted || (st.markedEquity ?? st.equity) <= st.day.startEquity * (1 - CFG.DAILY_LOSS_LIMIT)) return { ok: false, reason: "Daily marked loss limit hit" };
   if ((st.lastSig[sig.strategy] ?? 0) >= sig.barT) return { ok: false, reason: "Signal already acted on" };
+  if (sig.reentry && sig.score < CFG.REENTRY.minScore) return { ok: false, reason: `Re-entry needs score ≥ ${CFG.REENTRY.minScore} (got ${sig.score})` };
   return { ok: true };
 }
 
@@ -761,7 +887,7 @@ export function openPosition(st: State, sig: Signal, fillRef: number, t: number)
   const entry = fillRef * (1 + d * CFG.SLIPPAGE);
   if ((sig.stop - entry) * d >= 0) return null; // price already through stop
   const minStop = Math.max(CFG.MIN_STOP_PCT, CFG.MIN_STOP_BY[sig.strategy] ?? 0);
-  if (minStop > 0 && Math.abs(entry - sig.stop) < minStop * entry) sig = { ...sig, stop: entry - d * minStop * entry };
+  if (!sig.bodyStop && minStop > 0 && Math.abs(entry - sig.stop) < minStop * entry) sig = { ...sig, stop: entry - d * minStop * entry };
   const stopDist = Math.abs(entry - sig.stop);
   if ((entry * (2 * CFG.TAKER_FEE + 2 * CFG.SLIPPAGE)) / stopDist > CFG.MAX_COST_R) return null;
   const costPerUnit = entry * CFG.TAKER_FEE + sig.stop * (CFG.TAKER_FEE + CFG.SLIPPAGE);
@@ -777,7 +903,7 @@ export function openPosition(st: State, sig: Signal, fillRef: number, t: number)
     tp1: entry + d * T.tp1 * R, tp2: entry + d * T.tp2 * R, tp3: entry + d * T.tp3 * R,
     originalQty: qty, remainingQty: qty, closedQty: 0, riskAmt, entryFee, fundingPaid: 0, exits: [],
     tp1Done: false, tp2Done: false, tp3Done: false, openT: t, lastFundT: t, maxHoldH: T.maxHoldH,
-    score: sig.score, why: sig.why, regime: sig.regime,
+    score: sig.score, why: sig.why, regime: sig.regime, reN: sig.reentry ? (st.reentry?.n ?? 0) : 0, bodyStop: !!sig.bodyStop,
   };
   st.pos = p; st.lastSig[sig.strategy] = sig.barT; rollDay(st, t); st.day.trades++;
   markEquity(st, entry);
@@ -827,6 +953,9 @@ function finalize(st: State, t: number, lastKind: string): Trade {
   else { st.cb.consec++; if (st.cb.consec >= CFG.CB_LOSSES) { st.cb.cooldownUntil = t + CFG.CB_COOLDOWN_MS; st.cb.trips++; st.cb.consec = 0; } }
   rollDay(st, t); st.day.pnl += net;
   st.peak = Math.max(st.peak, st.equity); st.maxDD = Math.max(st.maxDD, (st.peak - st.equity) / st.peak);
+  // arm / clear the re-entry agent: only a losing stop-out arms it; anything else ends the chain
+  if (CFG.REENTRY.on && lastKind === "stop" && net < 0 && !p.tp1Done) st.reentry = { strategy: p.strategy, dir: p.dir, level: p.stop, t, n: (p.reN ?? 0) + 1 };
+  else if (st.reentry) st.reentry = null;
   st.pos = null; updateProbation(st);
   return tr;
 }
@@ -881,7 +1010,7 @@ export function unrealized(p: Position | null, px: number): number {
 // the NEXT 5m bar open. Position path uses 5m high/low (stop-first). Funding and
 // F&G history are not available here → context terms neutral, funding charged as cost.
 export function backtest(f: Frames, opts: { startEquity?: number; only?: StrategyId; warmupBars?: number; cfg?: Partial<typeof CFG> } = {}) {
-  const saved = { ...CFG }; if (opts.cfg) Object.assign(CFG, opts.cfg);
+  const saved = { ...CFG }; if (opts.cfg) Object.assign(CFG, overlayNested(CFG, opts.cfg));
   try { return backtestInner(f, opts); } finally { Object.assign(CFG, saved); }
 }
 function backtestInner(f: Frames, opts: { startEquity?: number; only?: StrategyId; warmupBars?: number }) {
@@ -897,7 +1026,7 @@ function backtestInner(f: Frames, opts: { startEquity?: number; only?: StrategyI
     const sampledEquity = markEquity(st, b.c);
     if (!st.pos) {
       const snap = snapshot(S, i);
-      const { signals } = evaluate(snap, opts.only ? Object.fromEntries(STRATEGIES.map(s => [s, s === opts.only])) : st.enabled, S);
+      const { signals } = evaluate(snap, opts.only ? Object.fromEntries(STRATEGIES.map(s => [s, s === opts.only])) : st.enabled, S, st);
       for (const sig of signals) {
         signalsSeen[sig.strategy] = (signalsSeen[sig.strategy] ?? 0) + 1;
         const g = entryGates(st, sig, b.ct); if (!g.ok) continue;

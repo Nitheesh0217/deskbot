@@ -233,6 +233,12 @@ nav.tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 25; backgroun
       <p class="note" style="margin-top:4px">What each strategy said on the last 5-minute check.</p>
       <div class="why" id="why"></div>
     </div>
+
+    <div class="card" id="deskCard">
+      <h2>Agent desk</h2>
+      <p class="note" style="margin-top:4px">Specialist agents run inside every 5-minute cloud check. This is what each one saw.</p>
+      <div id="deskBody"></div>
+    </div>
   </section>
 
   <!-- STRATEGIES -->
@@ -282,18 +288,25 @@ nav.tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 25; backgroun
 
   <!-- SYSTEM -->
   <section class="view" id="v-system" aria-label="System" hidden>
+    <div class="card" aria-label="Evidence and operational health">
+      <h2>Evidence and operational health</h2>
+      <p class="note" id="evidenceMode">Waiting for status. This is not a trade forecast.</p>
+      <div class="list" id="evidenceRows"></div>
+      <ul class="note" id="evidenceIssues" aria-live="polite"></ul>
+    </div>
     <div class="card">
-      <h2>Backtest of the live v5.1 config</h2>
+      <h2>Historical BTC validation (v5.1)</h2>
+      <p class="note">Historical research only. This result does not certify the current runtime, gold book or configuration.</p>
       <p class="note" style="margin-top:4px" id="btSub">—</p>
       <svg class="chart" id="btChart" viewBox="0 0 340 170" aria-label="Backtest equity curve"></svg>
       <div class="scroll-x" style="margin-top:10px"><table id="btTable"></table></div>
     </div>
     <div class="card">
-      <h2>What the bot learned (v5.1)</h2>
+      <h2>Historical research lessons (v5.1)</h2>
       <div class="list" style="margin-top:8px">
         <div class="li"><div class="a">Trade with the daily regime</div><div class="b up">PF 1.03 → 1.28</div><div class="c">4H trend longs made +0.48R in 2023, then −0.56R in 2026 while shorts turned positive. Now a trend trade needs price 3%+ beyond the daily EMA50 in its direction.</div></div>
-        <div class="li"><div class="a">Stops were too tight for fees</div><div class="b">0.3–0.5R lost</div><div class="c">Intraday setups won before costs but paid a third to half of 1R in fees. Sweep, session and VWAP are off; MTF trend gets a 1.2% minimum stop.</div></div>
-        <div class="li"><div class="a">Don't move to breakeven early</div><div class="b">2.1R vs 0.29R</div><div class="c">Winners typically ran 2.1R before closing, losers only 0.29R. Exits now keep the original stop until TP2.</div></div>
+        <div class="li"><div class="a">Stops were too tight for fees</div><div class="b">0.3–0.5R lost</div><div class="c">The v5.1 study disabled sweep, session and VWAP and used a 1.2% MTF minimum stop. Current per-book settings may differ; inspect System and Strategies.</div></div>
+        <div class="li"><div class="a">Breakeven changes need testing</div><div class="b">2.1R vs 0.29R</div><div class="c">The v5.1 study favored keeping the original stop until TP2. Later per-book trade-manager rules can change exits; historical conclusions do not validate those rules.</div></div>
         <div class="li"><div class="a">Candles alone can't call direction</div><div class="b">49.5–52.3%</div><div class="c">Logistic, LightGBM and neural-net direction models hit coin-flip accuracy out-of-sample and lost after fees. None of them trades.</div></div>
       </div>
     </div>
@@ -348,6 +361,7 @@ nav.tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 25; backgroun
   </div>
 </nav>
 
+<script src="./evidence.js"></script>
 <script>
 const SNAP = {"state":{"state":{"cb":{"trips":0,"consec":0,"cooldownUntil":0},"cfg":{"EXIT_MODE":"HOLD","RISK_SCALE":{"D_THRUST":1,"HTF_TREND":1,"SWEEP_REV":0,"TREND_MTF":0.5,"D_BEARTRAP":1,"SESSION_BO":0,"VWAP_REVERT":0},"MIN_STOP_BY":{"TREND_MTF":0.012},"REGIME_GATE":{"HTF_TREND":0.03,"TREND_MTF":0.03,"D_BEARTRAP":0.03},"HTF_DONCHIAN":55},"day":{"pnl":0,"date":"2026-10-22","trades":1,"startEquity":352.56},"pos":{"id":"V5-1792682161585","dir":"short","tp1":81067.56399661326,"tp2":80628.53257322652,"tp3":79969.98543814641,"why":["NY break of London range","Volume ≥1.3×","4H aligned","Funding 0.0013%/h (+5)","F&G 68 (+5)","ROC momentum (+5)"],"stop":81506.59542,"entry":81506.59542,"openT":1792682161585,"score":89,"stop0":81945.62684338674,"riskAmt":1.7628,"tp1Done":true,"tp2Done":false,"tp3Done":false,"strategy":"SESSION_BO","remainingQty":0.0016662443120658082},"peak":352.56,"maxDD":0,"stats":{"by":{},"all":{"n":0,"net":0,"sumR":0,"wins":0,"losses":0}},"equity":353.15413561347225,"enabled":{"D_THRUST":true,"HTF_TREND":true,"SWEEP_REV":false,"TREND_MTF":true,"D_BEARTRAP":true,"SESSION_BO":true,"VWAP_REVERT":true},"version":"5.1.0","startEquity":352.56},"carried":{"from":"DeskBot v3 cloud (Supabase bot_state)","v3Equity":352.55836833,"v3Trades":3,"v3StartEquity":300},"last_run":{"ms":546,"ts":"2026-10-22T18:01:47.762Z","risk":0.02,"upnl":0.51,"action":"HOLD","market":{"oi":43281.6914,"fng":68,"poc":82841.1,"st5":-1,"atr5":136.1,"mark":81141,"st15":-1,"st1h":-1,"st4h":-1,"vwap":82257.1,"atr15":243.3,"chop5":48.6,"price":81202,"rsi15":36.1,"rsi1h":25.9,"chop15":48.6,"ema50D":80736.2,"regime":"TREND","funding":0.0000125,"vwapDev":-1.32,"fngLabel":"Greed"},"source":"hyperliquid","decision":null},"updated_at":"2026-10-22T18:01:48.308+00:00"},
 "events":[{"ts":"2026-10-22T18:01:47.529295+00:00","kind":"CONFIG","strategy":null,"msg":"Switched to v5.1 (ML lessons): daily regime gate 3% on trend strategies, TREND_MTF 1.2% min stop, HOLD exits, sweep/session/VWAP off. 3.5y backtest PF 1.21 vs 1.02; past year +0.03R vs −0.08R/trade."},{"ts":"2026-10-22T18:00:55.632342+00:00","kind":"BACKTEST","strategy":null,"msg":"Backtest v5.0-live-cfg 365d (binance): 82 trades, -0.08R avg, $1000→$963"},{"ts":"2026-10-22T18:00:19.574054+00:00","kind":"BACKTEST","strategy":null,"msg":"Backtest v5.1-ml-lessons 365d (binance): 35 trades, 0.03R avg, $1000→$998"},{"ts":"2026-10-22T16:51:02.074814+00:00","kind":"TP1","strategy":"SESSION_BO","msg":"TP1 filled @ 81067.6 · stop → 81506.6"},{"ts":"2026-10-22T15:16:02.542067+00:00","kind":"OPEN","strategy":"SESSION_BO","msg":"SESSION_BO SHORT @ 81506.6 · stop 81945.6 · TP 81068/80629/79970 · risk $1.76 · score 89"},{"ts":"2026-10-22T01:50:50.632209+00:00","kind":"INIT","strategy":null,"msg":"DeskBot 5.0.0 initialised at $352.56 (carried from v3)"}],
@@ -466,6 +480,21 @@ function renderDesk() {
   const seen = new Set();
   (dec.rejects || []).forEach((r) => { if (seen.has(r.strategy)) return; seen.add(r.strategy); rows.push(`<div><span class="s">${esc(r.strategy)}</span><span class="muted">${esc(r.reason)}</span></div>`); });
   $("why").innerHTML = rows.join("") || `<p class="note">Waiting for the next check.</p>`;
+  renderAgents(lr);
+}
+function renderAgents(lr) {
+  const d = (lr && lr.desk) || null, box = $("deskBody");
+  if (!d) { box.innerHTML = `<p class="note">The desk reports after the next cloud check (v5.8).</p>`; return; }
+  const c = d.chart || {}, tr = c.trend || {}, arrow = (v) => (v === 1 ? "▲" : v === -1 ? "▼" : "·");
+  const chip = (name, on) => `<span class="chip" style="margin-right:6px;opacity:${on ? 1 : 0.55}">${name} ${on ? "ON" : "off"}</span>`;
+  const lv = (x) => (x ? `${esc(x.name)} $${fmtPx(x.px)} <span class="faint">(${x.atr} ATR)</span>` : "—");
+  const ago2 = (ts) => ago(ts);
+  box.innerHTML =
+    `<div style="margin:8px 0">${chip("Body stop", d.body)}${chip("Re-entry", !!d.reentry)}${chip("Validator", d.validator)}</div>` +
+    `<div class="grid2"><div><div class="k">Chart agent · bias</div><div class="v ${c.bias === "bull" ? "up" : c.bias === "bear" ? "down" : ""}">${esc((c.bias || "—").toUpperCase())} · 1m${arrow(tr.m1)} 5m${arrow(tr.m5)} 15m${arrow(tr.m15)} 1h${arrow(tr.h1)} 4h${arrow(tr.h4)}</div></div>` +
+    `<div><div class="k">Nearest support</div><div class="v">${lv(c.support)}</div></div><div><div class="k">Nearest resistance</div><div class="v">${lv(c.resistance)}</div></div>` +
+    `<div><div class="k">Re-entry</div><div class="v">${d.reentry && d.reentry.armed ? `armed · reclaim $${fmtPx(d.reentry.armed.level)}` : "not armed"}</div></div></div>` +
+    `<div class="note" style="margin-top:10px"><b>Recent agent activity</b>${(DATA.agents || []).filter((a) => a.agent !== "chart").slice(0, 8).map((a) => `<div>${esc(ago2(a.ts))} · <b>${esc(a.agent)}</b> · ${esc(a.input_summary || "")}${a.output && a.output.verdict ? ` — ${esc(a.output.verdict)}: ${esc(a.output.reason || "")}` : ""}${a.error ? ` <span class="down">${esc(a.error)}</span>` : ""}</div>`).join("") || `<div class="muted">No signals or adjustments yet. Agents log when they have something to say.</div>`}</div>`;
 }
 
 function renderStrategies() {
@@ -498,6 +527,10 @@ function renderEvents() {
 }
 
 function renderSystem() {
+  const evidence = globalThis.DeskBotEvidence.summarize(RAW, Date.now(), LIVE);
+  $("evidenceMode").textContent = evidence.mode + " · Observations, not a forecast or execution authorization.";
+  $("evidenceRows").innerHTML = evidence.rows.map((r) => `<div class="li"><div class="a">${esc(r.instrument)}</div><div class="b">${r.fresh ? "Recent timestamps" : "STALE / UNKNOWN"}</div><div class="c">Last run UTC: ${esc(r.runAt)} · ${esc(r.approval)} · AI: ${esc(r.ai)}</div></div>`).join("");
+  $("evidenceIssues").innerHTML = evidence.issues.map((s) => `<li>${esc(s)}</li>`).join("");
   const b = DATA.bt, S = DATA.state || {}, lr = S.last_run || {};
   if (b && b.curve) {
     const c = b.curve, W = 340, H = 170, L = 38, Rr = 6, T = 10, B = 22;
@@ -527,7 +560,7 @@ function renderSystem() {
     ["Data source", lr.source === "binance" ? "Binance (fallback)" : "Hyperliquid perp"],
     ["Check took", lr.ms != null ? lr.ms + " ms" : "—"],
     ["Engine", "v" + (st.version || "5.1.0")],
-    ["Configuration", S.integrity ? (S.integrity.approved ? "Approved fingerprint" : "Entries paused: approval required") : "Not verified"],
+    ["Configuration", globalThis.DeskBotEvidence.configLabel(S.integrity)],
     ["Config fingerprint", S.integrity ? S.integrity.hash : "—"],
     ["Drawdown basis", st.markedEquity != null ? "Sampled marked equity (since upgrade)" : "Legacy realized equity"],
     ["Circuit breaker", st.cb && st.cb.cooldownUntil > Date.now() ? "Cooling down" : `${(st.cb && st.cb.consec) || 0} of 3 losses`],
@@ -617,6 +650,8 @@ async function chartDraw() {
     const legend = [];
     if (dc) { PL(dc.hi, "#5aa9e6", "4H 55-bar high", 1); PL(dc.lo, "#5aa9e6", "4H 55-bar low", 1); }
     if (m.asian && tf !== "1d" && tf !== "4h") { PL(m.asian.hi, cssVar("--fg-3"), "Asian high", 3); PL(m.asian.lo, cssVar("--fg-3"), "Asian low", 3); }
+    const dl = (((S.last_run || {}).desk || {}).chart || {}).levels || [];
+    dl.filter((x) => x.blocks && Math.abs(x.px - b[b.length - 1].c) / b[b.length - 1].c < 0.04).forEach((x) => PL(x.px, x.side === "support" ? cssVar("--up") : cssVar("--down"), "agent: " + x.name, 2));
     if (p) { PL(p.entry, cssVar("--fg"), `${p.dir.toUpperCase()} entry`, 0, 2); PL(p.stop, cssVar("--down"), "Stop", 0, 2);
       [["tp1", "TP1"], ["tp2", "TP2"], ["tp3", "TP3"]].forEach(([k, t]) => PL(p[k], cssVar("--up"), t + (p[k + "Done"] ? " ✓" : ""), p[k + "Done"] ? 2 : 0)); }
     // markers: closed trades + open entry
@@ -703,6 +738,7 @@ function fromApi(g) {
   return {
     state: { state: st, carried: st.carried, integrity: gold ? bk.integrity : g.integrity, last_run: gold ? bk.lastRun : g.lastRun, updated_at: gold ? bk.updated : g.updated },
     events: (g.events || []).filter((e) => mine(e) && (e.kind !== "SKIP" || Date.now() - new Date(e.ts).getTime() < 1800000)).slice(0, 40),
+    agents: (g.agents || []).filter(mine).slice(0, 30),
     trades: (g.trades || []).filter(mine), curve: (gold ? bk.curve : g.curve) || [],
     bt: r && /^LIVE_CONFIG/.test(r.label || "") ? { label: r.label, ran_at: g.backtest.ran_at, a: r.combined.all, by: r.combined.by, mdd: r.combined.maxDD, eq: r.combined.endEquity, f: r.from, t: r.to, curve: r.curve } : DATA.bt,
   };
@@ -710,12 +746,16 @@ function fromApi(g) {
 let mcp = null, busy = false, directOK = false;
 async function pullDirect() {
   try {
-    const r = await fetch(API, { cache: "no-store" });
-    if (!r.ok) return false;
+    const r = await fetch(API, { cache: "no-store", signal: AbortSignal.timeout(15000) });
+    if (!r.ok) throw new Error("status unavailable");
     const d = fromApi(await r.json());
-    if (!d.state.state || !d.state.updated_at) return false;
+    if (!d.state.state || !d.state.updated_at) throw new Error("status incomplete");
     DATA = d; LIVE = true; renderAll(); $("srcBanner").hidden = true; return true;
-  } catch (e) { return false; }
+  } catch (e) {
+    LIVE = false; renderSystem(); $("srcBanner").hidden = false;
+    $("srcBanner").textContent = "Disconnected from public status. Displaying previously received data or the saved snapshot; values may be stale.";
+    return false;
+  }
 }
 async function pull() {
   if (directOK || !mcp) { directOK = await pullDirect(); if (directOK || !mcp) return; }
@@ -725,10 +765,11 @@ async function pull() {
     const rows = parseRows(res);
     const d = rows && rows[0] && (typeof rows[0].d === "string" ? JSON.parse(rows[0].d) : rows[0].d);
     if (d && d.state) {
-      DATA = d; LIVE = true; renderAll();
+      DATA = d; RAW = null; LIVE = true; renderAll();
       $("srcBanner").hidden = true;
     } else throw { code: "parse" };
   } catch (err) {
+    LIVE = false; renderSystem();
     const code = err && err.code;
     const msg = code === "needs_reauth" ? "Reconnect Supabase in claude.ai Settings → Connectors to see live numbers."
       : code === "server_not_connected" ? "Add the Supabase connector in claude.ai Settings → Connectors to see live numbers."

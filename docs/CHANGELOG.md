@@ -1,5 +1,12 @@
 # Changelog
 
+## v5.8.0 — desk agents (2026-10-24)
+- New `agents.ts` + engine functions: chart agent (levels across 1m–4H), signal validator, risk agent (candle-body stop), re-entry agent, optional shadow-only AI review. All logged to `dbv5_agent_log`; dashboard gets an **Agent desk** card and `agent:` level lines on the Chart tab. See [AGENTS.md](AGENTS.md).
+- Chart agent is on. **Body-stop, re-entry and validator ship OFF**: in 1-year backtests (BTC two years, gold one year) every combination was worse than the live config. Numbers in AGENTS.md.
+- `dbv5_agent_log`: RLS enabled (it was open to the anon key), indexes, 14-day prune job.
+- Edge function now deploys from git via `.github/workflows/deploy.yml` (needs the `SUPABASE_ACCESS_TOKEN` repo secret). Live-only tweaks that were never committed (chat research brief, SKIP message, run-result fields) are now in git.
+- Config groups `BODY_SL`, `REENTRY`, `VALIDATOR` merge key-by-key. 54 tests.
+
 ## 5.6.1 — runtime integrity (pending deployment)
 - Per-book configuration fingerprints pause new paper entries on missing approval or drift; ongoing positions remain managed.
 - Isolate-local request serialization, read-only status configuration, explicit ML asset identity, bounded database requests.
