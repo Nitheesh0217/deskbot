@@ -7,7 +7,9 @@
   "scripts": {
     "audit:status": "node scripts/audit_status.mjs",
     "test": "node --import tsx --test tests/*.test.ts",
-    "typecheck": "tsc --noEmit --strict --target es2022 --lib es2022,dom --module esnext --moduleResolution bundler --allowImportingTsExtensions --skipLibCheck tests/deno_globals.d.ts supabase/functions/deskbot-v5/*.ts"
+    "typecheck": "tsc --noEmit --strict --target es2022 --lib es2022,dom --module esnext --moduleResolution bundler --allowImportingTsExtensions --skipLibCheck tests/deno_globals.d.ts supabase/functions/deskbot-v5/*.ts",
+    "build-info": "node scripts/gen_build_info.mjs",
+    "build-info:check": "node scripts/gen_build_info.mjs --check"
   },
   "devDependencies": {
     "tsx": "4.19.0",

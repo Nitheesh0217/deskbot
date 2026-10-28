@@ -35,3 +35,5 @@ See EVIDENCE_LOG.md for actual checks and remaining gaps. Historical October 26 
 
 7. Active strategies (SWEEP_REV, SESSION_BO, VWAP_REVERT, gold EMA_CROSS) differ from the displayed v5.1 validation and are net negative so far on small samples (BTC -3.4%, GOLD -7.9% over ~6 days).
 8. Config approval fingerprints are unset and enforcement is off; entries are not paused despite `approved=false`.
+
+9. Decision provenance (T006) is implemented in a PR but not deployed; production has no decision tables until the owner approves the migration. See PROVENANCE.md.

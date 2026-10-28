@@ -46,6 +46,13 @@ All CI and heartbeat runs fail in ~2 s with no runner assigned (see EVIDENCE_LOG
 
 Objective: decide with evidence whether SWEEP_REV, SESSION_BO, VWAP_REVERT (both books) and gold EMA_CROSS belong on the paper books. Method: for each active strategy and book, run the existing backtester with `only:<strategy>` on 365-day Binance windows (last year and prior year) using each book's exact live cfg, record n, expR, PF, OOS expR, maxDD and fees share; compare with the live per-strategy stats in `dbv5_state.stats.by`. Pre-register the rule before running: a strategy stays on only if expR > 0 after costs in both windows. Retain failures. No config change until results are reviewed; ignore the 5m-vs-1m manager difference by running with TRADER off for attribution.
 
+## T006 — Immutable decision provenance (IN PR; production migration + deploy pending owner approval)
+
+Objective: reconstruct any new paper entry from stored inputs. Spec and limits: PROVENANCE.md. Files: provenance.ts, build_info.ts (generated), index.ts wiring, runtime.ts (export canonical), migration 20261029_decision_provenance.sql, scripts/replay_decision.ts, scripts/gen_build_info.mjs, tests/provenance*.test.ts.
+Acceptance: record before state; fail closed; replay reproduces; mutation of live objects cannot change evidence; tamper detection; book isolation; no secrets; build identity current; outcome reconciles against original plan. Evidence: EVIDENCE_LOG.
+Rollback: revert the commit; the two tables are additive and may stay (empty or populated, unused).
+Next: T007 replay-fidelity mismatch report (PAXG first); T008 atomic/recoverable state-ledger transitions and cross-worker fencing; T009 bot_state access control.
+
 ## Next coding-agent prompt
 
 Latest T003 status: local website evidence/disconnection fixes and optional-AI quota fix VERIFIED by 79 tests/typecheck. Deployment BLOCKED by service authorization. See DEPLOYMENT_HANDOFF.md for exact targets, release order, smoke checks and rollback. T002's exact-artifact dependency remains before backend release; a separately reviewed website-only preview does not change trading behavior.

@@ -16,6 +16,7 @@ import { providersFromEnv, type Usage } from "./ai.ts";
 import { chat, validatePatch, mergeCfg, EDITABLE, type ChatTurn } from "./chat.ts";
 import { configIntegrity, serialExecutor } from "./runtime.ts";
 import { runDesk, aiReview, type AgentRow } from "./agents.ts";
+import { captureDecision, pickEntry, decisionIdFor } from "./provenance.ts";
 
 // Module config belongs to one request at a time. This is isolate-local; the
 // existing database lease still coordinates state writes across edge isolates.
@@ -30,6 +31,7 @@ const NEWS_MODE = Deno.env.get("NEWS_MODE") ?? "shadow";            // off | sha
 const NEWS_EVERY_MIN = +(Deno.env.get("NEWS_EVERY_MIN") ?? 30);
 const NEWS_AI = (Deno.env.get("NEWS_AI") ?? "on") !== "off";
 const AGENT_AI = (Deno.env.get("AGENT_AI") ?? "shadow") !== "off";   // optional free-LLM review of trades just taken (never blocks)
+const EXPERIMENT_ID = Deno.env.get("DESKBOT_EXPERIMENT_ID") ?? "baseline-paper";
 const CHAT_KEY = Deno.env.get("DESKBOT_CHAT_KEY") ?? "";
 const CHAT_DAILY_CAP = +(Deno.env.get("CHAT_DAILY_CAP") ?? 150);
 // Each book is a separate paper account (own equity, position, stats, cfg) in its own dbv5_state row.
@@ -70,8 +72,15 @@ async function saveTrades(trs: Trade[], sym: Sym = "BTC") {
   if (!trs.length) return;
   await upsert("dbv5_trades", trs.map(t => ({
     id: t.id, symbol: sym, strategy: t.strategy, dir: t.dir, entry: t.entry, exit_avg: t.exitAvg, net: t.net, r: t.r, fees: t.fees, funding: t.funding,
-    open_t: new Date(t.openT).toISOString(), close_t: new Date(t.closeT).toISOString(), reason: t.reason, data: t,
+    open_t: new Date(t.openT).toISOString(), close_t: new Date(t.closeT).toISOString(), reason: t.reason, data: { ...t, decisionId: decisionIdFor(t.id) },
   })));
+}
+// Immutable decision evidence: one atomic RPC writes the record and its input bars. Failure aborts the run BEFORE state is saved,
+// so a paper entry can never persist without its decision. (A decision row without a persisted position is possible after a later
+// failure; it is flagged as an orphan by the verifier rather than updated or deleted.)
+async function recordDecision(c: Awaited<ReturnType<typeof captureDecision>>) {
+  const ok = await rest("rpc/dbv5_record_decision", { method: "POST", headers: { Prefer: "" }, body: JSON.stringify({ d: { id: c.record.decisionId, sym: c.record.sym, ts: c.record.decidedAt, record: c.record, record_sha256: c.recordSha256 }, inputs: c.inputs.map((r) => ({ decision_id: r.decisionId, tf: r.tf, source: r.source, bars: r.bars, bars_sha256: r.barsSha256 })) }) });
+  if (ok !== true && ok !== false) throw new Error("decision record not acknowledged");
 }
 async function push(title: string, body: string) {
   if (!NTFY) return; try { await fetch(`https://ntfy.sh/${NTFY}`, { method: "POST", headers: { Title: title }, body }); } catch { /* optional */ }
@@ -129,10 +138,10 @@ async function runOnce(sym: Sym = "BTC") {
     if (m1.length) st.lastBarT = m1[m1.length - 1].ct;
     for (const t of closed) {
       const msg = `${t.strategy} ${t.dir.toUpperCase()} closed ${t.reason} · net $${t.net.toFixed(2)} (${t.r >= 0 ? "+" : ""}${t.r.toFixed(2)}R)`;
-      evs.push({ kind: t.net > 0 ? "WIN" : "LOSS", strategy: t.strategy, msg: tag + msg, data: { r: t.r, net: t.net }, symbol: sym });
+      evs.push({ kind: t.net > 0 ? "WIN" : "LOSS", strategy: t.strategy, msg: tag + msg, data: { r: t.r, net: t.net, decisionId: decisionIdFor(t.id) }, symbol: sym });
       await push(`DeskBot ${tag}${t.net > 0 ? "WIN" : "LOSS"}`, `${msg} · Eq $${st.equity.toFixed(2)}`);
     }
-    if (st.pos) for (const e of st.pos.exits) if (e.t > since && e.kind !== "stop") evs.push({ kind: e.kind.toUpperCase(), strategy: st.pos.strategy, symbol: sym, msg: `${tag}${e.kind.toUpperCase()} filled @ ${e.px.toFixed(1)} · stop → ${st.pos.stop.toFixed(1)}` });
+    if (st.pos) for (const e of st.pos.exits) if (e.t > since && e.kind !== "stop") evs.push({ kind: e.kind.toUpperCase(), strategy: st.pos.strategy, symbol: sym, msg: `${tag}${e.kind.toUpperCase()} filled @ ${e.px.toFixed(1)} · stop → ${st.pos.stop.toFixed(1)}`, data: { decisionId: decisionIdFor(st.pos.id), px: e.px, qty: e.qty, stop: st.pos.stop } });
   } else st.lastBarT = now;
 
   // 1b) news read (every NEWS_EVERY_MIN). Failure here never stops position management above.
@@ -160,7 +169,7 @@ async function runOnce(sym: Sym = "BTC") {
   let traderActs: string[] = [];
   if (st.pos) {
     const r = traderManage(st, snap, S, m1, snap.price, now); traderActs = r.acts;
-    for (const a of r.acts) evs.push({ kind: "MANAGE", strategy: st.pos?.strategy ?? r.closed?.strategy ?? null, msg: tag + a, symbol: sym });
+    for (const a of r.acts) evs.push({ kind: "MANAGE", strategy: st.pos?.strategy ?? r.closed?.strategy ?? null, msg: tag + a, symbol: sym, data: { decisionId: decisionIdFor((st.pos?.id ?? r.closed?.id)!), stop: st.pos?.stop ?? null } });
     if (r.closed) { closed.push(r.closed); const t = r.closed; evs.push({ kind: t.net > 0 ? "WIN" : "LOSS", strategy: t.strategy, msg: `${tag}${t.strategy} ${t.dir.toUpperCase()} closed by trade manager · net $${t.net.toFixed(2)} (${t.r >= 0 ? "+" : ""}${t.r.toFixed(2)}R)`, symbol: sym }); }
   }
   let action = st.pos ? "HOLD" : "SKIP"; let decision: unknown = null;
@@ -168,6 +177,7 @@ async function runOnce(sym: Sym = "BTC") {
   let opened: { strategy: string; dir: string; entry: number; stop: number; reentry?: boolean; why: string[] } | null = null;
   if (snap.T > st.lastEvalT) {
     st.lastEvalT = snap.T;
+    const stBeforeEval = JSON.parse(JSON.stringify(st)) as State;
     const { signals, rejects } = evaluate(snap, st.enabled, S, st); deskSignals = signals; deskRejects = rejects;
     if (flow) for (const sg of signals) { const a = flow.imb24 * (sg.dir === "long" ? 1 : -1); sg.why.push(`Order flow 24h ${a > 0 ? "with" : "against"} trade (${(flow.imb24 * 100).toFixed(1)}%, shadow)`); }
     decision = { signals: signals.map(s => ({ strategy: s.strategy, dir: s.dir, score: s.score, why: s.why })), rejects };
@@ -176,18 +186,21 @@ async function runOnce(sym: Sym = "BTC") {
       if (newsShadow && signals.length) notes.push(`(shadow) news filter would pause: ${newsShadow}`);
       const enforce = (Deno.env.get("DESKBOT_ENFORCE_APPROVAL") ?? "off") === "on";
       if (!integrity.approved) notes.push(`${enforce ? "New entries paused" : "Warning (not enforced)"}: ${integrity.reason}`);
-      for (const sig of newsBlock || (enforce && !integrity.approved) ? [] : signals) {
-        const g = entryGates(st, sig, now);
-        if (!g.ok) { notes.push(`${sig.strategy} ${sig.dir} ${sig.score}: ${g.reason}`); continue; }
-        const fillRef = ctx?.markPx && Math.abs(ctx.markPx - snap.price) / snap.price < 0.01 ? ctx.markPx : snap.price;
-        const p = openPosition(st, sig, fillRef, now);
-        if (!p) { notes.push(`${sig.strategy}: price already through stop`); continue; }
+      const refFor = () => (ctx?.markPx && Math.abs(ctx.markPx - snap.price) / snap.price < 0.01 ? ctx.markPx : snap.price);
+      const stateBefore = stBeforeEval;
+      const picked = newsBlock || (enforce && !integrity.approved) ? null : pickEntry(st, signals, now, refFor, notes);
+      if (picked) {
+        const { sig, p, fillRef } = picked;
         if (sym !== "BTC") p.id = `${sym}-${now}`;
+        await recordDecision(await captureDecision({
+          sym, now, experimentId: EXPERIMENT_ID, frames: { m5, m15, h1, h4 }, snapT: snap.T,
+          external: { ctx: ctx ? { funding: ctx.funding ?? null, oi: ctx.oi ?? null, markPx: ctx.markPx ?? null } : null, markPxUsed: fillRef, fng: fng?.value ?? null, flow: flow ?? null },
+          stateBefore, cfgResolved: resolvedCfg(st.cfg), integrity, signals, rejects, gateNotes: notes, newsBlock, chosen: sig, fillRef, position: p, equityBefore: stateBefore.equity, approvalEnforced: enforce,
+        }));
         opened = { strategy: sig.strategy, dir: sig.dir, entry: p.entry, stop: p.stop, reentry: !!sig.reentry, why: sig.why }; action = `OPEN_${sig.dir.toUpperCase()}`;
         const msg = `${sig.strategy} ${sig.dir.toUpperCase()} @ ${p.entry.toFixed(1)} · stop ${p.stop.toFixed(1)} · TP ${p.tp1.toFixed(0)}/${p.tp2.toFixed(0)}/${p.tp3.toFixed(0)} · risk $${p.riskAmt.toFixed(2)} · score ${sig.score}`;
-        evs.push({ kind: "OPEN", strategy: sig.strategy, msg: tag + msg, data: { why: sig.why, regime: sig.regime, qty: p.originalQty, flow }, symbol: sym });
+        evs.push({ kind: "OPEN", strategy: sig.strategy, msg: tag + msg, data: { why: sig.why, regime: sig.regime, qty: p.originalQty, flow, decisionId: decisionIdFor(p.id) }, symbol: sym });
         await push(`DeskBot ${tag}${action}`, msg);
-        break;
       }
       if (!opened) {
         const top = rejects.filter(r => !/Waits for 15m close/.test(r.reason)).slice(0, 4).map(r => `${r.strategy}: ${r.reason}`);
