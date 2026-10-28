@@ -1,0 +1,6 @@
+{
+  "_comment": "Challenger overlays are applied on top of each book's live cfg (data/live_cfg_2026-10-28.json). Config-only: the engine source is unchanged. BASE is the unchanged baseline.",
+  "BASE": {},
+  "A_COSTR50": { "MAX_COST_R": 0.5 },
+  "B_BE_TP1": { "EXIT_MODE": "BE_AT_TP1" }
+}

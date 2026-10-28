@@ -5,3 +5,10 @@ ml/data/
 *.csv
 *.parquet
 reports/
+
+!research/**/*.csv
+
+# research: raw 5m csv is reproduced from the committed .gz (sha in SHA256SUMS)
+research/**/kline5_BTC.csv
+research/**/kline5_PAXG.csv
+research/**/__pycache__/

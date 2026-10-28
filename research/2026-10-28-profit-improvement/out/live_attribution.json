@@ -1,0 +1,418 @@
+{
+ "total": {
+  "ALL": {
+   "n": 29,
+   "wins": 9,
+   "net": -39.699,
+   "sumR": -9.101,
+   "meanR": -0.314,
+   "frictionless": 4.597,
+   "slip": 13.079,
+   "fees": 31.555,
+   "funding": -0.339,
+   "cost": 44.296,
+   "risk": 166.04
+  },
+  "BTC": {
+   "n": 17,
+   "wins": 8,
+   "net": -11.964,
+   "sumR": -1.915,
+   "meanR": -0.113,
+   "frictionless": 16.241,
+   "slip": 8.185,
+   "fees": 20.252,
+   "funding": -0.232,
+   "cost": 28.205,
+   "risk": 110.16
+  },
+  "GOLD": {
+   "n": 12,
+   "wins": 1,
+   "net": -27.735,
+   "sumR": -7.186,
+   "meanR": -0.599,
+   "frictionless": -11.644,
+   "slip": 4.894,
+   "fees": 11.303,
+   "funding": -0.107,
+   "cost": 16.091,
+   "risk": 55.88
+  }
+ },
+ "strategy": {
+  "BTC/SESSION_BO": {
+   "n": 5,
+   "wins": 2,
+   "net": -4.957,
+   "sumR": -0.481,
+   "meanR": -0.096,
+   "frictionless": 2.535,
+   "slip": 2.187,
+   "fees": 5.329,
+   "funding": -0.024,
+   "cost": 7.492,
+   "risk": 29.68
+  },
+  "BTC/SWEEP_REV": {
+   "n": 12,
+   "wins": 6,
+   "net": -7.007,
+   "sumR": -1.434,
+   "meanR": -0.119,
+   "frictionless": 13.706,
+   "slip": 5.998,
+   "fees": 14.924,
+   "funding": -0.208,
+   "cost": 20.714,
+   "risk": 80.47
+  },
+  "GOLD/EMA_CROSS": {
+   "n": 5,
+   "wins": 0,
+   "net": -6.83,
+   "sumR": -4.117,
+   "meanR": -0.823,
+   "frictionless": -3.726,
+   "slip": 0.944,
+   "fees": 2.162,
+   "funding": -0.002,
+   "cost": 3.104,
+   "risk": 8.25
+  },
+  "GOLD/SESSION_BO": {
+   "n": 1,
+   "wins": 0,
+   "net": -4.297,
+   "sumR": -0.632,
+   "meanR": -0.632,
+   "frictionless": -2.129,
+   "slip": 0.68,
+   "fees": 1.53,
+   "funding": -0.043,
+   "cost": 2.168,
+   "risk": 6.8
+  },
+  "GOLD/SWEEP_REV": {
+   "n": 5,
+   "wins": 1,
+   "net": -16.249,
+   "sumR": -2.385,
+   "meanR": -0.477,
+   "frictionless": -6.065,
+   "slip": 3.06,
+   "fees": 7.137,
+   "funding": -0.014,
+   "cost": 10.184,
+   "risk": 33.94
+  },
+  "GOLD/TREND_MTF": {
+   "n": 1,
+   "wins": 0,
+   "net": -0.358,
+   "sumR": -0.052,
+   "meanR": -0.052,
+   "frictionless": 0.276,
+   "slip": 0.21,
+   "fees": 0.473,
+   "funding": -0.049,
+   "cost": 0.634,
+   "risk": 6.89
+  }
+ },
+ "exit": {
+  "STOP only": {
+   "n": 17,
+   "wins": 0,
+   "net": -75.346,
+   "sumR": -14.387,
+   "meanR": -0.846,
+   "frictionless": -45.668,
+   "slip": 9.168,
+   "fees": 20.627,
+   "funding": -0.116,
+   "cost": 29.678,
+   "risk": 93.48
+  },
+  "TP1>STOP (gave back)": {
+   "n": 3,
+   "wins": 1,
+   "net": -1.132,
+   "sumR": -0.031,
+   "meanR": -0.01,
+   "frictionless": 1.495,
+   "slip": 0.759,
+   "fees": 1.896,
+   "funding": -0.028,
+   "cost": 2.627,
+   "risk": 10.29
+  },
+  "TP path to BE/lock": {
+   "n": 2,
+   "wins": 2,
+   "net": 5.573,
+   "sumR": 0.797,
+   "meanR": 0.399,
+   "frictionless": 8.768,
+   "slip": 0.874,
+   "fees": 2.359,
+   "funding": -0.038,
+   "cost": 3.195,
+   "risk": 13.98
+  },
+  "full TP1>TP2>TP3": {
+   "n": 6,
+   "wins": 6,
+   "net": 31.564,
+   "sumR": 4.572,
+   "meanR": 0.762,
+   "frictionless": 39.726,
+   "slip": 2.069,
+   "fees": 6.2,
+   "funding": -0.107,
+   "cost": 8.162,
+   "risk": 41.4
+  },
+  "MANUAL": {
+   "n": 1,
+   "wins": 0,
+   "net": -0.358,
+   "sumR": -0.052,
+   "meanR": -0.052,
+   "frictionless": 0.276,
+   "slip": 0.21,
+   "fees": 0.473,
+   "funding": -0.049,
+   "cost": 0.634,
+   "risk": 6.89
+  }
+ },
+ "stop_width": {
+  "<0.15%": {
+   "n": 5,
+   "wins": 2,
+   "net": -6.232,
+   "sumR": -0.884,
+   "meanR": -0.177,
+   "frictionless": 3.135,
+   "slip": 2.765,
+   "fees": 6.732,
+   "funding": -0.13,
+   "cost": 9.367,
+   "risk": 34.46
+  },
+  "0.15-0.25%": {
+   "n": 15,
+   "wins": 3,
+   "net": -33.438,
+   "sumR": -7.184,
+   "meanR": -0.479,
+   "frictionless": -8.838,
+   "slip": 7.323,
+   "fees": 17.362,
+   "funding": -0.085,
+   "cost": 24.6,
+   "risk": 82.94
+  },
+  ">=0.25%": {
+   "n": 9,
+   "wins": 4,
+   "net": -0.028,
+   "sumR": -1.033,
+   "meanR": -0.115,
+   "frictionless": 10.3,
+   "slip": 2.991,
+   "fees": 7.461,
+   "funding": -0.124,
+   "cost": 10.329,
+   "risk": 48.63
+  }
+ },
+ "stop_width_x_book": {
+  "BTC <0.15%": {
+   "n": 2,
+   "wins": 1,
+   "net": -0.927,
+   "sumR": -0.117,
+   "meanR": -0.058,
+   "frictionless": 2.69,
+   "slip": 1.059,
+   "fees": 2.642,
+   "funding": -0.083,
+   "cost": 3.618,
+   "risk": 14.05
+  },
+  "BTC 0.15-0.25%": {
+   "n": 8,
+   "wins": 3,
+   "net": -13.104,
+   "sumR": -1.839,
+   "meanR": -0.23,
+   "frictionless": 2.262,
+   "slip": 4.479,
+   "fees": 10.924,
+   "funding": -0.037,
+   "cost": 15.366,
+   "risk": 56.07
+  },
+  "BTC >=0.25%": {
+   "n": 7,
+   "wins": 4,
+   "net": 2.067,
+   "sumR": 0.041,
+   "meanR": 0.006,
+   "frictionless": 11.289,
+   "slip": 2.647,
+   "fees": 6.686,
+   "funding": -0.112,
+   "cost": 9.222,
+   "risk": 40.04
+  },
+  "GOLD <0.15%": {
+   "n": 3,
+   "wins": 1,
+   "net": -5.305,
+   "sumR": -0.767,
+   "meanR": -0.256,
+   "frictionless": 0.444,
+   "slip": 1.706,
+   "fees": 4.09,
+   "funding": -0.046,
+   "cost": 5.749,
+   "risk": 20.41
+  },
+  "GOLD 0.15-0.25%": {
+   "n": 7,
+   "wins": 0,
+   "net": -20.334,
+   "sumR": -5.345,
+   "meanR": -0.764,
+   "frictionless": -11.099,
+   "slip": 2.844,
+   "fees": 6.439,
+   "funding": -0.048,
+   "cost": 9.235,
+   "risk": 26.88
+  },
+  "GOLD >=0.25%": {
+   "n": 2,
+   "wins": 0,
+   "net": -2.096,
+   "sumR": -1.074,
+   "meanR": -0.537,
+   "frictionless": -0.989,
+   "slip": 0.344,
+   "fees": 0.775,
+   "funding": -0.012,
+   "cost": 1.107,
+   "risk": 8.59
+  }
+ },
+ "fast_stop": {
+  "stop within 30 min": {
+   "n": 9,
+   "wins": 0,
+   "net": -40.129,
+   "sumR": -7.809,
+   "meanR": -0.868,
+   "frictionless": -24.486,
+   "slip": 4.813,
+   "fees": 10.83,
+   "funding": 0.0,
+   "cost": 15.643,
+   "risk": 48.34
+  },
+  "stop after 30 min": {
+   "n": 8,
+   "wins": 0,
+   "net": -35.217,
+   "sumR": -6.578,
+   "meanR": -0.822,
+   "frictionless": -21.181,
+   "slip": 4.354,
+   "fees": 9.797,
+   "funding": -0.116,
+   "cost": 14.035,
+   "risk": 45.14
+  },
+  "not a plain stop": {
+   "n": 12,
+   "wins": 9,
+   "net": 35.647,
+   "sumR": 5.286,
+   "meanR": 0.441,
+   "frictionless": 50.265,
+   "slip": 3.912,
+   "fees": 10.929,
+   "funding": -0.223,
+   "cost": 14.618,
+   "risk": 72.56
+  }
+ },
+ "direction": {
+  "short": {
+   "n": 27,
+   "wins": 9,
+   "net": -36.341,
+   "sumR": -7.079,
+   "meanR": -0.262,
+   "frictionless": 6.777,
+   "slip": 12.729,
+   "fees": 30.766,
+   "funding": -0.376,
+   "cost": 43.118,
+   "risk": 162.72
+  },
+  "long": {
+   "n": 2,
+   "wins": 0,
+   "net": -3.357,
+   "sumR": -2.022,
+   "meanR": -1.011,
+   "frictionless": -2.18,
+   "slip": 0.351,
+   "fees": 0.789,
+   "funding": 0.037,
+   "cost": 1.177,
+   "risk": 3.32
+  }
+ },
+ "uncertainty": {
+  "ALL": {
+   "n": 29,
+   "meanR": -0.314,
+   "ci95_iid": [
+    -0.559,
+    -0.053
+   ],
+   "ci95_block3": [
+    -0.519,
+    -0.128
+   ]
+  },
+  "BTC": {
+   "n": 17,
+   "meanR": -0.113,
+   "ci95_iid": [
+    -0.47,
+    0.256
+   ],
+   "ci95_block3": [
+    -0.402,
+    0.166
+   ]
+  },
+  "GOLD": {
+   "n": 12,
+   "meanR": -0.599,
+   "ci95_iid": [
+    -0.83,
+    -0.325
+   ],
+   "ci95_block3": [
+    -0.801,
+    -0.396
+   ]
+  }
+ }
+}

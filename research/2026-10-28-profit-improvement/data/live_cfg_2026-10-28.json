@@ -1,0 +1,25 @@
+{
+  "captured_utc": "2026-10-28T21:59:45Z",
+  "source": "dbv5_state.state (cfg, enabled, startEquity) read via Supabase execute_sql; engine version recorded in state: 5.8.0",
+  "books": {
+    "BTC": {
+      "startEquity": 352.56,
+      "cfg": {
+        "TRADER": true, "EXIT_MODE": "HOLD", "TRADER_PARTS": "be", "HTF_DONCHIAN": 55,
+        "RISK_SCALE": {"D_THRUST": 1, "HTF_TREND": 1, "SWEEP_REV": 1, "TREND_MTF": 1, "D_BEARTRAP": 1, "SESSION_BO": 1, "VWAP_REVERT": 1},
+        "MIN_STOP_BY": {"TREND_MTF": 0.012},
+        "REGIME_GATE": {"HTF_TREND": 0.03, "TREND_MTF": 0.03, "D_BEARTRAP": 0.03}
+      }
+    },
+    "GOLD": {
+      "startEquity": 350,
+      "cfg": {
+        "XC_TF": "15m", "TRADER": true, "EXIT_MODE": "HOLD", "TRADER_PARTS": "stall", "HTF_DONCHIAN": 55,
+        "RISK_SCALE": {"D_THRUST": 1, "EMA_CROSS": 0.25, "HTF_TREND": 1, "SWEEP_REV": 1, "TREND_MTF": 1, "D_BEARTRAP": 1, "SESSION_BO": 1, "VWAP_REVERT": 1},
+        "MIN_STOP_BY": {"TREND_MTF": 0.004},
+        "REGIME_GATE": {"HTF_TREND": 0.03, "TREND_MTF": 0.03, "D_BEARTRAP": 0.03}
+      }
+    }
+  },
+  "note": "All 11 strategy flags in state.enabled were true on both books; opt-in strategies (HTF_SWEEP, EMA_CROSS, SSR, EMA_PB) only run when RISK_SCALE > 0, i.e. EMA_CROSS on GOLD at 0.25."
+}

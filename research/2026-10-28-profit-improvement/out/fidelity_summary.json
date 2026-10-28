@@ -1,0 +1,22 @@
+{
+ "BTC": {
+  "replay": 14,
+  "live": 16,
+  "matched": 12,
+  "same_sign": 12,
+  "replay_netR": -1.13,
+  "live_netR": -2.204,
+  "replay_net": -5.0,
+  "live_net": -12.47
+ },
+ "GOLD": {
+  "replay": 10,
+  "live": 10,
+  "matched": 3,
+  "same_sign": 3,
+  "replay_netR": -7.993,
+  "live_netR": -6.362,
+  "replay_net": -18.14,
+  "live_net": -21.97
+ }
+}
