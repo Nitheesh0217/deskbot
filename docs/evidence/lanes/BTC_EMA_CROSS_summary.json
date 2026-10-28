@@ -1,0 +1,64 @@
+{
+ "lane": "BTC:EMA_CROSS",
+ "specVersion": "lane-spec-1",
+ "laneCfgSha256": "27fbb13c5364a2e054f5bac2eb9b2917928aba243a629d9a8e17bb3ff6b83598",
+ "window": {
+  "from": "2025-10-22T00:00:00.000Z",
+  "to": "2026-10-22T00:00:00.000Z",
+  "days": 365
+ },
+ "fidelityNote": "replay: 5m management path and next-bar-open fills, like engine.backtest; live manages on 1m and fills at the current price. Binance spot candles, not the traded venue.",
+ "A_independent_lane": {
+  "trades": 391,
+  "netR": -61.49,
+  "meanR": -0.157,
+  "net$": -259.75,
+  "winRate": 0.373,
+  "worstR": -1.05,
+  "cvar5R": -1.03,
+  "fees$": 201.92,
+  "exposurePct": 50.7,
+  "maxDD": 0.757,
+  "signalsSeen": 438,
+  "wouldHaveBeenAutoDisabled": {
+   "atTrade": 22,
+   "expR": -0.1859,
+   "closeT": 1763296799999
+  }
+ },
+ "B_inside_portfolio": {
+  "trades": 0,
+  "netR": 0,
+  "meanR": null,
+  "net$": 0,
+  "winRate": null,
+  "worstR": null,
+  "cvar5R": null,
+  "fees$": 0,
+  "exposurePct": 0,
+  "note": "same strategy as executed in the combined portfolio with auto-disable, probation, one position and first-match selection"
+ },
+ "C_hypothetical_not_executable_in_portfolio": {
+  "trades": 162,
+  "netR": -21.75,
+  "meanR": -0.134,
+  "net$": -131.11,
+  "winRate": 0.401,
+  "worstR": -1.03,
+  "cvar5R": -1.02,
+  "fees$": 80.12,
+  "exposurePct": 22.7,
+  "note": "lane trades that opened while the portfolio held another position (a subset of A, not an additional result)"
+ },
+ "laneTradesAlsoTakenByPortfolio": 0,
+ "portfolioTotal": {
+  "trades": 84,
+  "netR": -2.37
+ },
+ "logInvariants": {
+  "decisions": 391,
+  "outcomes": 391,
+  "decisionBeforeOutcome": true
+ },
+ "disclaimer": "descriptive, in-sample history; not a profitability claim"
+}

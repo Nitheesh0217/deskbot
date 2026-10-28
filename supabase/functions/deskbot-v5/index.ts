@@ -16,6 +16,8 @@ import { providersFromEnv, type Usage } from "./ai.ts";
 import { chat, validatePatch, mergeCfg, EDITABLE, type ChatTurn } from "./chat.ts";
 import { configIntegrity, serialExecutor } from "./runtime.ts";
 import { runDesk, aiReview, type AgentRow } from "./agents.ts";
+import { recordCoverage, dispositions, boundaryFlags } from "./coverage.ts";
+import type { StrategyTrace } from "./engine.ts";
 
 // Module config belongs to one request at a time. This is isolate-local; the
 // existing database lease still coordinates state writes across edge isolates.
@@ -166,9 +168,11 @@ async function runOnce(sym: Sym = "BTC") {
   let action = st.pos ? "HOLD" : "SKIP"; let decision: unknown = null;
   let deskSignals: Awaited<ReturnType<typeof evaluate>>["signals"] = []; let deskRejects: Awaited<ReturnType<typeof evaluate>>["rejects"] = [];
   let opened: { strategy: string; dir: string; entry: number; stop: number; reentry?: boolean; why: string[] } | null = null;
+  let covNow: unknown = null;
   if (snap.T > st.lastEvalT) {
+    const hadPos = !!st.pos, gateCopy = JSON.parse(JSON.stringify(st)) as State, trace: StrategyTrace[] = [];
     st.lastEvalT = snap.T;
-    const { signals, rejects } = evaluate(snap, st.enabled, S, st); deskSignals = signals; deskRejects = rejects;
+    const { signals, rejects } = evaluate(snap, st.enabled, S, st, trace); deskSignals = signals; deskRejects = rejects;
     if (flow) for (const sg of signals) { const a = flow.imb24 * (sg.dir === "long" ? 1 : -1); sg.why.push(`Order flow 24h ${a > 0 ? "with" : "against"} trade (${(flow.imb24 * 100).toFixed(1)}%, shadow)`); }
     decision = { signals: signals.map(s => ({ strategy: s.strategy, dir: s.dir, score: s.score, why: s.why })), rejects };
     if (!st.pos) {
@@ -194,6 +198,12 @@ async function runOnce(sym: Sym = "BTC") {
         evs.push({ kind: "SKIP", msg: tag + (notes.find((n) => !n.startsWith("Warning")) ?? top[0] ?? "No setup"), data: { notes, top, regime: snap.regime }, symbol: sym });
       }
     }
+    // Strategy coverage (observability only): why each strategy did or did not trade on this bar. Must never break a run.
+    try {
+      const enf = (Deno.env.get("DESKBOT_ENFORCE_APPROVAL") ?? "off") === "on";
+      const globalBlock = newsBlock ? `Entries paused: ${newsBlock}` : enf && !integrity.approved ? `New entries paused: ${integrity.reason}` : null;
+      covNow = recordCoverage(st, { T: snap.T, now, trace, boundary: boundaryFlags(snap.T, { "15m": snap.new15, "1h": snap.new1h, "4h": snap.new4h, "1d": snap.i1d >= 0 && S.d1[snap.i1d].ct === snap.T }), disp: dispositions(signals, { hadPos, opened: opened ? { strategy: opened.strategy as StrategyTrace["id"], dir: opened.dir } : null, globalBlock, gateState: gateCopy, now }) });
+    } catch (e) { notes.push(`coverage: ${(e as Error).message}`.slice(0, 120)); }
   }
   if (closed.length) await saveTrades(closed, sym);
 
@@ -213,7 +223,7 @@ async function runOnce(sym: Sym = "BTC") {
   const rows: AgentRow[] = [...desk.rows];
   if (opened && AGENT_AI) { try { const r = await aiReview(opened, opened.why, desk.chart, { providers: providersFromEnv(), usage: (sx._aiUsage ??= {}), now }); if (r) rows.push(r); } catch { /* optional, shadow only */ } }
   const ai = { providers: providersFromEnv().map((p) => p.name), usage: sx._aiUsage ?? {} };
-  const lastRun = { ts: new Date(now).toISOString(), sym, action, trader: { acts: traderActs, plan: st.pos?.plan ?? [] }, source, integrity, news, ai, upnl: +upnl.toFixed(2), market, decision, risk: dynamicRisk(st.equity), desk: desk.summary, ms: Date.now() - now };
+  const lastRun = { ts: new Date(now).toISOString(), sym, action, trader: { acts: traderActs, plan: st.pos?.plan ?? [] }, source, integrity, news, ai, upnl: +upnl.toFixed(2), market, decision, risk: dynamicRisk(st.equity), desk: desk.summary, coverage: covNow, ms: Date.now() - now };
   st.version = VERSION;
   await saveState(st, lastRun, sym);
   await upsert("dbv5_equity", [{ symbol: sym, ts: new Date(now).toISOString(), equity: +st.equity.toFixed(4), upnl: +upnl.toFixed(4), price: snap.price }]);
