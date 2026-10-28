@@ -33,13 +33,14 @@ export function classifyGate(reason: string): Code {
 }
 
 export type Cov = {
-  since: number; bars: number; due: number; completed: number; skippedData: number; failed: number; disabledBars: number; notDue: number;
+  since: number; bars: number; due: number; completed: number; windowClosed: number; skippedData: number; failed: number; disabledBars: number; notDue: number;
   noSetup: number; setups: number; gateRejected: number; portfolioBlocked: number; notSelected: number; entered: number;
   lastEvalT: number | null; lastCompletedT: number | null; lastSetupT: number | null; lastCode: Code | null; lastReason: string | null;
+  lastDueT: number | null; lastDueCode: Code | null; lastDueReason: string | null;   // most recent evaluation that was actually due
   reasons: Record<string, number>;   // normalised reason text -> count, for GATE_REJECTED / PORTFOLIO_BLOCKED / NO_SETUP / INSUFFICIENT_DATA / ERROR
 };
 export type CovMeta = { since: number; evalBars: number; missedBars: number; missedDue: Record<"15m" | "1h" | "4h" | "1d", number>; missingDue: Record<"15m" | "1h" | "4h" | "1d", number>; lastEvalT: number | null; lastLagMs: number | null };
-export const emptyCov = (now: number): Cov => ({ since: now, bars: 0, due: 0, completed: 0, skippedData: 0, failed: 0, disabledBars: 0, notDue: 0, noSetup: 0, setups: 0, gateRejected: 0, portfolioBlocked: 0, notSelected: 0, entered: 0, lastEvalT: null, lastCompletedT: null, lastSetupT: null, lastCode: null, lastReason: null, reasons: {} });
+export const emptyCov = (now: number): Cov => ({ since: now, bars: 0, due: 0, completed: 0, windowClosed: 0, skippedData: 0, failed: 0, disabledBars: 0, notDue: 0, noSetup: 0, setups: 0, gateRejected: 0, portfolioBlocked: 0, notSelected: 0, entered: 0, lastEvalT: null, lastCompletedT: null, lastSetupT: null, lastCode: null, lastReason: null, lastDueT: null, lastDueCode: null, lastDueReason: null, reasons: {} });
 export const emptyMeta = (now: number): CovMeta => ({ since: now, evalBars: 0, missedBars: 0, missedDue: { "15m": 0, "1h": 0, "4h": 0, "1d": 0 }, missingDue: { "15m": 0, "1h": 0, "4h": 0, "1d": 0 }, lastEvalT: null, lastLagMs: null });
 
 // prices, decimals and percentages vary bar to bar; timeframes and indicator lengths (1H, 15m, EMA20) must stay readable
@@ -100,12 +101,15 @@ export function recordCoverage(st: State, a: { T: number; now: number; trace: St
       const k = classifyReject(t.reason); code = k === "UNCLASSIFIED" ? "NO_SETUP" : k;
       if (code === "NOT_DUE" && /^Waits for /.test(t.reason) && missing.has(cadenceOf(t.id))) { code = "INSUFFICIENT_DATA"; reason = `Due ${cadenceOf(t.id)} bar is missing from the data feed`; }
     }
-    // bookkeeping
-    if (code === "NOT_DUE") c.notDue++;
-    else if (code === "DISABLED") c.disabledBars++;
+    // bookkeeping. "Due" = the strategy's own timeframe boundary closed on this bar (every bar for 5m strategies). A due bar spent outside the
+    // strategy's session window is still a completed evaluation (windowClosed), not a missed one.
+    const cad = cadenceOf(t.id), onBoundary = a.boundary ? (cad === "5m" ? true : a.boundary.due[cad]) : !/^Waits for /.test(reason);
+    if (code === "DISABLED") c.disabledBars++;
+    else if (!onBoundary) c.notDue++;
     else {
       c.due++;
-      if (code === "INSUFFICIENT_DATA") c.skippedData++; else if (code === "ERROR") c.failed++; else { c.completed++; c.lastCompletedT = a.T; }
+      if (code === "INSUFFICIENT_DATA") c.skippedData++; else if (code === "ERROR") c.failed++; else { c.completed++; c.lastCompletedT = a.T; if (code === "NOT_DUE") c.windowClosed++; }
+      c.lastDueT = a.T; c.lastDueCode = code; c.lastDueReason = reason.slice(0, 200);
     }
     if (valid) { c.setups++; c.lastSetupT = a.T; }
     if (code === "NO_SETUP") c.noSetup++; else if (code === "GATE_REJECTED") c.gateRejected++; else if (code === "PORTFOLIO_BLOCKED") c.portfolioBlocked++; else if (code === "NOT_SELECTED") c.notSelected++; else if (code === "ENTERED") c.entered++;

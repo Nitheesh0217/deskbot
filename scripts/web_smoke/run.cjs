@@ -23,7 +23,11 @@ const srv = http.createServer((q, r) => { const f = path.join(web, q.url === "/"
     await page.waitForTimeout(2500);
     const info = await page.evaluate(() => ({ prims: (window.CH && CH.prims && CH.prims.length) || (typeof CH !== "undefined" ? CH.prims.length : -1), setup: (document.getElementById("setupCard") || {}).innerText || "", zones: (window.__zoneRead && window.__zoneRead.zones.map((z) => z.label + " " + z.bot.toFixed(0) + "-" + z.top.toFixed(0))) || [], lwMsg: (document.getElementById("lwMsg") || {}).innerText }));
     result[name] = info; await page.screenshot({ path: path.join(outDir, `chart_${name}.png`), fullPage: true });
-    await page.evaluate(() => { const b = [...document.querySelectorAll("nav button, .tabs button, [data-tab]")].find((x) => /overview|home|now/i.test(x.textContent || x.dataset.tab || "")); if (b) b.click(); }); await page.waitForTimeout(500);
+    await page.evaluate(() => { const b = [...document.querySelectorAll("nav button, .tabs button, [data-tab]")].find((x) => /strateg/i.test(x.textContent || x.dataset.tab || "")); if (b) b.click(); }); await page.waitForTimeout(800);
+    result[name].strategies = await page.evaluate(() => [...document.querySelectorAll("#stratList .strat")].map((a) => ({ id: a.dataset.strategy, state: (a.querySelector(".opst") || {}).innerText, reason: (a.querySelector(".reason") || {}).innerText, paper: !!a.querySelector(".paper") })));
+    result[name].stratHead = await page.evaluate(() => document.getElementById("stratHead").innerText);
+    await page.screenshot({ path: path.join(outDir, `strategies_${name}.png`), fullPage: true });
+    await page.evaluate(() => { const b = [...document.querySelectorAll("nav button, .tabs button, [data-tab]")].find((x) => /desk|overview|home|now/i.test(x.textContent || x.dataset.tab || "")); if (b) b.click(); }); await page.waitForTimeout(500);
     await page.screenshot({ path: path.join(outDir, `overview_${name}.png`), fullPage: true });
   }
   await browser.close(); srv.close();

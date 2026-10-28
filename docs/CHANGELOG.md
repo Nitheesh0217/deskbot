@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — strategy coverage (evidence only; entries, sizing, exits and risk unchanged)
+- Per-strategy evaluation trace and reason codes (`coverage.ts`), counters in `state.cov`, `lastRun.coverage`; zero closed trades no longer looks like "not evaluated". Silent code paths now give reasons; a throwing strategy is isolated; VWAP sigma undefined until 4 bars of the UTC day. Audit: [STRATEGY_COVERAGE.md](STRATEGY_COVERAGE.md). Independent shadow lanes: [SHADOW_LANES.md](SHADOW_LANES.md).
+- Dashboard Strategies tab: all 11 strategies with an operational state (RUNNING, WAITING FOR FIRST BAR, DISABLED, DATA BLOCKED, ERROR) separate from sizing, counters, latest rejection reason, positions and closed trades separately, PAPER label, dated research references with a note when they disagree with the effective configuration.
+
 ## Unreleased — setup view and chart zones (no change to trading logic)
 - Dashboard: trade setup card (red stop block, green TP blocks, structure checks), chart layers for FVG, IFVG, order blocks, value area, premium/discount, BOS/CHoCH and liquidity, focus-on-trade view. See [ZONES.md](ZONES.md).
 - Chart agent now also logs per-timeframe zones (`lastRun.desk.chart.zones`). Zone reads never affect entries, stops, targets, sizing or risk, and a failure in them cannot break a run.
