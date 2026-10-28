@@ -37,7 +37,7 @@ Targets confirmed with authorized access: GitHub `Nitheesh0217/deskbot`; Vercel 
 |---|---|---|---|---|
 | Edge function `deskbot-v5` | v17 (`ezbr badda0e6…b33703`) | **v18** (`ezbr 37adb6e8…6ff2e6`) | branch build of `1ec864d` | 8/8 files byte-identical to the build; run 200, both books ok, balances unchanged |
 | Website preview | n/a | `dpl_DZCdCjmhhKPz6anRCfipdh2wn3SN` | `1ec864d` | `evidence.js` + `index.html` 200; content checks; local Chromium smoke |
-| Website production | `dpl_48ewRjcToSuEnL4LPRWLPoX2rV8C` (main@`5bb0271`) | built by Vercel git integration on merge to main | merge commit (see PR #1) | recorded in the follow-up commit |
+| Website production | `dpl_48ewRjcToSuEnL4LPRWLPoX2rV8C` (main@`5bb0271`) | **`dpl_B4xgsKeXFHyRQoLr4Xs1A76Nnncg`** READY, alias `deskbot-azure.vercel.app` moved to it | `main@a12bcaf` (merge of PR #1) | `index.html` byte-identical to repo; `evidence.js` 200, same ETag as the tested preview; evidence panel present; old false claim absent |
 | Heartbeat | has never executed (jobs get no runner) | latent approval-failure defect fixed on merge | `1ec864d` | unit-tested only; blocked on GitHub Actions account state |
 
 Database: no migration was applied for this release. (24 Oct: `agent_log_rls_index_prune`. A DROP of two duplicate `dbv5_agent_log` indexes was requested on 28 Oct and is pending the owner's approval.)
@@ -47,5 +47,5 @@ Database: no migration was applied for this release. (24 Oct: `agent_log_rls_ind
 - **Backend:** v17 was a build of `cd81d6f` plus a prompt-escape defect in `chat.ts`. To roll back, build `cd81d6f` (`for f in index engine agents data news ai chat runtime; do git show cd81d6f:supabase/functions/deskbot-v5/$f.ts | npx esbuild --loader=ts --format=esm --target=es2022 --charset=utf8 --minify-whitespace > out/$f.ts; done`) and redeploy those 8 files with `verify_jwt=false`. The quota fix is the only behavioural difference, so a rollback only re-allows a retry to exceed the per-provider daily cap by one call (providers are not configured today). Never restore an old `dbv5_state` snapshot over later fills.
 - **Heartbeat:** revert `scripts/check_health.mjs`; it will go red again for the approval reason.
 
-### Smoke tests still owed after the production website deploy
-Alias serves the new `index.html`/`evidence.js` pair; System tab shows the evidence panel; the heartbeat runs at all (requires fixing GitHub Actions account state first).
+### Smoke tests still owed
+The heartbeat actually executing (requires fixing GitHub Actions account state first, task T005). A real-browser check on the production URL itself (the Chromium run used the same files served locally).
