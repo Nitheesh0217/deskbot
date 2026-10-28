@@ -4,21 +4,10 @@
 import { CFG, STRATEGIES, OPT_IN, entryGates, type StrategyId, type StrategyTrace, type Signal, type State } from "./engine.ts";
 
 export type Code = "NOT_DUE" | "DISABLED" | "INSUFFICIENT_DATA" | "NO_SETUP" | "GATE_REJECTED" | "PORTFOLIO_BLOCKED" | "NOT_SELECTED" | "ERROR" | "ENTERED";
-export type Cadence = "5m" | "15m" | "1h" | "4h" | "1d";
-export const CADENCE_MS: Record<Cadence, number> = { "5m": 300_000, "15m": 900_000, "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000 };
-
+import { type Cadence, CADENCE_MS, cadenceFor, viewStrategy, type OpState } from "./coverage_view.ts";
+export { type Cadence, CADENCE_MS, type OpState };
 /** Timeframe on whose CLOSE each strategy can fire (the strategy still sees every 5m bar; off-cadence bars are NOT_DUE). */
-export function cadenceOf(id: StrategyId): Cadence {
-  switch (id) {
-    case "TREND_MTF": case "EMA_PB": return "5m";
-    case "SWEEP_REV": case "VWAP_REVERT": case "SESSION_BO": case "SSR": return "15m";
-    case "EMA_CROSS": return CFG.XC_TF;
-    case "HTF_TREND": return "4h";
-    case "HTF_SWEEP": return CFG.HSW_TF;
-    case "D_THRUST": return "1h";
-    case "D_BEARTRAP": return "1d";
-  }
-}
+export const cadenceOf = (id: StrategyId): Cadence => cadenceFor(id, CFG);
 
 /** Reason text -> code. Order matters. A test extracts every reason literal from engine.ts and fails if one is unclassified. */
 const RULES: [RegExp, Code][] = [
@@ -126,21 +115,8 @@ export function recordCoverage(st: State, a: { T: number; now: number; trace: St
   return now1;
 }
 
-export type OpState = "RUNNING" | "WAITING_FOR_BAR" | "DISABLED" | "DATA_BLOCKED" | "ERROR" | "NO_EVALUATION_YET";
-/** Operational state (separate from sizing). A strategy is RUNNING when it completed an evaluation at its latest due bar. */
+/** Operational state of one strategy in one book (separate from sizing). */
 export function operationalState(id: StrategyId, st: State, now: number) {
-  const c = st.cov?.[id], scale = CFG.RISK_SCALE[id], flag = st.enabled?.[id] === false;
-  const offReason = flag ? "disabled by flag (auto-off after weak live results or manual)" : scale === 0 ? "risk scale 0" : OPT_IN.includes(id) && !(scale > 0) ? "opt-in strategy with no risk scale set" : null;
-  const cad = cadenceOf(id), cms = CADENCE_MS[cad];
-  let state: OpState;
-  if (offReason) state = "DISABLED";
-  else if (!c || c.lastEvalT === null) state = "NO_EVALUATION_YET";
-  else if (c.lastCode === "ERROR") state = "ERROR";
-  else if (c.lastCode === "INSUFFICIENT_DATA") state = "DATA_BLOCKED";
-  else if (c.lastCode === "NOT_DUE") state = "WAITING_FOR_BAR";
-  else state = "RUNNING";
-  const staleMs = c?.lastCompletedT ? now - c.lastCompletedT : null;
-  const sizing = offReason ? 0 : (scale ?? 1) * (st.stats?.by?.[id] && st.stats.by[id].n >= CFG.PROBATION_MIN_TRADES && st.stats.by[id].sumR / st.stats.by[id].n < 0 ? 0.5 : 1);
-  return { id, state, offReason, cadence: cad, cadenceMs: cms, sizing, riskScale: scale ?? null, probation: !!(st.stats?.by?.[id] && st.stats.by[id].n >= CFG.PROBATION_MIN_TRADES && st.stats.by[id].sumR / st.stats.by[id].n < 0), lastCompletedAgeMs: staleMs, cov: c ?? null };
+  return viewStrategy({ id, cfg: CFG, riskScale: CFG.RISK_SCALE[id], optIn: OPT_IN.includes(id), enabledFlag: st.enabled?.[id], cov: st.cov?.[id] ?? null, stat: st.stats?.by?.[id], probationMin: CFG.PROBATION_MIN_TRADES, now });
 }
 export const allStates = (st: State, now: number) => STRATEGIES.map((id) => operationalState(id, st, now));

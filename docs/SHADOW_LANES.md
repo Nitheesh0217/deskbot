@@ -24,7 +24,7 @@ Evidence: `docs/evidence/lanes/*_summary.json` (events log sample beside it). Re
 |---|---|---|---|
 | BTC:SWEEP_REV (on in the book) | 606 trades, -0.24R mean, -146R, 15% exposure; auto-off would have fired at trade 57 | 30 trades, -0.17R mean, -5.2R | 297 of the 606 (49%), -0.20R mean |
 | BTC:EMA_CROSS (off in the book) | 391 trades, -0.16R mean, -61R, 51% exposure; auto-off would have fired at trade 22 | 0 trades (off) | 162 of 391 |
-Reading: the portfolio traded SWEEP_REV 30 times where the strategy produced 606 independent opportunities; the other 576 were displaced, blocked or came after auto-off. On this history the strategy's independent expectancy is negative after costs; that is a measurement the portfolio view could not give. Both lanes passed the decision-before-outcome invariant (606 and 391 decisions, one outcome each).
+Reading: the portfolio traded SWEEP_REV 30 times where the strategy produced 606 independent opportunities; the other 576 were displaced, blocked, or came after the portfolio's auto-off (not attributed individually). On this history the strategy's independent expectancy is negative after costs; that is a measurement the portfolio view could not give. Both lanes passed the decision-before-outcome invariant (606 and 391 decisions, one outcome each).
 
 ## Persistence plan (database draft **not applied**)
 `supabase/migrations/20261029_shadow_lanes.sql`: `dbv5_lane_state` (mutable lane state) and `dbv5_lane_events` (append-only; trigger enforces outcome-after-decision and no duplicate decision; service_role may select and insert only; RLS on, no anon access). Tested on PostgreSQL 16 in an isolated database (`scripts/sql_test/run_lanes.sh`, log in `docs/evidence/lanes/sql_test_run.log`), not on the Supabase project.
