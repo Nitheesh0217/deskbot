@@ -150,3 +150,15 @@ test("operational states are separate from sizing and name the cause", () => {
   assert.deepEqual(STRATEGIES.map((id) => cadenceOf(id)).sort(), ["15m", "15m", "15m", "15m", "1d", "1h", "4h", "4h", "5m", "5m", "15m"].sort());
   assert.equal(CADENCE_MS["4h"], 14_400_000); void OPT_IN; void CFG;
 });
+
+test("a due boundary whose bar is missing from the feed is INSUFFICIENT_DATA, not 'waiting'", () => {
+  applyCfg(); const st = newState(), T = 15 * 60_000 * 100 - 1;   // a 15m boundary
+  const trace: StrategyTrace[] = [{ id: "SWEEP_REV", kind: "REJECT", reason: "Waits for 15m close" }, { id: "HTF_TREND", kind: "REJECT", reason: "Waits for 4H close" }];
+  const miss = { due: { "15m": true, "1h": false, "4h": false, "1d": false }, have: { "15m": false, "1h": false, "4h": false, "1d": false } };
+  const out = recordCoverage(st, { T, now: T + 60_000, trace, disp: [], boundary: miss });
+  assert.equal(out.find((x) => x.id === "SWEEP_REV")!.code, "INSUFFICIENT_DATA"); assert.match(out.find((x) => x.id === "SWEEP_REV")!.reason, /15m bar is missing/);
+  assert.equal(out.find((x) => x.id === "HTF_TREND")!.code, "NOT_DUE", "4H was not due");
+  assert.equal(st.covMeta!.missingDue["15m"], 1);
+  const ok = recordCoverage(st, { T: T + 300_000, now: 0, trace: [], disp: [], boundary: { due: { "15m": true, "1h": false, "4h": false, "1d": false }, have: { "15m": true, "1h": false, "4h": false, "1d": false } } }); void ok;
+  assert.equal(st.covMeta!.missingDue["15m"], 1, "present bars are not counted as missing");
+});

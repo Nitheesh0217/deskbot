@@ -49,9 +49,9 @@ export type Cov = {
   lastEvalT: number | null; lastCompletedT: number | null; lastSetupT: number | null; lastCode: Code | null; lastReason: string | null;
   reasons: Record<string, number>;   // normalised reason text -> count, for GATE_REJECTED / PORTFOLIO_BLOCKED / NO_SETUP / INSUFFICIENT_DATA / ERROR
 };
-export type CovMeta = { since: number; evalBars: number; missedBars: number; missedDue: Record<"15m" | "1h" | "4h" | "1d", number>; lastEvalT: number | null; lastLagMs: number | null };
+export type CovMeta = { since: number; evalBars: number; missedBars: number; missedDue: Record<"15m" | "1h" | "4h" | "1d", number>; missingDue: Record<"15m" | "1h" | "4h" | "1d", number>; lastEvalT: number | null; lastLagMs: number | null };
 export const emptyCov = (now: number): Cov => ({ since: now, bars: 0, due: 0, completed: 0, skippedData: 0, failed: 0, disabledBars: 0, notDue: 0, noSetup: 0, setups: 0, gateRejected: 0, portfolioBlocked: 0, notSelected: 0, entered: 0, lastEvalT: null, lastCompletedT: null, lastSetupT: null, lastCode: null, lastReason: null, reasons: {} });
-export const emptyMeta = (now: number): CovMeta => ({ since: now, evalBars: 0, missedBars: 0, missedDue: { "15m": 0, "1h": 0, "4h": 0, "1d": 0 }, lastEvalT: null, lastLagMs: null });
+export const emptyMeta = (now: number): CovMeta => ({ since: now, evalBars: 0, missedBars: 0, missedDue: { "15m": 0, "1h": 0, "4h": 0, "1d": 0 }, missingDue: { "15m": 0, "1h": 0, "4h": 0, "1d": 0 }, lastEvalT: null, lastLagMs: null });
 
 // prices, decimals and percentages vary bar to bar; timeframes and indicator lengths (1H, 15m, EMA20) must stay readable
 const normalise = (r: string) => r.replace(/\$[\d.,]+|[-+]?\d+\.\d+%?|\b\d{3,}\b/g, "#").slice(0, 96);
@@ -82,7 +82,10 @@ export function dispositions(signals: Signal[], a: { hadPos: boolean; opened: { 
 }
 
 /** Folds one evaluation into the book's counters. `T` = closed-bar time evaluated, `now` = wall clock. */
-export function recordCoverage(st: State, a: { T: number; now: number; trace: StrategyTrace[]; disp: Disposition[] }): { id: StrategyId; code: Code; reason: string; valid: boolean }[] {
+export type Boundary = Record<"15m" | "1h" | "4h" | "1d", boolean>;
+/** Which timeframe boundaries closed at this 5m bar (`due`) and which of those bars actually exist in the data (`have`). */
+export const boundaryFlags = (T: number, have: Boundary) => ({ due: { "15m": (T + 1) % CADENCE_MS["15m"] === 0, "1h": (T + 1) % CADENCE_MS["1h"] === 0, "4h": (T + 1) % CADENCE_MS["4h"] === 0, "1d": (T + 1) % CADENCE_MS["1d"] === 0 } as Boundary, have });
+export function recordCoverage(st: State, a: { T: number; now: number; trace: StrategyTrace[]; disp: Disposition[]; boundary?: { due: Boundary; have: Boundary } }): { id: StrategyId; code: Code; reason: string; valid: boolean }[] {
   const cov = (st.cov ??= {}), meta = (st.covMeta ??= emptyMeta(a.now));
   // missed boundary bars: the live loop evaluates only the newest closed 5m bar; anything between the previous and this bar was never evaluated
   if (meta.lastEvalT !== null && a.T > meta.lastEvalT) {
@@ -93,6 +96,8 @@ export function recordCoverage(st: State, a: { T: number; now: number; trace: St
       if ((T + 1) % CADENCE_MS["4h"] === 0) meta.missedDue["4h"]++; if ((T + 1) % CADENCE_MS["1d"] === 0) meta.missedDue["1d"]++;
     }
   }
+  const missing = new Set<string>();
+  if (a.boundary) for (const k of ["15m", "1h", "4h", "1d"] as const) if (a.boundary.due[k] && !a.boundary.have[k]) { missing.add(k); meta.missingDue[k]++; }   // boundary reached but the bar is absent from the feed
   meta.evalBars++; meta.lastEvalT = a.T; meta.lastLagMs = a.now - a.T;
   const dmap = new Map(a.disp.map((d) => [d.id, d])), now1: { id: StrategyId; code: Code; reason: string; valid: boolean }[] = [];
   for (const t of a.trace) {
@@ -102,7 +107,10 @@ export function recordCoverage(st: State, a: { T: number; now: number; trace: St
     else if (t.kind === "WARMUP") code = "INSUFFICIENT_DATA";
     else if (t.kind === "ERROR") code = "ERROR";
     else if (t.kind === "ADMITTED") { valid = true; const d = dmap.get(t.id); code = d ? d.code : "GATE_REJECTED"; reason = d ? d.reason : "No portfolio disposition recorded"; }
-    else { const k = classifyReject(t.reason); code = k === "UNCLASSIFIED" ? "NO_SETUP" : k; }
+    else {
+      const k = classifyReject(t.reason); code = k === "UNCLASSIFIED" ? "NO_SETUP" : k;
+      if (code === "NOT_DUE" && /^Waits for /.test(t.reason) && missing.has(cadenceOf(t.id))) { code = "INSUFFICIENT_DATA"; reason = `Due ${cadenceOf(t.id)} bar is missing from the data feed`; }
+    }
     // bookkeeping
     if (code === "NOT_DUE") c.notDue++;
     else if (code === "DISABLED") c.disabledBars++;

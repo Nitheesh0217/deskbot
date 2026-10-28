@@ -16,7 +16,7 @@ import { providersFromEnv, type Usage } from "./ai.ts";
 import { chat, validatePatch, mergeCfg, EDITABLE, type ChatTurn } from "./chat.ts";
 import { configIntegrity, serialExecutor } from "./runtime.ts";
 import { runDesk, aiReview, type AgentRow } from "./agents.ts";
-import { recordCoverage, dispositions } from "./coverage.ts";
+import { recordCoverage, dispositions, boundaryFlags } from "./coverage.ts";
 import type { StrategyTrace } from "./engine.ts";
 
 // Module config belongs to one request at a time. This is isolate-local; the
@@ -202,7 +202,7 @@ async function runOnce(sym: Sym = "BTC") {
     try {
       const enf = (Deno.env.get("DESKBOT_ENFORCE_APPROVAL") ?? "off") === "on";
       const globalBlock = newsBlock ? `Entries paused: ${newsBlock}` : enf && !integrity.approved ? `New entries paused: ${integrity.reason}` : null;
-      covNow = recordCoverage(st, { T: snap.T, now, trace, disp: dispositions(signals, { hadPos, opened: opened ? { strategy: opened.strategy as StrategyTrace["id"], dir: opened.dir } : null, globalBlock, gateState: gateCopy, now }) });
+      covNow = recordCoverage(st, { T: snap.T, now, trace, boundary: boundaryFlags(snap.T, { "15m": snap.new15, "1h": snap.new1h, "4h": snap.new4h, "1d": snap.i1d >= 0 && S.d1[snap.i1d].ct === snap.T }), disp: dispositions(signals, { hadPos, opened: opened ? { strategy: opened.strategy as StrategyTrace["id"], dir: opened.dir } : null, globalBlock, gateState: gateCopy, now }) });
     } catch (e) { notes.push(`coverage: ${(e as Error).message}`.slice(0, 120)); }
   }
   if (closed.length) await saveTrades(closed, sym);
