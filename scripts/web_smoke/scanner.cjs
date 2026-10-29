@@ -12,6 +12,10 @@ status.scan = { ts: iso(-4 * 60e3), ms: 8200, note: "Rule-based scan, not a pred
   deriv: [{ currency: "BTC", index: 81200, dvol: { last: 48.2, chg24h: -1.3 }, options: { putCallOI: 0.62, callOI: 250000, putOI: 155000, contracts: 800, nearestExpiry: iso(20 * 3600e3), maxPainNearest: 80000, underlying: 81200, atmIV: 46.1, putMinusCallIV: 2.4, ivExpiry: iso(8 * 86400e3), topOIStrikes: [{ strike: 100000, oi: 22000 }, { strike: 80000, oi: 18000 }] },
     futures: [{ instrument: "BTC-PERPETUAL", expiry: null, mark: 81230, basisPct: 0.037, annualisedPct: null }, { instrument: "BTC-26DEC26", expiry: iso(58 * 86400e3), mark: 82100, basisPct: 1.1, annualisedPct: 6.9 }], errors: [] },
     { currency: "ETH", index: 3010, dvol: null, options: null, futures: null, errors: ["deribit 503"] }] };
+status.track = { promotion: "≥30 resolved setups, mean net R > 0 and the 95% bootstrap lower bound > 0. TEST DATA.", recent: [], markets: [
+  { sym: "BTC", priority: 1, open: 1, resolved: 12, wins: 7, meanNetR: 0.12, sumNetR: 1.4, lo95: null, verdict: "collecting (12/30)", byStrategy: [{ strategy: "SWEEP_REV", n: 8, meanNetR: 0.2 }] },
+  { sym: "GOLD", priority: 1, open: 0, resolved: 4, wins: 1, meanNetR: -0.4, sumNetR: -1.6, lo95: null, verdict: "collecting (4/30)", byStrategy: [] },
+  { sym: "SOL", priority: 2, open: 2, resolved: 33, wins: 22, meanNetR: 0.31, sumNetR: 10.2, lo95: 0.05, verdict: "CANDIDATE", byStrategy: [{ strategy: "EMA_PB", n: 20, meanNetR: 0.4 }] }] };
 const ref = "V5-TEST-1", at = (s) => iso(-s * 1000), sp = (a) => ({ ref, authority: "advisory", argument: a, strongest_point: a.slice(0, 30) });
 status.agents = [
   { agent: "desk-pm", ts: at(10), symbol: "BTC", provider: "groq/llama", ms: 900, output: { ref, authority: "advisory", rating: "Overweight", stance: "keep", direction: "long", executive_summary: "Keep the paper trade as planned.", thesis: "Sweep with rejection.", would_change_my_mind: "High-impact news." } },
@@ -45,7 +49,7 @@ const srv = http.createServer((q, r) => { const f = path.join(web, q.url === "/"
     });
     await page.goto(base + "#scanner"); await page.waitForTimeout(1800);
     const sc = await page.evaluate(() => ({ title: document.getElementById("pageTitle").innerText, rows: document.querySelectorAll("#scanBody tbody tr").length, cards: document.querySelectorAll(".sc-card").length, deriv: document.querySelectorAll("#scanBody .mk-tile").length,
-      text: document.getElementById("scanBody").innerText.slice(0, 400), pill: document.getElementById("tradeState").innerText, groups: [...document.querySelectorAll(".tabs-in > .nav-label")].map((x) => x.innerText), hScroll: document.documentElement.scrollWidth > innerWidth + 1 }));
+      text: document.getElementById("scanBody").innerText.slice(0, 400), track: [...document.querySelectorAll('#scanBody .verdict')].map((x) => x.innerText), pill: document.getElementById("tradeState").innerText, groups: [...document.querySelectorAll(".tabs-in > .nav-label")].map((x) => x.innerText), hScroll: document.documentElement.scrollWidth > innerWidth + 1 }));
     await page.screenshot({ path: path.join(outDir, `scanner_${name}.png`), fullPage: true });
     await page.click('.tab[data-v="committee"]'); await page.waitForTimeout(900);
     const cm = await page.evaluate(() => ({ title: document.getElementById("pageTitle").innerText, stages: document.querySelectorAll("details.cm[open] .cm-flow > li").length, summary: (document.querySelector("details.cm > summary") || {}).innerText, note: (document.querySelector("#committeeBody > .mk-note") || {}).innerText, hScroll: document.documentElement.scrollWidth > innerWidth + 1 }));

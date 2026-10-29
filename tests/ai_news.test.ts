@@ -119,3 +119,21 @@ test("feeds down + no AI → rules-only LOW, no throw", async () => {
   const r = await readNews(now, {}, { useAi: true, fetchImpl: (async () => { throw new Error("x"); }) as any });
   assert.equal(r.risk, "LOW"); assert.equal(r.by, "rules"); assert.ok((r.aiErrors ?? []).length >= 1);
 });
+
+test("free providers: only those with a key, default order or AI_PROVIDER_ORDER, per-provider model override", () => {
+  const keep = { ...process.env }, set = (o: Record<string, string>) => { for (const k of Object.keys(process.env)) if (/_API_KEY$|_MODELS_TOKEN$|_MODEL$|AI_PROVIDER_ORDER/.test(k)) delete process.env[k]; Object.assign(process.env, o); };
+  try {
+    set({ NVIDIA_API_KEY: "x", GROQ_API_KEY: "y", OPENROUTER_API_KEY: "z" });
+    assert.deepEqual(providersFromEnv().map((p) => p.name), ["groq", "nvidia", "openrouter"]);
+    set({ NVIDIA_API_KEY: "x", GROQ_API_KEY: "y", AI_PROVIDER_ORDER: "nvidia", NVIDIA_MODEL: "custom/model" });
+    const ps = providersFromEnv(); assert.deepEqual(ps.map((p) => p.name), ["nvidia", "groq"]); assert.equal(ps[0].model, "custom/model"); assert.match(ps[0].url, /^https:\/\/integrate\.api\.nvidia\.com\//);
+    set({}); assert.deepEqual(providersFromEnv(), []);
+  } finally { for (const k of Object.keys(process.env)) delete process.env[k]; Object.assign(process.env, keep); }
+});
+
+test("a provider that rejects JSON mode with HTTP 400 is retried once without it", async () => {
+  const seen: boolean[] = [];
+  const f = async (_u: string, init: RequestInit) => { const b = JSON.parse(String(init.body)); seen.push(!!b.response_format); return b.response_format ? new Response("bad", { status: 400 }) : new Response(JSON.stringify({ choices: [{ message: { content: '{"ok":1}' } }] })); };
+  const r = await decideJSON("s", "u", (x: any) => (x && x.ok === 1 ? x : null), { providers: [{ name: "p", url: "https://x.test", model: "m", key: "k", dailyCap: 5 }], usage: {}, now: Date.now(), fetchImpl: f as never });
+  assert.deepEqual(seen, [true, false]); assert.ok("provider" in r && r.provider === "p");
+});
