@@ -13,7 +13,7 @@
   const SHIRT = ['#2f4b7c', '#6b3f69', '#2f6f62', '#7a4a2f', '#3b3f58', '#8a3b3b'];
   const KIND_LABEL = { AI: 'AI · ADVISORY', 'RULES+AI': 'RULES + AI', OFFLINE: 'OFFLINE', RULES: 'RULES' };
   const FAMILY_ICON = { Trend: '↗', Breakout: '⌁', Reversal: '↶', 'Mean reversion': '≈' };
-  let M = null, ctx = null, selected = null, lastRunAt = null, built = false, timer = 0, playing = false, motionOff = false, priceTimer = 0;
+  let feedRunAt = undefined, M = null, ctx = null, selected = null, lastRunAt = null, built = false, timer = 0, playing = false, motionOff = false, priceTimer = 0;
   const seenFeed = new Set();
 
   // A small flat avatar, generated from the id: same person every time. AI roles get a chip badge.
@@ -42,7 +42,7 @@
         (byFloor[f.id] || []).map((id) => emp(id, f.id)).join('') +
         (f.id === 'desks' ? '<div class="fam-desks" id="famDesks"></div>' : '') +
         (f.id === 'research' ? '<div class="rdesks" id="rDesks"></div>' : '') + `</div></section>`).join('') +
-      '<div class="street" aria-hidden="true"><span>PAPER TRADING · NO FUNDED ORDERS</span></div><div class="lift" id="lift" aria-hidden="true"></div><div class="packets" id="packets" aria-hidden="true"></div>';
+      '<div class="street" aria-hidden="true"><span>PAPER TRADING · NO FUNDED ORDERS</span></div><div class="lift" id="lift" aria-hidden="true"></div><svg class="trails" id="trails" aria-hidden="true"></svg><div class="packets" id="packets" aria-hidden="true"></div>';
     wrap.addEventListener('click', (e) => { const b = e.target.closest('.emp'); if (b) select(b.dataset.emp); });
     const wf = $('towerFlow'); if (wf) wf.addEventListener('click', (e) => { const b = e.target.closest('[data-step]'); if (b) { select(b.dataset.step); const el = document.querySelector(`.emp[data-emp="${b.dataset.step}"]`); el && el.scrollIntoView({ behavior: reduce() ? 'auto' : 'smooth', block: 'center' }); } });
     built = true;
@@ -78,7 +78,7 @@
     $('towerRun').textContent = m.runAt ? new Date(m.runAt).toISOString().slice(11, 19) + ' UTC' : 'not reported';
     $('towerAct').textContent = m.action || 'not reported';
     $('towerLive').classList.toggle('on', m.runFresh);
-    feed();
+    if (M.runAt !== feedRunAt) { feedRunAt = M.runAt; feed(); }
     if (selected) select(selected);
   }
 
@@ -110,27 +110,66 @@
     lines.forEach((l) => seenFeed.add(l.key));
   }
 
-  // Animate the latest check: a message packet travels desk to desk while the workflow strip lights the matching step.
-  function replay() {
-    if (!M || playing) return; const wrap = $('bld'), layer = $('packets'), lift = $('lift'); if (!wrap || !layer) return;
-    if (reduce() || motionOff || !layer.animate) return;
-    playing = true; const box = wrap.getBoundingClientRect(); let i = 0;
+  // Person-to-person hand-offs. Motion (the engine behind Framer Motion) drives springs when it loaded; plain Web Animations otherwise.
+  const MO = () => (root.Motion && typeof root.Motion.animate === 'function' ? root.Motion : null);
+  const spring = (el, kf) => { const m = MO(); if (m) return m.animate(el, kf, { type: 'spring', stiffness: 420, damping: 18 }); return null; };
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  function bubble(el, text, from) {
+    const say = el && el.querySelector('.say'); if (!say) return;
+    const own = el.dataset.ownLine || say.textContent; el.dataset.ownLine = own;
+    say.innerHTML = `<span class="inbox">from ${esc(from)}</span> ${esc(text)}`; say.classList.add('fresh');
+    clearTimeout(el._bt); el._bt = setTimeout(() => { say.textContent = el.dataset.ownLine; say.classList.remove('fresh'); delete el.dataset.ownLine; }, 3200);
+  }
+  // One courier: typing dots on the sender, the sender turns toward the receiver, an envelope card flies along a curved path
+  // leaving a trail, the receiver springs and its speech bubble shows what it received. Every label is a reported value.
+  async function courier(f, speed = 1) {
+    const wrap = $('bld'), layer = $('packets'), a = document.querySelector(`.emp[data-emp="${f.from}"]`), b = document.querySelector(`.emp[data-emp="${f.to}"]`);
+    if (!wrap || !layer || !a || !b || !M) return;
+    const sender = M.staff[f.from], box = wrap.getBoundingClientRect(), ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+    const x0 = ra.left - box.left + 30, y0 = ra.top - box.top + 30, x1 = rb.left - box.left + 30, y1 = rb.top - box.top + 30;
+    const fl = b.closest('.floor'); document.querySelectorAll('.floor.hot').forEach((x) => x.classList.remove('hot')); fl && fl.classList.add('hot');
+    const lift = $('lift'); if (fl && lift) { lift.classList.add('on'); lift.style.transform = `translateY(${(fl.getBoundingClientRect().top - box.top + fl.offsetHeight / 2 - 17).toFixed(0)}px)`; }
+    a.classList.add('typing'); const av = a.querySelector('.av'); const dir = x1 >= x0 ? 1 : -1;
+    av && spring(av, { rotate: [0, 8 * dir, 0] });
+    await sleep(320 / speed); a.classList.remove('typing');
+    // curved route: a quadratic Bezier bowed sideways, sampled into keyframes so the card follows the arc
+    const mx = (x0 + x1) / 2 + (Math.abs(y1 - y0) > 40 ? 90 * dir : 0), my = (y0 + y1) / 2 - (Math.abs(y1 - y0) > 40 ? 0 : 60);
+    const N = 18, xs = [], ys = []; for (let i = 0; i <= N; i++) { const t = i / N, u = 1 - t; xs.push(u * u * x0 + 2 * u * t * mx + t * t * x1); ys.push(u * u * y0 + 2 * u * t * my + t * t * y1); }
+    const trail = $('trails'); let path = null;
+    if (trail) { path = document.createElementNS('http://www.w3.org/2000/svg', 'path'); path.setAttribute('d', `M${x0} ${y0} Q${mx} ${my} ${x1} ${y1}`); path.setAttribute('class', 'trail' + (f.advisory ? ' adv' : '')); path.setAttribute('pathLength', '1'); trail.appendChild(path); }
+    const card = document.createElement('div'); card.className = 'pkt' + (f.advisory ? ' adv' : '');
+    card.innerHTML = `${T.ROSTER[f.from] ? avatar(f.from, T.ROSTER[f.from][3], T.ROSTER[f.from][2]).replace('class="av"', 'class="av mini"') : ''}<span>${esc(f.label)}</span>`;
+    layer.appendChild(card);
+    const dur = 0.95 / speed, m = MO();
+    if (path) (m ? m.animate(path, { strokeDashoffset: [1, 0], opacity: [0.9, 0.9] }, { duration: dur, ease: 'easeInOut' }) : path.animate([{ strokeDashoffset: 1 }, { strokeDashoffset: 0 }], { duration: dur * 1000, fill: 'forwards' }));
+    const fly = m ? m.animate(card, { x: xs, y: ys, scale: [0.4, 1, 1, 1, 0.9], opacity: [0, 1, 1, 1, 1] }, { duration: dur, ease: [0.45, 0, 0.2, 1] })
+      : card.animate(xs.map((x, i) => ({ transform: `translate(${x}px,${ys[i]}px)` })), { duration: dur * 1000, easing: 'cubic-bezier(.45,0,.2,1)', fill: 'forwards' });
+    await (fly && fly.finished ? fly.finished.catch(() => {}) : sleep(dur * 1000));
+    card.remove();
+    if (path) { (m ? m.animate(path, { opacity: [0.9, 0] }, { duration: 1.2 }) : null); setTimeout(() => path.remove(), 1300); }
+    spring(b, { scale: [1, 1.05, 1] }) || (b.classList.remove('pulse'), void b.offsetWidth, b.classList.add('pulse'));
+    bubble(b, f.label, sender ? sender.name : f.from);
+    dispatch(f);
+  }
+  function dispatch(f) {
+    const box = $('towerFeed'); if (!box || !M) return; const a = M.staff[f.from], b = M.staff[f.to]; if (!a || !b) return;
+    const row = document.createElement('div'); row.className = 'new' + (f.advisory ? ' adv' : '');
+    row.innerHTML = `<span class="faint">${new Date().toISOString().slice(11, 19)}</span><span><b>${esc(a.name)}</b> → <b>${esc(b.name)}</b>: ${esc(f.label)}${f.advisory ? ' <i>(advisory)</i>' : ''}${f.live ? ' <i>(live tick)</i>' : ''}</span>`;
+    box.prepend(row); const m = MO(); m && m.animate(row, { opacity: [0, 1], x: [18, 0] }, { type: 'spring', stiffness: 300, damping: 26 });
+    while (box.children.length > 40) box.lastChild.remove();
+  }
+  async function replay() {
+    if (!M || playing || reduce() || motionOff) return; playing = true;
     const lightStep = (id) => document.querySelectorAll('#towerFlow .step').forEach((s) => s.classList.toggle('on', s.dataset.step === id));
-    const step = () => {
-      const f = M.flow[i++];
-      if (!f) { playing = false; lift.classList.remove('on'); lightStep(null); document.querySelectorAll('.floor.hot').forEach((x) => x.classList.remove('hot')); return; }
-      const a = document.querySelector(`.emp[data-emp="${f.from}"]`), b = document.querySelector(`.emp[data-emp="${f.to}"]`); if (!a || !b) return step();
-      const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect(), pk = document.createElement('div');
-      pk.className = 'pkt' + (f.advisory ? ' adv' : ''); pk.textContent = f.label; layer.appendChild(pk);
-      const x0 = ra.left - box.left + ra.width / 2 - 20, y0 = ra.top - box.top + ra.height / 2, x1 = rb.left - box.left + rb.width / 2 - 20, y1 = rb.top - box.top + rb.height / 2;
-      const fl = b.closest('.floor'); document.querySelectorAll('.floor.hot').forEach((x) => x.classList.remove('hot')); fl && fl.classList.add('hot');
-      lightStep(T.WORKFLOW.some((w) => w[0] === f.to) ? f.to : T.WORKFLOW.some((w) => w[0] === f.from) ? f.from : null);
-      if (fl) { lift.classList.add('on'); lift.style.transition = 'transform .8s cubic-bezier(.6,0,.2,1), opacity .3s'; lift.style.transform = `translateY(${(fl.getBoundingClientRect().top - box.top + fl.offsetHeight / 2 - 17).toFixed(0)}px)`; }
-      const an = pk.animate([{ transform: `translate(${x0}px,${y0}px) scale(.6)`, opacity: 0 }, { transform: `translate(${x0}px,${y0}px) scale(1)`, opacity: 1, offset: .15 }, { transform: `translate(${x1}px,${y1}px) scale(1)`, opacity: 1, offset: .85 }, { transform: `translate(${x1}px,${y1}px) scale(.6)`, opacity: 0 }], { duration: 1100, easing: 'cubic-bezier(.45,0,.2,1)', fill: 'forwards' });
-      an.onfinish = () => { pk.remove(); b.classList.remove('pulse'); void b.offsetWidth; b.classList.add('pulse'); };
-      setTimeout(step, 650);
-    };
-    step();
+    try {
+      for (const f of M.flow) {
+        if (motionOff || document.hidden) break;
+        lightStep(T.WORKFLOW.some((w) => w[0] === f.to) ? f.to : T.WORKFLOW.some((w) => w[0] === f.from) ? f.from : null);
+        const onStep = document.querySelector('#towerFlow .step.on'); onStep && spring(onStep, { y: [0, -4, -2] });
+        await courier(f);
+        await sleep(120);
+      }
+    } finally { playing = false; lightStep(null); const lift = $('lift'); lift && lift.classList.remove('on'); document.querySelectorAll('.floor.hot').forEach((x) => x.classList.remove('hot')); }
   }
 
   function countdown() {
@@ -144,6 +183,7 @@
       const j = await r.json(), px = +j.BTC; if (!Number.isFinite(px)) throw 0;
       const prev = +el.dataset.px || px; el.dataset.px = px; el.textContent = '$' + px.toLocaleString('en-US', { maximumFractionDigits: 0 }) + ' BTC';
       if (!reduce() && el.animate && px !== prev) el.animate([{ color: px > prev ? 'var(--up)' : 'var(--down)' }, { color: 'inherit' }], { duration: 900 });
+      if (!playing && !reduce() && !motionOff && M && !$('v-tower').hidden) courier({ from: 'feed', to: 'steward', label: `BTC $${px.toLocaleString('en-US', { maximumFractionDigits: 0 })} ${px > prev ? '▲' : px < prev ? '▼' : '·'}`, live: true }, 1.3);
     } catch (_) { el.textContent = 'live price unavailable'; }
   }
 
@@ -156,5 +196,5 @@
   function onView(v) { if (v === 'tower') { if (M) setTimeout(replay, 350); if (!priceTimer) { price(); priceTimer = setInterval(price, 8000); timer = timer || setInterval(countdown, 1000); countdown(); } } }
   document.addEventListener('desk:view', (e) => onView(e.detail.view));
   document.addEventListener('DOMContentLoaded', () => { const r = $('towerReplay'), p = $('towerMotion'); r && r.addEventListener('click', replay); p && p.addEventListener('click', () => { motionOff = !motionOff; p.setAttribute('aria-pressed', String(motionOff)); p.textContent = motionOff ? 'Motion off' : 'Motion on'; }); });
-  root.TowerView = { render, replay, select, avatar };
+  root.TowerView = { render, replay, select, avatar, courier };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

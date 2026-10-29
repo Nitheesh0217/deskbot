@@ -8,6 +8,7 @@ import {
 import { SYMBOLS, type Sym } from "./data.ts";
 import { BUILD } from "./build_info.ts";
 import { canonical } from "./runtime.ts";
+import { catchUp } from "./catchup.ts";
 
 export const DECISION_SCHEMA = "deskbot.decision/1";
 export const decisionIdFor = (positionId: string) => `D-${positionId}`;
@@ -49,7 +50,7 @@ export type CaptureArgs = {
   externalReceivedAtMs?: { ctx?: number | null; fng?: number | null; fngCached?: boolean; flow?: number | null };
   stateBefore: State; cfgResolved: unknown; integrity: { hash: string; approved: boolean; reason: string | null };
   signals: Signal[]; rejects: Reject[]; gateNotes: string[]; newsBlock: string | null;
-  chosen: Signal; fillRef: number; position: Position; equityBefore: number; approvalEnforced?: boolean;
+  chosen: Signal; fillRef: number; position: Position; equityBefore: number; approvalEnforced?: boolean; catchUpFromT?: number | null;
 };
 
 const accountView = (st: State) => {
@@ -84,7 +85,7 @@ export async function captureDecision(a: CaptureArgs): Promise<{ record: Record<
       persistenceAck: "dbv5_decisions.created_at (database clock) after the atomic RPC commits; not part of the hashed record",
       note: "evaluationTimeMs is the engine's run-start time used for entry gates and the modeled fill (plan.openT). It is not a data-receipt time. null = unknown. Provider candle responses carry no server timestamp, so receipt is the local time the response was read.",
     },
-    dataAvailability: { snapshotBarClose: a.snapT, note: "closed bars only" },
+    dataAvailability: { snapshotBarClose: a.snapT, note: "closed bars only", ...(a.catchUpFromT != null ? { catchUpFromT: a.catchUpFromT } : {}) },
     mode: "PAPER", portfolio: `deskbot-v5/${a.sym}`, experiment: a.experimentId,
     instrument: {
       book: a.sym, name: SYMBOLS[a.sym].name, venue: "hyperliquid", nativeSymbol: SYMBOLS[a.sym].hl, fallbackVenue: "binance-spot", fallbackSymbol: SYMBOLS[a.sym].bn,
@@ -156,7 +157,10 @@ export async function replayDecision(record: Record<string, any>, rows: Pick<Inp
     const ex = record.inputs.external, ctx = ex.ctx;
     const snap = snapshot(S, i5, { funding: ctx?.funding ?? null, oi: ctx?.oi ?? null, markPx: ctx?.markPx ?? null, fng: ex.fng ?? null });
     const st = ensureState(clone(record.accountState.state) as State); st.pos = null;
-    const { signals } = evaluate(snap, st.enabled, S, st);
+    let { signals } = evaluate(snap, st.enabled, S, st);
+    // a catch-up entry: the live bar had nothing, the candidate came from a skipped boundary bar (catchup.ts), scanned from catchUpFromT
+    const cuFrom = (record.dataAvailability as { catchUpFromT?: number }).catchUpFromT;
+    if (!signals.length && cuFrom != null) signals = catchUp(S, i5, cuFrom, st, st.enabled, { funding: ctx?.funding ?? null, oi: ctx?.oi ?? null, markPx: ctx?.markPx ?? null, fng: ex.fng ?? null }).candidates;
     const recSig = record.candidates.signals as any[];
     if (signals.length !== recSig.length) add("candidates.count", recSig.length, signals.length);
     signals.forEach((s, i) => { const r = recSig[i]; if (!r) return; for (const k of ["strategy", "dir", "score", "regime", "barT"] as const) if (r[k] !== (s as any)[k]) add(`candidates[${i}].${k}`, r[k], (s as any)[k]); if (!close(r.stop, s.stop)) add(`candidates[${i}].stop`, r.stop, s.stop); if (JSON.stringify(stripShadow(r.why)) !== JSON.stringify(stripShadow(s.why))) add(`candidates[${i}].why`, r.why, s.why); });
