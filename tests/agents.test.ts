@@ -141,3 +141,13 @@ test("desk report: chart row on a new 15m bar, validator/risk rows when signals 
   assert.deepEqual(busy.rows.map((r) => r.agent), ["chart", "signals", "validator", "risk"]);
   assert.ok(busy.summary.chart);
 });
+
+test("desk summary carries per-timeframe zones and a failing zone read never breaks the desk", async () => {
+  const { deskZones } = await import("../supabase/functions/deskbot-v5/agents.ts");
+  const { buildSeries } = await import("../supabase/functions/deskbot-v5/engine.ts");
+  const bars = Array.from({ length: 120 }, (_, i) => ({ t: i * 900000, o: 100 + Math.sin(i / 5), h: 101 + Math.sin(i / 5), l: 99 + Math.sin(i / 5), c: 100 + Math.sin(i / 5 + 0.2), v: 5, ct: i * 900000 + 899999 }));
+  const z = deskZones({ f: { m5: bars, m15: bars, h1: bars, h4: bars } } as never);
+  assert.ok("m15" in z && "h1" in z && "h4" in z && z.m15 && Array.isArray(z.m15.zones));
+  const broken = deskZones({ f: { m15: null, h1: bars, h4: [] } } as never);
+  assert.equal(broken.m15, null); void buildSeries;
+});

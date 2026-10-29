@@ -1,0 +1,4 @@
+Source: https://github.com/marian2js/trading-skills/tree/f1ae7d481154b49192681187cb08d39d7e2d4524/skills/review-learning/post-trade-review
+License: MIT (copied as LICENSE)
+Installed unmodified (SKILL.md + references only; no scripts, no allowed-tools) on 2026-10-28 and reviewed for tool/permission content.
+DeskBot use: ground reviews in the recorded decision (docs/control/PROVENANCE.md); a skill cannot widen tool permissions or change risk, config or orders.

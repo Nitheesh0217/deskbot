@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased — setup view and chart zones (no change to trading logic)
+- Dashboard: trade setup card (red stop block, green TP blocks, structure checks), chart layers for FVG, IFVG, order blocks, value area, premium/discount, BOS/CHoCH and liquidity, focus-on-trade view. See [ZONES.md](ZONES.md).
+- Chart agent now also logs per-timeframe zones (`lastRun.desk.chart.zones`). Zone reads never affect entries, stops, targets, sizing or risk, and a failure in them cannot break a run.
+- Selective skill install: `post-trade-review` and `execution-plan-check` (marian2js, pinned, text-only) under `.claude/skills/`.
+
 ## v5.8.0 — desk agents (2026-10-24)
 - New `agents.ts` + engine functions: chart agent (levels across 1m–4H), signal validator, risk agent (candle-body stop), re-entry agent, optional shadow-only AI review. All logged to `dbv5_agent_log`; dashboard gets an **Agent desk** card and `agent:` level lines on the Chart tab. See [AGENTS.md](AGENTS.md).
 - Chart agent is on. **Body-stop, re-entry and validator ship OFF**: in 1-year backtests (BTC two years, gold one year) every combination was worse than the live config. Numbers in AGENTS.md.

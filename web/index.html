@@ -145,6 +145,18 @@ nav.tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 25; backgroun
 .seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 .chartbox { height: 440px; margin-top: 10px; border-radius: 8px; overflow: hidden; border: 1px solid var(--line); position: relative; }
 .chartbox .msg { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; padding: 20px; color: var(--fg-3); font-size: 13px; }
+.layers { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+.layers label { display: inline-flex; align-items: center; gap: 6px; font: 500 12px/1 var(--f-mono); padding: 7px 9px; border-radius: 6px; border: 1px solid var(--line-2); background: var(--panel-2); color: var(--fg-2); cursor: pointer; user-select: none; }
+.layers label:has(input:checked) { border-color: var(--accent); color: var(--fg); }
+.layers input { accent-color: var(--accent); margin: 0; }
+.setup-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.setup-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; margin-top: 10px; }
+@media (min-width: 720px) { .setup-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
+.checks { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 7px; }
+.checks li { display: grid; grid-template-columns: 18px 1fr; gap: 8px; font: 500 12.5px/1.35 var(--f-body); }
+.checks li.met span:first-child { color: var(--up); } .checks li.no span:first-child { color: var(--fg-3); }
+.checks small { color: var(--fg-3); font-family: var(--f-mono); font-size: 11.5px; }
+.setup-svg { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 6px; }
 .legend { display: grid; gap: 4px; margin-top: 10px; }
 .legend div { display: grid; grid-template-columns: 14px 1fr auto; gap: 8px; align-items: center; font: 500 12.5px/1.4 var(--f-mono); }
 .legend i { width: 14px; height: 3px; border-radius: 2px; display: block; }
@@ -252,16 +264,28 @@ nav.tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 25; backgroun
 
   <!-- CHART -->
   <section class="view" id="v-chart" aria-label="Chart" hidden>
+    <div class="card" id="setupCard"></div>
     <div class="card">
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
         <h2><span class="bookName">BTC</span> chart</h2>
         <div class="seg" id="chartMode" style="margin-left:auto"><button type="button" data-m="bot" aria-pressed="true">Bot levels</button><button type="button" data-m="tv" aria-pressed="false">TradingView</button></div>
       </div>
       <div class="seg" id="tfSeg" style="margin-top:10px"><button type="button" data-tf="15m" aria-pressed="false">15m</button><button type="button" data-tf="1h" aria-pressed="true">1H</button><button type="button" data-tf="4h" aria-pressed="false">4H</button><button type="button" data-tf="1d" aria-pressed="false">1D</button></div>
+      <div class="layers" id="layers" role="group" aria-label="Chart layers">
+        <label><input type="checkbox" data-layer="focus" checked> Focus on trade</label>
+        <label><input type="checkbox" data-layer="trade" checked> Trade box</label>
+        <label><input type="checkbox" data-layer="FVG" checked> FVG</label>
+        <label><input type="checkbox" data-layer="IFVG" checked> IFVG</label>
+        <label><input type="checkbox" data-layer="OB" checked> Order blocks</label>
+        <label><input type="checkbox" data-layer="value" checked> Value POC/VAH/VAL</label>
+        <label><input type="checkbox" data-layer="pd" checked> Premium / discount</label>
+        <label><input type="checkbox" data-layer="structure"> BOS / CHoCH</label>
+        <label><input type="checkbox" data-layer="liq"> Liquidity</label>
+      </div>
       <div class="chartbox" id="lwBox"><div class="msg" id="lwMsg">Loading candles…</div></div>
       <div class="chartbox" id="tvBox" hidden><div id="tvw" style="height:100%"></div><div class="msg" id="tvMsg">Loading TradingView…</div></div>
       <div class="legend" id="legend"></div>
-      <p class="note faint" style="margin-top:8px" id="chartNote">Every line is a level the bot actually uses. Nothing is hand-drawn or AI-guessed. Candles: Hyperliquid BTC perp (Binance fallback).</p>
+      <p class="note faint" style="margin-top:8px" id="chartNote">Boxes and lines are reaction areas computed by fixed rules from closed candles, plus the bot's own recorded plan. They are not forecasts: nothing here predicts where price will go.</p>
     </div>
     <div class="card">
       <h2>What the bot is waiting for</h2>
@@ -361,6 +385,8 @@ nav.tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 25; backgroun
   </div>
 </nav>
 
+<script src="./zones.js"></script>
+<script src="./setup.js"></script>
 <script src="./evidence.js"></script>
 <script>
 const SNAP = {"state":{"state":{"cb":{"trips":0,"consec":0,"cooldownUntil":0},"cfg":{"EXIT_MODE":"HOLD","RISK_SCALE":{"D_THRUST":1,"HTF_TREND":1,"SWEEP_REV":0,"TREND_MTF":0.5,"D_BEARTRAP":1,"SESSION_BO":0,"VWAP_REVERT":0},"MIN_STOP_BY":{"TREND_MTF":0.012},"REGIME_GATE":{"HTF_TREND":0.03,"TREND_MTF":0.03,"D_BEARTRAP":0.03},"HTF_DONCHIAN":55},"day":{"pnl":0,"date":"2026-10-22","trades":1,"startEquity":352.56},"pos":{"id":"V5-1792682161585","dir":"short","tp1":81067.56399661326,"tp2":80628.53257322652,"tp3":79969.98543814641,"why":["NY break of London range","Volume ≥1.3×","4H aligned","Funding 0.0013%/h (+5)","F&G 68 (+5)","ROC momentum (+5)"],"stop":81506.59542,"entry":81506.59542,"openT":1792682161585,"score":89,"stop0":81945.62684338674,"riskAmt":1.7628,"tp1Done":true,"tp2Done":false,"tp3Done":false,"strategy":"SESSION_BO","remainingQty":0.0016662443120658082},"peak":352.56,"maxDD":0,"stats":{"by":{},"all":{"n":0,"net":0,"sumR":0,"wins":0,"losses":0}},"equity":353.15413561347225,"enabled":{"D_THRUST":true,"HTF_TREND":true,"SWEEP_REV":false,"TREND_MTF":true,"D_BEARTRAP":true,"SESSION_BO":true,"VWAP_REVERT":true},"version":"5.1.0","startEquity":352.56},"carried":{"from":"DeskBot v3 cloud (Supabase bot_state)","v3Equity":352.55836833,"v3Trades":3,"v3StartEquity":300},"last_run":{"ms":546,"ts":"2026-10-22T18:01:47.762Z","risk":0.02,"upnl":0.51,"action":"HOLD","market":{"oi":43281.6914,"fng":68,"poc":82841.1,"st5":-1,"atr5":136.1,"mark":81141,"st15":-1,"st1h":-1,"st4h":-1,"vwap":82257.1,"atr15":243.3,"chop5":48.6,"price":81202,"rsi15":36.1,"rsi1h":25.9,"chop15":48.6,"ema50D":80736.2,"regime":"TREND","funding":0.0000125,"vwapDev":-1.32,"fngLabel":"Greed"},"source":"hyperliquid","decision":null},"updated_at":"2026-10-22T18:01:48.308+00:00"},
@@ -446,7 +472,8 @@ function renderDesk() {
     const rung = (t, lvl, done, cls = "") => `<div class="rung ${done ? "hit" : ""} ${cls}"><span class="t">${t}</span><span class="track"><i style="width:${(done ? 100 : prog(lvl) * 100).toFixed(0)}%"></i></span><span>${fmtPx(lvl)}</span></div>`;
     const u = +lr.upnl || 0;
     pc.innerHTML = `<div class="pos-head"><span class="side ${p.dir}">${p.dir.toUpperCase()}</span><h2>${esc(nameOf(p.strategy))}</h2><span class="num ${u >= 0 ? "up" : "down"}" style="margin-left:auto;font-weight:600">${u >= 0 ? "+" : "−"}${fmt$(Math.abs(u))}</span></div>
-      <div class="grid2"><div><div class="k">Entry</div><div class="v">${fmtPx(p.entry)}</div></div><div><div class="k">Risk</div><div class="v">${fmt$(p.riskAmt)} · ${fmtPx(R)} pts</div></div>
+      <div class="setup-svg" style="margin-top:10px">${DeskSetup.setupSVG(p, zonePal(), fmtPx)}</div>
+      <div class="grid2" style="margin-top:10px"><div><div class="k">Entry</div><div class="v">${fmtPx(p.entry)}</div></div><div><div class="k">Risk</div><div class="v">${fmt$(p.riskAmt)} · ${fmtPx(R)} pts</div></div>
       <div><div class="k">Size</div><div class="v">${(+p.remainingQty).toFixed(5)} ${BOOK === "GOLD" ? "oz" : "BTC"}</div></div><div><div class="k">Opened</div><div class="v">${ago(p.openT)}</div></div></div>
       <div class="ladder">${rung("TP3", p.tp3, p.tp3Done)}${rung("TP2", p.tp2, p.tp2Done)}${rung("TP1", p.tp1, p.tp1Done)}
       <div class="rung stop"><span class="t">Stop</span><span class="track"><i style="width:${p.stop !== p.stop0 ? 100 : 0}%"></i></span><span>${fmtPx(p.stop)}${p.stop !== p.stop0 ? " (moved)" : ""}</span></div></div>
@@ -583,7 +610,10 @@ function show(v) {
 document.querySelectorAll(".tab").forEach((b) => b.addEventListener("click", () => show(b.dataset.v)));
 
 // ── Chart: TradingView Lightweight Charts (Apache-2.0) + the bot's real levels ──
-const CH = { lib: null, chart: null, series: {}, tf: "1h", mode: "bot", timer: null, tvLoaded: false };
+const CH = { lib: null, chart: null, series: {}, tf: "1h", mode: "bot", timer: null, tvLoaded: false, prims: [], zlines: [], layers: { focus: true, trade: true, FVG: true, IFVG: true, OB: true, value: true, pd: true, structure: false, liq: false } };
+try { Object.assign(CH.layers, JSON.parse(localStorage.getItem("deskbot.layers") || "{}")); } catch (_) { /* storage optional */ }
+document.querySelectorAll("#layers input").forEach((i) => { i.checked = !!CH.layers[i.dataset.layer]; i.addEventListener("change", () => { CH.layers[i.dataset.layer] = i.checked; try { localStorage.setItem("deskbot.layers", JSON.stringify(CH.layers)); } catch (_) { /* optional */ } chartDraw(); }); });
+const zonePal = () => ({ bull: "#4fd1c5", bear: "#d46bd6", obBull: "#5aa9e6", obBear: "#f2a93b", sl: cssVar("--down"), tp: cssVar("--up"), slText: cssVar("--down"), tpText: cssVar("--up"), fg: cssVar("--fg"), muted: cssVar("--fg-3") });
 const TFMS = { "15m": 9e5, "1h": 36e5, "4h": 144e5, "1d": 864e5 };
 function cssVar(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim() || "#888"; }
 function loadScript(src) { return new Promise((res, rej) => { const s = document.createElement("script"); s.src = src; s.onload = res; s.onerror = () => rej(new Error("load " + src)); document.head.appendChild(s); }); }
@@ -618,10 +648,12 @@ async function chartShow() {
     CH.series.c = CH.chart.addCandlestickSeries({ upColor: cssVar("--up"), downColor: cssVar("--down"), wickUpColor: cssVar("--up"), wickDownColor: cssVar("--down"), borderVisible: false });
     CH.series.e20 = CH.chart.addLineSeries({ color: "#4fd1c5", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
     CH.series.e50 = CH.chart.addLineSeries({ color: "#b48ef0", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
-    CH.series.eD = CH.chart.addLineSeries({ color: cssVar("--accent"), lineWidth: 2, priceLineVisible: false, lastValueVisible: false });
-    CH.series.gU = CH.chart.addLineSeries({ color: cssVar("--up"), lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false });
-    CH.series.gD = CH.chart.addLineSeries({ color: cssVar("--down"), lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false });
+    CH.series.eD = CH.chart.addLineSeries({ autoscaleInfoProvider: () => null, color: cssVar("--accent"), lineWidth: 2, priceLineVisible: false, lastValueVisible: false });
+    CH.series.gU = CH.chart.addLineSeries({ autoscaleInfoProvider: () => null, color: cssVar("--up"), lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false });
+    CH.series.gD = CH.chart.addLineSeries({ autoscaleInfoProvider: () => null, color: cssVar("--down"), lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false });
   }
+  CH.fit = null;
+  if (!CH.autoTf && ((((DATA.state || {}).state || {}).pos))) { CH.autoTf = true; CH.tf = "15m"; document.querySelectorAll("#tfSeg button").forEach((x) => x.setAttribute("aria-pressed", String(x.dataset.tf === "15m"))); }
   await chartDraw();
   clearInterval(CH.timer); CH.timer = setInterval(() => { if (!document.hidden && CH.mode === "bot" && !$("v-chart").hidden) chartDraw(); }, 60000);
 }
@@ -662,6 +694,23 @@ async function chartDraw() {
       mk.push({ time: snapT(o), position: L ? "belowBar" : "aboveBar", color: L ? cssVar("--up") : cssVar("--down"), shape: L ? "arrowUp" : "arrowDown", text: `${t.strategy}` });
       mk.push({ time: snapT(c), position: "inBar", color: +t.net >= 0 ? cssVar("--up") : cssVar("--down"), shape: "circle", text: sgnR(+t.r) }); });
     if (p) { const o = sec(p.openT); mk.push({ time: snapT(o), position: p.dir === "long" ? "belowBar" : "aboveBar", color: cssVar("--accent"), shape: p.dir === "long" ? "arrowUp" : "arrowDown", text: "OPEN " + p.strategy }); }
+    // price-structure layers (fixed rules on closed candles, same module the edge function uses)
+    const pal = zonePal(), read = DeskZones.zonesOf(b.map((x) => ({ t: sec(x.t), o: x.o, h: x.h, l: x.l, c: x.c, v: x.v }))), t0s = sec(b[0].t);
+    CH.prims.forEach((q) => { try { CH.series.c.detachPrimitive(q); } catch (_) { /* already gone */ } }); CH.prims = [];
+    CH.zlines.forEach((l) => CH.series.c.removePriceLine(l)); CH.zlines = [];
+    const ZL = (price, color, title, style = 2) => { if (isFinite(price)) CH.zlines.push(CH.series.c.createPriceLine({ price, color, lineWidth: 1, lineStyle: style, axisLabelVisible: false, title })); };
+    const boxes = DeskSetup.zoneBoxes(read, CH.layers, pal, (t) => snapT(t), t0s);
+    if (CH.layers.trade && p) boxes.push(...DeskSetup.tradeBoxes(p, pal, (ms) => snapT(sec(ms))));
+    boxes.forEach((bx) => { const q = new DeskSetup.Box(bx); CH.series.c.attachPrimitive(q); CH.prims.push(q); });
+    if (CH.layers.value && read.value) { ZL(read.value.poc, "#e3c14d", "POC", 0); ZL(read.value.vah, "#e3c14d", "VAH", 3); ZL(read.value.val, "#e3c14d", "VAL", 3); }
+    if (CH.layers.pd && read.range) { ZL(read.range.eq, cssVar("--fg-3"), `mid · ${read.range.zone}`, 1); }
+    if (CH.layers.liq) read.pools.forEach((q) => ZL(q.px, "#b48ef0", q.kind + (q.swept ? " swept" : ""), 3));
+    if (CH.layers.structure) read.structure.forEach((e) => mk.push({ time: snapT(e.t), position: e.side === "bull" ? "belowBar" : "aboveBar", color: e.side === "bull" ? "#4fd1c5" : "#d46bd6", shape: "square", text: e.kind + (e.side === "bull" ? "↑" : "↓") }));
+    window.__zoneRead = read;
+    const focusOn = !!(CH.layers.focus && p), fitKey = tf + (focusOn ? "+f" : "");
+    if (focusOn) { const rec = b.slice(-80), R0 = Math.abs(p.entry - p.stop0), lo = Math.min(p.stop0 - 0.5 * R0, ...rec.map((x) => x.l)), hi = Math.max(p.tp3 + 0.5 * R0, ...rec.map((x) => x.h)); CH.series.c.applyOptions({ autoscaleInfoProvider: () => ({ priceRange: { minValue: lo, maxValue: hi } }) }); }
+    else CH.series.c.applyOptions({ autoscaleInfoProvider: undefined });
+    if (CH.fit !== fitKey) { CH.fit = fitKey; CH.chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, b.length - (focusOn ? 80 : 150)), to: b.length + 12 }); }
     const t0 = sec(b[0].t); CH.series.c.setMarkers(mk.filter((x) => x.time != null && x.time >= t0).sort((a, z) => a.time - z.time));
     // legend
     legend.push(["#f2a93b", "Daily EMA50 (regime line)", "$" + fmtPx(eDnow)], [cssVar("--up"), "+3% gate: longs allowed above", "$" + fmtPx(eDnow / 0.97)], [cssVar("--down"), "−3% gate: shorts allowed below", "$" + fmtPx(eDnow / 1.03)]);
@@ -669,7 +718,7 @@ async function chartDraw() {
     legend.push(["#4fd1c5", `EMA20 (${tf})`, "$" + fmtPx(e20[e20.length - 1])], ["#b48ef0", `EMA50 (${tf})`, "$" + fmtPx(e50[e50.length - 1])]);
     if (p) legend.push([cssVar("--fg"), `Open ${p.dir} (${nameOf(p.strategy)})`, `entry $${fmtPx(p.entry)} · stop $${fmtPx(p.stop)}`]);
     $("legend").innerHTML = legend.map(([c, k, v]) => `<div><i style="background:${c}"></i><span class="muted">${esc(k)}</span><span>${esc(v)}</span></div>`).join("");
-    $("chartNote").textContent = `Every line is a level the bot actually uses. Nothing is hand-drawn or AI-guessed. Candles: ${main.src} ${BOOK === "GOLD" ? "PAXG (gold)" : "BTC"} · refreshed ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.`;
+    $("chartNote").textContent = `Reaction areas from fixed rules on closed candles (FVG, IFVG, order blocks, value area, premium/discount), not forecasts. Trade boxes show the bot's recorded plan. Candles: ${main.src} ${BOOK === "GOLD" ? "PAXG (gold)" : "BTC"} · refreshed ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.`;
     // the bot's read, in words
     const d = (last - eDnow) / last, rd = [];
     rd.push(d > 0.03 ? `<div><b class="up">Longs allowed.</b> Price is ${pct(d)} above the daily EMA50, past the +3% gate.</div>`
@@ -679,9 +728,27 @@ async function chartDraw() {
     if (p) rd.push(`<div>Managing an open <b>${p.dir}</b>: ${p.tp1Done ? "TP1 taken, " : ""}stop $${fmtPx(p.stop)}, next target $${fmtPx(!p.tp1Done ? p.tp1 : !p.tp2Done ? p.tp2 : p.tp3)}.</div>`);
     const nw = (S.last_run || {}).news; if (nw) rd.push(`<div>News risk <b>${esc(nw.risk)}</b> (${esc(nw.by.startsWith("ai:") ? "AI" : "keyword rules")}, ${esc(nw.mode)} mode): ${esc(nw.reason)}</div>`);
     $("botRead").innerHTML = rd.join("");
-  } catch (e) { $("lwMsg").hidden = false; $("lwMsg").textContent = "Couldn't load candles here (" + (e && e.message || "network") + "). The live dashboard on Vercel shows the chart."; }
+    renderSetupCard(p, S);
+  } catch (e) { $("lwMsg").hidden = false; $("lwMsg").textContent = "Couldn't load candles here (" + (e && e.message || "network") + "). The live dashboard on Vercel shows the chart."; renderSetupCard(((DATA.state || {}).state || {}).pos, DATA.state); }
 }
 
+async function renderSetupCard(p, S) {
+  const el = $("setupCard"), pal = zonePal(), nm = (BOOK === "GOLD" ? "Gold (PAXG)" : "BTC");
+  if (!p) { el.innerHTML = `<div class="setup-head"><h2>Trade setup</h2></div><p class="note" style="margin-top:6px">No open ${nm} trade. When the bot enters, the setup appears here: entry, red stop-loss block, green take-profit blocks and the structure checks that agree with the trade. Reaction areas on the chart below show where the rules would care.</p>`; return; }
+  let conf = null, why = "";
+  try {
+    const m15 = (await getBars("15m", 500)).bars.filter((x) => x.t + 9e5 <= p.openT).map((x) => ({ t: sec(x.t), o: x.o, h: x.h, l: x.l, c: x.c, v: x.v }));
+    conf = DeskZones.confluence(DeskZones.zonesOf(m15), { dir: p.dir, entry: p.entry, stop: p.stop0, tp1: p.tp1, tp2: p.tp2, tp3: p.tp3 });
+  } catch (e) { why = "Could not load 15m candles to check structure at entry."; }
+  const R = Math.abs(p.entry - p.stop0), rr = (x) => (Math.abs(x - p.entry) / R).toFixed(2), d = p.dir === "long" ? 1 : -1;
+  el.innerHTML = `<div class="setup-head"><span class="side ${p.dir}">${p.dir.toUpperCase()}</span><h2>${esc(nameOf(p.strategy))} · ${nm}</h2><span class="note" style="margin-left:auto">PAPER · opened ${ago(p.openT)}</span></div>
+    <div class="setup-grid"><div class="setup-svg">${DeskSetup.setupSVG(p, pal, fmtPx)}</div>
+    <div><div class="grid2"><div><div class="k">Entry</div><div class="v">${fmtPx(p.entry)}</div></div><div><div class="k">Stop loss (original)</div><div class="v down">${fmtPx(p.stop0)} · −1R</div></div>
+    <div><div class="k">Take profits</div><div class="v up">${fmtPx(p.tp1)} · ${fmtPx(p.tp2)} · ${fmtPx(p.tp3)}</div></div><div><div class="k">Reward at TP1 / TP2 / TP3</div><div class="v">${rr(p.tp1)}R / ${rr(p.tp2)}R / ${rr(p.tp3)}R</div></div>
+    <div><div class="k">Risk</div><div class="v">${fmt$(p.riskAmt)} · ${fmtPx(R)} pts</div></div><div><div class="k">Size</div><div class="v">${(+p.originalQty).toFixed(5)} ${BOOK === "GOLD" ? "oz" : "BTC"}</div></div></div>
+    ${conf ? `<h3 style="margin:14px 0 0;font:600 13px var(--f-display)">Structure checks at entry: ${conf.met} of ${conf.of} agree</h3><p class="note faint" style="margin:2px 0 0">A count of rule items on 15m candles at the time of entry. It is not a win probability.</p>${DeskSetup.checksHTML(conf)}` : `<p class="note">${esc(why)}</p>`}
+    <p class="note" style="margin-top:10px"><b>Why the bot took it:</b> ${(p.why || []).map(esc).join(" · ") || "—"}</p></div></div>`;
+}
 async function showTV() {
   $("lwBox").hidden = true; $("tvBox").hidden = false;
   if (CH.tvLoaded) return;
