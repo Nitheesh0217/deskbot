@@ -38,7 +38,9 @@ const srv = http.createServer((q, r) => { const f = path.join(web, q.url === "/"
       return route.abort();
     });
     await page.goto(base + "#tower"); await page.waitForTimeout(1200);
-    const sawPacket = await page.evaluate(async () => { await new Promise((r) => setTimeout(r, 900)); return document.querySelectorAll(".pkt").length; });
+    const sawPacket = await page.evaluate(async () => { const seen = { pkt: 0, trail: 0, fresh: 0, typing: 0, motion: !!(window.Motion && window.Motion.animate) };
+      for (let k = 0; k < 40; k++) { await new Promise((r) => setTimeout(r, 100)); seen.pkt = Math.max(seen.pkt, document.querySelectorAll(".pkt .av.mini").length); seen.trail = Math.max(seen.trail, document.querySelectorAll("#trails path").length);
+        seen.fresh = Math.max(seen.fresh, document.querySelectorAll(".say.fresh").length); seen.typing = Math.max(seen.typing, document.querySelectorAll(".emp.typing").length); } return seen; });
     await page.screenshot({ path: path.join(outDir, `tower_${name}_motion.png`) });
     await page.waitForTimeout(9000);
     await page.click('.emp[data-emp="judge"]'); await page.waitForTimeout(300);

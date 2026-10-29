@@ -2,6 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { initState, applyCfg, buildSeries, snapshot, evaluate, ensureState, type Bar, type State } from "../supabase/functions/deskbot-v5/engine.ts";
+import { replayDecision } from "../supabase/functions/deskbot-v5/provenance.ts";
 
 const M5 = 300_000, T0 = Date.UTC(2026, 0, 1);
 const seeded = (seed: number) => () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
@@ -16,9 +17,9 @@ const good = {
   analyst: { summary: "Sweep and reclaim with a rejection wick.", key_facts: ["sweep"], risks: ["costs"] }, bear: { case: "Costs are heavy.", strongest_point: "costs" },
   bull: { case: "Clean rejection.", strongest_point: "wick" }, judge: { verdict: "agree", reason: "Rules satisfied.", concerns: ["costs"], would_change_my_mind: "News." },
 };
-async function run(i5: number, o: { env?: Record<string, string>; llm?: "ok" | "down" } = {}) {
+async function run(i5: number, o: { env?: Record<string, string>; llm?: "ok" | "down"; lastEvalT?: number } = {}) {
   const nowMs = m5[i5].ct + 4000, env: Record<string, string> = { SUPABASE_URL: "https://deskbot.test", SUPABASE_SERVICE_ROLE_KEY: "test-only", DESKBOT_CRON_SECRET: "test-only", NEWS_MODE: "off", DESKBOT_BOOKS: "BTC", GROQ_API_KEY: "gsk_test_key_not_real", ...(o.env ?? {}) };
-  const order: string[] = []; let state: State = initState(350, T0); state.cfg = LOOSE as never; state.lastEvalT = 0; const agentRows: any[] = [], verdicts: any[] = []; let stateWrites = 0;
+  const order: string[] = []; let state: State = initState(350, T0); state.cfg = LOOSE as never; state.lastEvalT = o.lastEvalT ?? 0; const evRows: any[] = [], decisions: any[] = []; const agentRows: any[] = [], verdicts: any[] = []; let stateWrites = 0;
   let handler!: (req: Request) => Promise<Response>; const pD = (globalThis as any).Deno, pF = globalThis.fetch, pN = Date.now; (globalThis as any).Deno = { env: { get: (k: string) => env[k] }, serve: (h: typeof handler) => { handler = h; } }; Date.now = () => nowMs;
   const json = (x: unknown, status = 200) => new Response(x == null ? "" : JSON.stringify(x), { status });
   globalThis.fetch = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
@@ -27,9 +28,10 @@ async function run(i5: number, o: { env?: Record<string, string>; llm?: "ok" | "
       const path = url.split("/rest/v1/")[1];
       if (init.method === "GET") return path.startsWith("dbv5_state?") ? json([{ state: structuredClone(state), updated_at: new Date(nowMs).toISOString() }]) : json([]);
       if (path === "rpc/dbv5_lease") return json(true);
-      if (path === "rpc/dbv5_record_decision") { order.push("decision"); return json(true); }
+      if (path === "rpc/dbv5_record_decision") { order.push("decision"); decisions.push(body); return json(true); }
       if (path.startsWith("dbv5_state?") && body.state) { stateWrites++; order.push("state"); state = structuredClone(body.state); }
       if (path === "dbv5_agent_log") { order.push("agent_log"); agentRows.push(...body); }
+      if (path === "dbv5_events") evRows.push(...body);
       if (path === "dbv5_filter_verdicts") { order.push("verdicts"); verdicts.push(...body); }
       return json(null);
     }
@@ -46,7 +48,7 @@ async function run(i5: number, o: { env?: Record<string, string>; llm?: "ok" | "
     if (url.includes("binance.vision")) return json([]);
     throw new Error(`Unexpected request: ${url}`);
   }) as typeof fetch;
-  try { await import("../supabase/functions/deskbot-v5/index.ts?x=" + Math.random()); const res = await (await handler(new Request("https://edge.test", { method: "POST", headers: { "x-deskbot-key": "test-only", "Content-Type": "application/json" }, body: '{"action":"run"}' }))).json(); return { res, order, state, agentRows, stateWrites, verdicts }; }
+  try { await import("../supabase/functions/deskbot-v5/index.ts?x=" + Math.random()); const res = await (await handler(new Request("https://edge.test", { method: "POST", headers: { "x-deskbot-key": "test-only", "Content-Type": "application/json" }, body: '{"action":"run"}' }))).json(); return { res, order, state, agentRows, stateWrites, verdicts, evRows, decisions }; }
   finally { globalThis.fetch = pF; (globalThis as any).Deno = pD; Date.now = pN; applyCfg(); }
 }
 const entryBar = async (o: Parameters<typeof run>[1] = {}) => { for (const i of candidates()) { const r = await run(i, o); if (r.state.pos) return { i, r }; } throw new Error("no entry bar found"); };
@@ -80,4 +82,31 @@ test("FILTER-1: an entry records one rules verdict and one AI verdict after the 
   assert.equal(r.verdicts.find((v: any) => v.arm === "ai").take, true, "judge said agree");
   assert.ok(r.order.lastIndexOf("llm") < r.order.indexOf("verdicts"));
   assert.ok(r.order.indexOf("state") < r.order.indexOf("verdicts"), "state is saved before any verdict");
+});
+
+test("catch-up through the handler: a late run that skipped a signal bar enters it (labelled) or records MISSED; CATCHUP=off does neither", async () => {
+  let checked = 0, sawCaught = 0, sawMissed = 0;
+  for (const j of candidates()) {
+    const T = m5[j].ct, sn = snapshot(buildSeries({ m5, m15: FR["15m"], h1: FR["1h"], h4: FR["4h"] }), j);
+    if (!sn.new15) continue;
+    const late = await run(j + 1, { lastEvalT: m5[j - 1].ct, env: { AGENT_AI: "off" } });
+    const caught = late.state.pos && (late.state.pos as any).why?.some((w: string) => w.startsWith("CATCH-UP:"));
+    const missed = late.evRows.some((e) => e.kind === "MISSED");
+    const liveSignal = (late.state as any).pos && !caught;   // the newest bar produced its own signal: catch-up stays out of the way
+    assert.ok(caught || missed || liveSignal, `bar ${j}: neither entered nor recorded`); if (caught) sawCaught++; if (missed) sawMissed++;
+    if (caught) {
+      assert.equal((late.res as any).ok, true);
+      const d = late.decisions[0]; assert.ok(d, "a catch-up entry has a decision record");
+      assert.equal(d.d.record.dataAvailability.catchUpFromT, m5[j - 1].ct);
+      const out = await replayDecision(d.d.record, d.inputs.map((r: any) => ({ tf: r.tf, source: r.source, bars: r.bars, barsSha256: r.bars_sha256 })), d.d.record_sha256);
+      assert.deepEqual(out.diffs, [], "the catch-up decision replays from its stored inputs"); assert.equal(out.reproduced, true);
+      applyCfg();
+    }
+    const off = await run(j + 1, { lastEvalT: m5[j - 1].ct, env: { AGENT_AI: "off", CATCHUP: "off" } });
+    assert.ok(!off.evRows.some((e) => e.kind === "MISSED") && !(off.state.pos && (off.state.pos as any).why?.some((w: string) => w.startsWith("CATCH-UP:"))));
+    if (++checked >= 2) break;
+    void T;
+  }
+  assert.ok(checked >= 1, "found a boundary signal bar to test");
+  assert.ok(sawCaught >= 1 && sawMissed >= 1, "both outcomes are exercised on this deterministic series");
 });

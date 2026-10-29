@@ -18,6 +18,7 @@ import { configIntegrity, serialExecutor } from "./runtime.ts";
 import { runDesk, deskChart, type AgentRow } from "./agents.ts";
 import { preTradeChecks, postTradeReview, runDeskWorkflow } from "./desk.ts";
 import { verdictsFor, filterReport } from "./experiment.ts";
+import { catchUp } from "./catchup.ts";
 import { captureDecision, pickEntry, decisionIdFor } from "./provenance.ts";
 import { recordCoverage, dispositions, boundaryFlags } from "./coverage.ts";
 import type { StrategyTrace } from "./engine.ts";
@@ -35,6 +36,7 @@ const NEWS_MODE = Deno.env.get("NEWS_MODE") ?? "shadow";            // off | sha
 const NEWS_EVERY_MIN = +(Deno.env.get("NEWS_EVERY_MIN") ?? 30);
 const NEWS_AI = (Deno.env.get("NEWS_AI") ?? "on") !== "off";
 const AGENT_AI = (Deno.env.get("AGENT_AI") ?? "shadow") !== "off";   // optional free-LLM stages of the desk review (advisory, never blocks)
+const CATCHUP_MODE = Deno.env.get("CATCHUP") ?? "on";   // on | shadow | off: re-check boundary bars skipped by a late run (catchup.ts)
 const DESK_WORKFLOW = (Deno.env.get("DESK_WORKFLOW") ?? "shadow") !== "off";   // deterministic pre-trade checks + post-trade reviews + optional LLM roles; advisory only
 const EXPERIMENT_ID = Deno.env.get("DESKBOT_EXPERIMENT_ID") ?? "baseline-paper";
 const CHAT_KEY = Deno.env.get("DESKBOT_CHAT_KEY") ?? "";
@@ -185,11 +187,21 @@ async function runOnce(sym: Sym = "BTC") {
   let provenanceError: string | null = null;
   let opened: { strategy: string; dir: string; entry: number; stop: number; reentry?: boolean; why: string[] } | null = null;
   let covNow: unknown = null;
+  let catchup: unknown = null;
   if (snap.T > st.lastEvalT) {
     const hadPos = !!st.pos, gateCopy = JSON.parse(JSON.stringify(st)) as State, trace: StrategyTrace[] = [];
+    const prevEvalT = st.lastEvalT;
     st.lastEvalT = snap.T;
     const stBeforeEval = JSON.parse(JSON.stringify(st)) as State;
     const { signals, rejects } = evaluate(snap, st.enabled, S, st, trace); deskSignals = signals; deskRejects = rejects;
+    // Missed-bar catch-up: only when flat (one position per book) and only when the live bar produced nothing. Same gates apply below.
+    if (CATCHUP_MODE !== "off" && !st.pos) {
+      const cu = catchUp(S, i5, prevEvalT, st, st.enabled, { funding: ctx?.funding ?? null, oi: ctx?.oi ?? null, markPx: ctx?.markPx ?? null, fng: fng?.value ?? null });
+      for (const m of cu.missed) evs.push({ kind: "MISSED", strategy: m.strategy, symbol: sym, msg: `${tag}${m.strategy} ${m.dir.toUpperCase()} setup on the ${new Date(m.T + 1).toISOString().slice(11, 16)} UTC close was missed by a late run: ${m.reason}`, data: { barT: m.T, score: m.score } });
+      if (cu.candidates.length && CATCHUP_MODE === "shadow") for (const c of cu.candidates) evs.push({ kind: "MISSED", strategy: c.strategy, symbol: sym, msg: `${tag}${c.strategy} ${c.dir.toUpperCase()} catch-up still valid (shadow mode, not entered)`, data: { barT: c.barT } });
+      if (cu.candidates.length && CATCHUP_MODE === "on" && !signals.length) signals.push(...cu.candidates);
+      catchup = { mode: CATCHUP_MODE, scanned: cu.scanned, boundaryBars: cu.boundaryBars, valid: cu.candidates.map((c) => c.strategy), missed: cu.missed.length };
+    }
     if (flow) for (const sg of signals) { const a = flow.imb24 * (sg.dir === "long" ? 1 : -1); sg.why.push(`Order flow 24h ${a > 0 ? "with" : "against"} trade (${(flow.imb24 * 100).toFixed(1)}%, shadow)`); }
     decision = { signals: signals.map(s => ({ strategy: s.strategy, dir: s.dir, score: s.score, why: s.why })), rejects };
     if (!st.pos) {
@@ -211,7 +223,7 @@ async function runOnce(sym: Sym = "BTC") {
             sym, now, experimentId: EXPERIMENT_ID, frames: { m5: { ...m5, receivedAtMs: rx.m5 ?? null }, m15: { ...m15, receivedAtMs: rx.m15 ?? null }, h1: { ...h1, receivedAtMs: rx.h1 ?? null }, h4: { ...h4, receivedAtMs: rx.h4 ?? null } }, snapT: snap.T,
             external: { ctx: ctx ? { funding: ctx.funding ?? null, oi: ctx.oi ?? null, markPx: ctx.markPx ?? null } : null, markPxUsed: fillRef, fng: fng?.value ?? null, flow: flow ?? null },
             externalReceivedAtMs: { ctx: rx.ctx ?? null, fng: rx.fng ?? null, fngCached: rx.fngCached, flow: rx.flow ?? null },
-            stateBefore, cfgResolved: resolvedCfg(st.cfg), integrity, signals, rejects, gateNotes: notes, newsBlock, chosen: sig, fillRef, position: p, equityBefore: stateBefore.equity, approvalEnforced: enforce,
+            stateBefore, cfgResolved: resolvedCfg(st.cfg), integrity, signals, rejects, gateNotes: notes, newsBlock, chosen: sig, fillRef, position: p, equityBefore: stateBefore.equity, approvalEnforced: enforce, catchUpFromT: sig.why.some((w) => w.startsWith("CATCH-UP:")) ? prevEvalT : null,
           }));
           for (const k of Object.keys(st)) delete (st as unknown as Record<string, unknown>)[k];
           Object.assign(st, trial);
@@ -257,7 +269,7 @@ async function runOnce(sym: Sym = "BTC") {
   const desk = runDesk({ snap, S, m1, st, signals: deskSignals, rejects: deskRejects, traderActs, opened, closedNow: closed.length, ms: Date.now() - now });
   const rows: AgentRow[] = [...desk.rows];
   const ai = { providers: providersFromEnv().map((p) => p.name), usage: sx._aiUsage ?? {} };
-  const lastRun = { ts: new Date(now).toISOString(), sym, action, trader: { acts: traderActs, plan: st.pos?.plan ?? [] }, source, integrity, news, ai, upnl: +upnl.toFixed(2), market, decision, risk: dynamicRisk(st.equity), desk: desk.summary, coverage: covNow, provenanceError, ms: Date.now() - now };
+  const lastRun = { ts: new Date(now).toISOString(), sym, action, trader: { acts: traderActs, plan: st.pos?.plan ?? [] }, source, integrity, news, ai, upnl: +upnl.toFixed(2), market, decision, risk: dynamicRisk(st.equity), desk: desk.summary, coverage: covNow, catchup, provenanceError, ms: Date.now() - now };
   st.version = VERSION;
   await saveState(st, lastRun, sym);
   await upsert("dbv5_equity", [{ symbol: sym, ts: new Date(now).toISOString(), equity: +st.equity.toFixed(4), upnl: +upnl.toFixed(4), price: snap.price }]);

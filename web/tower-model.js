@@ -94,7 +94,10 @@
       ['last run within 12 min', runFresh], ['feed named', !!lr.source], ['price present', px != null], ['config fingerprint reported', !!integ.hash], ['no decision-record failure', !lr.provenanceError],
     ];
     const failed = checks.filter((c) => !c[1]).map((c) => c[0]);
-    add(member('steward', !have ? 'idle' : failed.length ? 'alert' : 'working', !have ? NR : failed.length ? `${failed.length} evidence check(s) failed: ${failed.join(', ')}` : `snapshot usable · ${checks.length}/${checks.length} checks pass`, checks.map((c) => `${c[1] ? '✓' : '✗'} ${c[0]}`)));
+    const cu = lr.catchup && typeof lr.catchup === 'object' ? lr.catchup : null;
+    const cuLine = cu ? (cu.scanned ? ` · late run: re-checked ${cu.scanned} skipped bar(s), ${cu.boundaryBars} close(s)${cu.valid && cu.valid.length ? `, recovered ${cu.valid.join(', ')}` : ''}${cu.missed ? `, ${cu.missed} logged as missed` : ''}` : ' · no bars skipped') : '';
+    add(member('steward', !have ? 'idle' : failed.length ? 'alert' : 'working', !have ? NR : (failed.length ? `${failed.length} evidence check(s) failed: ${failed.join(', ')}` : `snapshot usable · ${checks.length}/${checks.length} checks pass`) + cuLine,
+      [...checks.map((c) => `${c[1] ? '✓' : '✗'} ${c[0]}`), cu ? `Missed-bar catch-up: ${cu.mode} (skipped 15m/1H/4H/daily closes from the last hour are re-checked; a setup is entered only if the stop is untouched, TP1 not reached and price within 0.25R)` : 'Missed-bar catch-up: reported after the backend release']));
     add(member('feed', runFresh ? 'working' : 'idle', px != null ? `${book} ${usd(px)} via ${lr.source || 'unnamed feed'}` : NR, [`Source: ${lr.source || NR}`, `Last run: ${Number.isFinite(runT) ? new Date(runT).toISOString().slice(11, 19) + ' UTC' : NR}`]));
     const fund = finite(m.funding) ? m.funding : null, oi = finite(m.oi) ? m.oi : null;
     add(member('deriv', fund != null || oi != null ? (runFresh ? 'working' : 'idle') : 'idle', fund != null ? `funding ${pct(fund, 4)} per interval${oi != null ? ` · OI ${num(oi, 0)}` : ''}` : NR, []));
@@ -116,7 +119,7 @@
     // 4 strategy desks
     const scoutRows = rowsOf(agents, 'signals');
     add(member('scout', signals.length ? 'working' : runFresh ? 'idle' : 'idle', runFresh || signals.length ? `${signals.length} candidate(s) passed the rules · ${rejects.length} rejection record(s)` : NR,
-      signals.slice(0, 4).map((s) => `${s.strategy} ${String(s.dir || '').toUpperCase()} · score ${s.score}`), ts(scoutRows[0])));
+      signals.slice(0, 4).map((s) => `${s.strategy} ${String(s.dir || '').toUpperCase()} · score ${s.score}${(s.why || []).some((w) => String(w).startsWith('CATCH-UP')) ? ' · recovered from a skipped bar' : ''}`), ts(scoutRows[0])));
     const strategies = (input.strategies || []).map((s) => ({ id: s.id, name: s.name, family: FAMILY[s.id] || 'Other', state: s.state, line: s.reason || '',
       status: s.state === 'DISABLED' ? 'off' : s.state === 'ERROR' || s.state === 'DATA BLOCKED' ? 'alert' : s.state === 'RUNNING' ? 'working' : 'idle',
       signal: signals.find((x) => x.strategy === s.id) || null, position: !!(p && p.strategy === s.id) }));
@@ -125,7 +128,8 @@
     // 5 portfolio management
     const best = signals.slice().sort((a, b) => (b.score || 0) - (a.score || 0))[0];
     const opened = /^OPEN/.test(lr.action || '');
-    add(member('pm', !have ? 'idle' : 'working', !have ? NR : opened && p ? `allocated: ${p.strategy} ${String(p.dir).toUpperCase()} (highest-scoring eligible candidate)` : p ? `holding ${p.strategy}; one position per book, no new allocation` : signals.length ? `${signals.length} candidate(s); best ${best.strategy} score ${best.score}; ${lr.action || NR}` : 'WAIT · no eligible candidate this check',
+    const recovered = !!(p && Array.isArray(p.why) && p.why.some((w) => String(w).startsWith('CATCH-UP')));
+    add(member('pm', !have ? 'idle' : 'working', !have ? NR : opened && p ? `allocated: ${p.strategy} ${String(p.dir).toUpperCase()} (${recovered ? 'recovered from a skipped bar' : 'highest-scoring eligible candidate'})` : p ? `holding ${p.strategy}; one position per book, no new allocation` : signals.length ? `${signals.length} candidate(s); best ${best.strategy} score ${best.score}; ${lr.action || NR}` : 'WAIT · no eligible candidate this check',
       ['Rule: one position per book; highest score among candidates that pass every gate; WAIT is a valid outcome']));
     const bt = input.bt;
     add(member('evaluator', bt ? 'working' : 'idle', bt && bt.a ? `${bt.label}: ${bt.a.n} trades, ${finite(bt.a.expR) ? (bt.a.expR >= 0 ? '+' : '') + bt.a.expR.toFixed(3) + 'R/trade' : NR} after costs` : 'no live-config backtest returned',

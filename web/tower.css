@@ -128,3 +128,17 @@
 .firm-note summary { cursor: pointer; font: 600 13px/1.3 var(--f-display); }
 .firm-note p, .firm-note li { font-size: 12.5px; line-height: 1.6; color: var(--fg-2); }
 @media (max-width: 720px) { .floor { grid-template-columns: minmax(0, 1fr); } .floor-head b { font-size: 16px; } }
+
+/* courier hand-offs: curved trails, envelope cards with the sender's face, typing dots, received bubbles */
+.trails { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 4; overflow: visible; }
+.trail { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round; stroke-dasharray: 1; stroke-dashoffset: 1; opacity: .9; filter: drop-shadow(0 2px 6px color-mix(in srgb, var(--accent) 40%, transparent)); }
+.trail.adv { stroke-dasharray: .02 .015; stroke-dashoffset: 0; }
+.pkt { padding: 4px 10px 4px 4px; gap: 6px; }
+.pkt::before { content: none; }
+.pkt .av.mini { width: 22px; height: 22px; flex: none; }
+.emp.typing .sdot { width: 26px; border-radius: 6px; background: var(--accent) !important; animation: none; }
+.emp.typing .sdot::after { content: "•••"; position: absolute; inset: -4px 0 0; font: 700 10px/1 var(--f-mono); color: var(--accent-ink); text-align: center; letter-spacing: 1px; animation: dots .6s steps(3) infinite; }
+@keyframes dots { 0% { clip-path: inset(0 66% 0 0); } 50% { clip-path: inset(0 33% 0 0); } 100% { clip-path: inset(0 0 0 0); } }
+.say.fresh { background: color-mix(in srgb, var(--accent) 16%, var(--panel-2)); color: var(--fg); }
+.say .inbox { font: 700 9.5px/1 var(--f-mono); letter-spacing: .05em; text-transform: uppercase; color: var(--accent); margin-right: 4px; }
+.av { transform-origin: 50% 80%; }

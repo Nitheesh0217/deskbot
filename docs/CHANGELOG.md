@@ -89,3 +89,7 @@ TradingView injection + Vercel `deskbot-v3` + Google Sheet / Supabase `bot_state
 ## FILTER-1 experiment + expanded tower
 - Backend: append-only `dbv5_filter_verdicts` (migration 20261029_filter_experiment.sql) and `experiment.ts`. Each new entry records a rules-filter and an AI-filter keep/skip before its outcome; filters never change a trade. Status exposes the mechanical report. Pre-registration: docs/research/FILTER_EXPERIMENT.md.
 - Website: the tower becomes eight departments with a nine-step workflow strip, family strategy desks, proposed research desks (labelled as hypotheses) and the FILTER-1 experiment board.
+
+## No missed trades + live courier hand-offs
+- Backend: `catchup.ts` re-checks boundary bars skipped by late runs (last hour, flat book, same evaluate/snapshot, strict validity: stop untouched, TP1 not reached, ±0.25R drift, 0.75–1.25× stop distance). Otherwise a MISSED event. Decision records carry `catchUpFromT`; replay reproduces catch-up entries. `CATCHUP=on|shadow|off`.
+- Website: person-to-person couriers driven by Motion (the engine behind Framer Motion): typing dots, the sender turns, an envelope card with the sender's face flies along a curved trail, the receiver springs and shows "from …" with the real value; live price ticks hand off from the feed to the evidence steward between runs; the dispatch log streams every hand-off.
