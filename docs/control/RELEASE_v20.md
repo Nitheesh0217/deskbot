@@ -24,4 +24,5 @@ Local: typecheck, 203 unit tests, browser smokes (scanner, tower, markets) on de
 - Found in that scan and fixed: put−call IV read 0 (Deribit quotes one IV per strike; now OTM puts 88–96% minus OTM calls 104–112%, first live reading +11.4 BTC / +11.6 ETH vol points) and block reasons dominated by switched-off strategies and timing (now filtered). PRs #14, #15.
 - 17:48 version 21 (pinned 411f504); scan HTTP 200. pg_cron `deskbot-v5-scan` (job 4, `7-59/15`) and `deskbot-v5-prune-scans` (job 5) scheduled.
 - Books: the 17:46 v19 run filled BTC SWEEP_REV TP2 (stop to entry), normal trade management. Positions and controls otherwise unchanged.
+- 17:51 book run on version 21: both books HOLD, no errors, positions unchanged. 17:51:56 version 22 (pinned 59d5cd6, timing filtered from block reasons); scan HTTP 200, all 10 markets report rule-level reasons.
 - Rollback: redeploy the entry pinned to f95d859 (v19) and `select cron.unschedule('deskbot-v5-scan')`.
