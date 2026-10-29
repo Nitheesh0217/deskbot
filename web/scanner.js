@@ -77,7 +77,7 @@
     const ms = (scan.markets || []), setups = ms.filter((m) => m.ok && m.setups && m.setups.length);
     const rows = ms.map((m) => !m.ok ? `<tr><td>${esc(m.sym)}</td><td colspan="8" class="faint">${esc(m.error)}</td></tr>` :
       `<tr class="${m.book ? 'book' : ''}"><td><b>${esc(m.sym)}</b>${m.book ? ' <span class="bk">BOOK</span>' : ''}</td><td class="r">${px(m.price)}</td><td class="r">${sgn(m.chg24h)}</td><td>${esc(m.regime)}</td><td>${esc(m.trend)}</td><td class="r">${num(m.rsi15, 0)}</td><td class="r hide-s">${num(m.atr15Pct, 2)}%</td><td class="r hide-s">${m.funding == null ? '—' : sgn(m.funding * 100, 4)}</td>
-       <td>${m.setups.length ? m.setups.map((g) => `<span class="sc-set ${g.dir}">${esc(g.dir.toUpperCase())} ${esc(g.strategy)}</span>`).join(' ') : `<span class="faint">${esc((m.blocked[0] || {}).reason || 'no rule fired')}</span>`}</td></tr>`).join('');
+       <td>${m.setups.length ? m.setups.map((g) => `<span class="sc-set ${g.dir}">${esc(g.dir.toUpperCase())} ${esc(g.strategy)}</span>`).join(' ') : `<span class="faint">${esc(((m.blocked || [])[0] || {}).reason || 'no rule fired')}</span>`}</td></tr>`).join('');
     const cards = setups.flatMap((m) => m.setups.map((g) => `<div class="sc-card ${g.dir}"><div><b>${esc(m.sym)}</b> <span class="sc-set ${g.dir}">${esc(g.dir.toUpperCase())}</span> ${esc(g.strategy)}${m.book ? '' : ' <small class="faint">untested market</small>'}</div>
       <div class="cm-kv"><span>Entry ref</span><b>${px(g.entry)}</b><span>Stop</span><b>${px(g.stop)} (${num(g.stopPct, 2)}%)</b><span>Rule score</span><b>${num(g.score, 2)} <small class="faint">heuristic, not a probability</small></b></div>
       <ul class="cm-l">${(g.why || []).map((w) => `<li>${esc(w)}</li>`).join('')}</ul></div>`)).join('');

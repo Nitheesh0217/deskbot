@@ -8,7 +8,7 @@
 //   validator  second opinion on each signal: room to the next opposing level, higher-timeframe conflict
 //   risk       stop placement (candle body, not wick), targets, position risk
 //   reentry    re-takes a setup after a losing stop-out when price reclaims the level and the trend still agrees
-//   manager    the v5.7 trade manager acting on the open position
+//   manager    the position manager's actions (worklog.ts, written by index.ts with idempotency keys)
 //   ai-review  OPTIONAL free-LLM second opinion on a trade that was just taken. Shadow only: it is logged, it never blocks,
 //              sizes, opens or closes anything (same guardrail as the news layer).
 import {
@@ -62,7 +62,7 @@ export function runDesk(a: DeskInput): { rows: AgentRow[]; chart: ChartRead; sum
     rows.push({ agent: "risk", input_summary: `body-stop ${CFG.BODY_SL.on ? "ON" : "off"}`, output: { plans: signals.map((s) => { const R = Math.abs(snap.price - s.stop), T = CFG.TARGETS[s.strategy]; return { strategy: s.strategy, dir: s.dir, stop: px(s.stop), stopPct: +(R / snap.price * 100).toFixed(3), bodyStop: !!s.bodyStop, tp1: px(snap.price + (s.dir === "long" ? 1 : -1) * T.tp1 * R), tp3: px(snap.price + (s.dir === "long" ? 1 : -1) * T.tp3 * R) }; }) } });
   }
   if (st.reentry || a.opened?.reentry) rows.push({ agent: "reentry", input_summary: CFG.REENTRY.on ? "armed after a stop-out" : "inactive (REENTRY off)", output: { enabled: CFG.REENTRY.on, armed: st.reentry ?? null, openedReentry: !!a.opened?.reentry } });
-  if (a.traderActs.length) rows.push({ agent: "manager", input_summary: `${a.traderActs.length} adjustment(s)`, output: { acts: a.traderActs, plan: st.pos?.plan ?? [] } });
+  // the manager's work log (stop / target / exit / close / failure records) is built in worklog.ts from the position itself
   if (a.opened) rows.push({ agent: "decision", input_summary: `OPEN ${a.opened.dir.toUpperCase()} ${a.opened.strategy}${a.opened.reentry ? " (re-entry)" : ""}`, output: a.opened });
   const summary = { chart: { ...deskChart(chart), zones: deskZones(S) }, body: CFG.BODY_SL.on, reentry: CFG.REENTRY.on ? { armed: st.reentry ?? null } : null, validator: CFG.VALIDATOR.on, meaningful };
   return { rows: meaningful || snap.new15 ? rows : [], chart, summary };

@@ -53,6 +53,17 @@ Acceptance: record before state; fail closed; replay reproduces; mutation of liv
 Rollback: revert the commit; the two tables are additive and may stay (empty or populated, unused).
 Next: T007 replay-fidelity mismatch report (PAXG first); T008 atomic/recoverable state-ledger transitions and cross-worker fencing; T009 bot_state access control.
 
+## W1 — Current-state audit and truthful roster (DONE 30 Oct 2026; CURRENT_STATE.md)
+
+## W2 — Theo work log and missing worker desks (IN PR; deploy + additive migration `20261030_scan_work.sql` need owner approval)
+- Objective: every material management action is recorded once. New desks reflect real workers, and their states come from runtime evidence.
+- Contracts: `worklog.ts` (pure diff, keys `<posId>:<action>:<id>`); `writeAgentRows` drops keys already logged (the per-book lease serializes runs); scan rows gain `work` telemetry; status gains `ai` flags (booleans and provider names only).
+- Acceptance: a retry from the same state adds no row and changes no trade (handler test). Missing AI credentials show BLOCKED with the exact reason (tower test). Event-driven waiting shows WAITING. Absent telemetry shows UNKNOWN.
+- Rollback: redeploy the edge entry pinned to `3e25392`. The migration is additive and needs no rollback; the code tolerates the column being absent.
+- Known limits: dedupe is code-level (no DB unique constraint on agent log keys). Last attempt is not recorded per worker; it is shown as "not recorded". Stella still has no backend.
+
+## W3 — Strategy invocation and veto coverage (NEXT, dependency-ready)
+
 ## Next coding-agent prompt
 
 Latest T003 status: local website evidence/disconnection fixes and optional-AI quota fix VERIFIED by 79 tests/typecheck. Deployment BLOCKED by service authorization. See DEPLOYMENT_HANDOFF.md for exact targets, release order, smoke checks and rollback. T002's exact-artifact dependency remains before backend release; a separately reviewed website-only preview does not change trading behavior.

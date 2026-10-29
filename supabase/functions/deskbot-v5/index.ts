@@ -19,6 +19,7 @@ import { runDesk, deskChart, type AgentRow } from "./agents.ts";
 import { preTradeChecks, postTradeReview, runDeskWorkflow, analystReports, lessonsFrom } from "./desk.ts";
 import { verdictsFor, filterReport } from "./experiment.ts";
 import { catchUp } from "./catchup.ts";
+import { managerRows, managerFailure, snapshotPos, unrecorded, workKey } from "./worklog.ts";
 import { scanMarket, rankScan, derivatives, SCAN_NOTE, CALL_HORIZON_H } from "./scan.ts";
 import { signalsOverBars, resolve, trackRecord, scoreCall, callRecord, PRIORITY, PROMOTION, type NewSignal, type OpenSignal, type Resolution, type OpenCall, type CallScore } from "./track.ts";
 import { captureDecision, pickEntry, decisionIdFor } from "./provenance.ts";
@@ -62,6 +63,16 @@ async function rest(path: string, init: RequestInit = {}) {
 const upsert = (table: string, rows: unknown) => rest(table, { method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify(rows) });
 const insert = (table: string, rows: unknown) => rest(table, { method: "POST", body: JSON.stringify(rows) });
 const select = (q: string) => rest(q, { method: "GET", headers: { Prefer: "" } });
+// Agent work-log writer. Rows carrying output.key (Theo's management actions) are written once: keys already in the log
+// (an earlier attempt of the same run) and repeats within the batch are dropped. Runs hold the per-book lease, so the
+// check and the insert cannot interleave with another run of the same book.
+async function writeAgentRows(sym: string, rows: { agent: string; input_summary: string; output: unknown; provider?: string | null; ms?: number | null; error?: string | null }[]) {
+  const keys = [...new Set(rows.map((r) => (r.output as { key?: unknown } | null)?.key).filter((k): k is string => typeof k === "string"))];
+  const have = new Set<string>();
+  if (keys.length) for (const x of (await select(`dbv5_agent_log?select=k:output->>key&agent=eq.manager&output->>key=in.(${keys.map((k) => `"${k.replace(/["\\]/g, "")}"`).join(",")})`)) ?? []) have.add(x.k);
+  const fresh = unrecorded(rows as { output?: Record<string, unknown> }[], have).filter((r, i, a) => { const k = r.output?.key; return typeof k !== "string" || a.findIndex((x) => x.output?.key === k) === i; }) as typeof rows;
+  if (fresh.length) await insert("dbv5_agent_log", fresh.map((r) => ({ symbol: sym, agent: r.agent, input_summary: r.input_summary, output: r.output, provider: r.provider ?? null, ms: r.ms ?? null, error: r.error ?? null })));
+}
 
 // cron key lives in Supabase Vault; read via a service-role-only RPC (env var overrides if set)
 let _key: string | null = null;
@@ -144,7 +155,8 @@ async function runOnce(sym: Sym = "BTC") {
 
   // 1) manage an open position on the 1m path since the last processed bar
   const closed: Trade[] = [];
-  if (st.pos) {
+  const posBefore = snapshotPos(st.pos);   // Theo's work log compares against this (worklog.ts); observational only
+  if (st.pos) try {
     const since = Math.max(st.lastBarT, st.pos.openT);
     const mins = Math.min(1000, Math.ceil((now - since) / 60_000) + 2);
     const m1 = (await candles("1m", mins, now, "hyperliquid", sym)).bars.filter((b: Bar) => b.ct > since);
@@ -152,11 +164,16 @@ async function runOnce(sym: Sym = "BTC") {
     if (m1.length) st.lastBarT = m1[m1.length - 1].ct;
     for (const t of closed) {
       const msg = `${t.strategy} ${t.dir.toUpperCase()} closed ${t.reason} · net $${t.net.toFixed(2)} (${t.r >= 0 ? "+" : ""}${t.r.toFixed(2)}R)`;
-      evs.push({ kind: t.net > 0 ? "WIN" : "LOSS", strategy: t.strategy, msg: tag + msg, data: { r: t.r, net: t.net, decisionId: decisionIdFor(t.id) }, symbol: sym });
+      evs.push({ kind: t.net > 0 ? "WIN" : "LOSS", strategy: t.strategy, msg: tag + msg, data: { r: t.r, net: t.net, decisionId: decisionIdFor(t.id), work: workKey(t.id, "close", "final") }, symbol: sym });
       await push(`DeskBot ${tag}${t.net > 0 ? "WIN" : "LOSS"}`, `${msg} · Eq $${st.equity.toFixed(2)}`);
     }
-    if (st.pos) for (const e of st.pos.exits) if (e.t > since && e.kind !== "stop") evs.push({ kind: e.kind.toUpperCase(), strategy: st.pos.strategy, symbol: sym, msg: `${tag}${e.kind.toUpperCase()} filled @ ${e.px.toFixed(1)} · stop → ${st.pos.stop.toFixed(1)}`, data: { decisionId: decisionIdFor(st.pos.id), px: e.px, qty: e.qty, stop: st.pos.stop } });
-  } else st.lastBarT = now;
+    if (st.pos) for (const e of st.pos.exits) if (e.t > since && e.kind !== "stop") evs.push({ kind: e.kind.toUpperCase(), strategy: st.pos.strategy, symbol: sym, msg: `${tag}${e.kind.toUpperCase()} filled @ ${e.px.toFixed(1)} · stop → ${st.pos.stop.toFixed(1)}`, data: { decisionId: decisionIdFor(st.pos.id), px: e.px, qty: e.qty, stop: st.pos.stop, work: workKey(st.pos.id, e.kind.startsWith("tp") ? "target_fill" : "exit", `${e.kind}:${e.t}`) } });
+  } catch (e) {
+    // record the failure once per position and stuck bar, then fail the run exactly as before
+    if (posBefore) await writeAgentRows(sym, [managerFailure(sym, posBefore, st.lastBarT, e, decisionIdFor)]).catch(() => {});
+    throw e;
+  }
+  else st.lastBarT = now;
 
   // 1b) news read (every NEWS_EVERY_MIN). Failure here never stops position management above.
   const sx = st as State & { _news?: NewsRead; _aiUsage?: Usage };
@@ -184,7 +201,7 @@ async function runOnce(sym: Sym = "BTC") {
   if (st.pos) {
     const r = traderManage(st, snap, S, m1, snap.price, now); traderActs = r.acts;
     for (const a of r.acts) evs.push({ kind: "MANAGE", strategy: st.pos?.strategy ?? r.closed?.strategy ?? null, msg: tag + a, symbol: sym, data: { decisionId: decisionIdFor((st.pos?.id ?? r.closed?.id)!), stop: st.pos?.stop ?? null } });
-    if (r.closed) { closed.push(r.closed); const t = r.closed; evs.push({ kind: t.net > 0 ? "WIN" : "LOSS", strategy: t.strategy, msg: `${tag}${t.strategy} ${t.dir.toUpperCase()} closed by trade manager · net $${t.net.toFixed(2)} (${t.r >= 0 ? "+" : ""}${t.r.toFixed(2)}R)`, data: { r: t.r, net: t.net, decisionId: decisionIdFor(t.id) }, symbol: sym }); }
+    if (r.closed) { closed.push(r.closed); const t = r.closed; evs.push({ kind: t.net > 0 ? "WIN" : "LOSS", strategy: t.strategy, msg: `${tag}${t.strategy} ${t.dir.toUpperCase()} closed by trade manager · net $${t.net.toFixed(2)} (${t.r >= 0 ? "+" : ""}${t.r.toFixed(2)}R)`, data: { r: t.r, net: t.net, decisionId: decisionIdFor(t.id), work: workKey(t.id, "close", "final") }, symbol: sym }); }
   }
   let action = st.pos ? "HOLD" : "SKIP"; let decision: unknown = null;
   let deskSignals: Awaited<ReturnType<typeof evaluate>>["signals"] = []; let deskRejects: Awaited<ReturnType<typeof evaluate>>["rejects"] = [];
@@ -271,7 +288,7 @@ async function runOnce(sym: Sym = "BTC") {
   const news = nw ? { t: nw.t, risk: nw.risk, bias: nw.bias, event: nw.event, reason: nw.reason, by: nw.by, mode: NEWS_MODE, top: nw.headlines.slice(0, 5).map((h) => ({ src: h.src, title: h.title, t: h.t })), errors: nw.aiErrors ?? [] } : null;
   // desk agents: chart read + validator/risk/re-entry views, persisted to dbv5_agent_log (never allowed to break a run)
   const desk = runDesk({ snap, S, m1, st, signals: deskSignals, rejects: deskRejects, traderActs, opened, closedNow: closed.length, ms: Date.now() - now });
-  const rows: AgentRow[] = [...desk.rows];
+  const rows: AgentRow[] = [...desk.rows, ...managerRows(sym, posBefore, snapshotPos(st.pos), closed, decisionIdFor)];
   const ai = { providers: providersFromEnv().map((p) => p.name), usage: sx._aiUsage ?? {} };
   const lastRun = { ts: new Date(now).toISOString(), sym, action, trader: { acts: traderActs, plan: st.pos?.plan ?? [] }, source, integrity, news, ai, upnl: +upnl.toFixed(2), market, decision, risk: dynamicRisk(st.equity), desk: desk.summary, coverage: covNow, catchup, provenanceError, ms: Date.now() - now };
   st.version = VERSION;
@@ -303,7 +320,7 @@ async function runOnce(sym: Sym = "BTC") {
       }
     } catch (e) { notes.push(`desk review: ${(e as Error).message}`.slice(0, 120)); }
   }
-  if (rows.length) { try { await insert("dbv5_agent_log", rows.map((r) => ({ symbol: sym, agent: r.agent, input_summary: r.input_summary, output: r.output, provider: r.provider ?? null, ms: r.ms ?? null, error: r.error ?? null }))); } catch (e) { notes.push(`agent log: ${(e as Error).message}`.slice(0, 120)); } }
+  if (rows.length) { try { await writeAgentRows(sym, rows); } catch (e) { notes.push(`agent log: ${(e as Error).message}`.slice(0, 120)); } }
   return { ok: true, sym, version: VERSION, integrity, action, equity: +st.equity.toFixed(2), upnl: +upnl.toFixed(2), pos: st.pos ? { strategy: st.pos.strategy, dir: st.pos.dir, entry: st.pos.entry, stop: st.pos.stop, tp1: st.pos.tp1 } : null, trader: traderActs, closed: closed.length, source, news: news ? { risk: news.risk, by: news.by } : null, provenanceError, ms: Date.now() - now };
 }
 
@@ -398,7 +415,9 @@ async function runScan() {
   if (newCalls.length) await rest("dbv5_calls?on_conflict=sym,t", { method: "POST", headers: { Prefer: "resolution=ignore-duplicates,return=minimal" }, body: JSON.stringify(newCalls) }).catch((e) => trackErrors.push(`calls insert: ${(e as Error).message}`.slice(0, 120)));
   const deriv = await Promise.all((["BTC", "ETH"] as const).map((c) => derivatives(c, now).catch((e) => ({ currency: c, errors: [(e as Error).message.slice(0, 80)] }))));
   const row = { markets: rankScan(markets as never), deriv, note: SCAN_NOTE, ms: Date.now() - t0 };
-  await insert("dbv5_scans", [row]);
+  // per-worker telemetry for the tower (call maker / setup tracker / options reader); additive column, older schema tolerated
+  const work = { calls: { new: newCalls.length, scored: scored.length, open: openCalls.length }, tracker: { new: fresh.length, resolved: updates.filter((u) => u.status !== "open").length, open: open.length }, errors: trackErrors, derivErrors: deriv.flatMap((d) => ((d as { errors?: string[] }).errors ?? []).map((x) => `${(d as { currency: string }).currency}: ${x}`)) };
+  await insert("dbv5_scans", [{ ...row, work }]).catch(async (e) => { if (!/work/.test(String((e as Error).message))) throw e; await insert("dbv5_scans", [row]); });
   return { ok: true, markets: markets.length, setups: (row.markets as { setups?: unknown[] }[]).reduce((a, m) => a + (m.setups?.length ?? 0), 0), calls: { new: newCalls.length, scored: scored.length }, tracked: { new: fresh.length, resolved: updates.filter((u) => u.status !== "open").length, open: open.length, errors: trackErrors }, ms: row.ms };
 }
 
@@ -420,7 +439,7 @@ async function status() {
     select("dbv5_backtests?select=ran_at,days,results&results->>label=like.LIVE_CONFIG*&order=id.desc&limit=1"),
     select("dbv5_agent_log?select=ts,symbol,agent,input_summary,output,provider,error&order=id.desc&limit=200").catch(() => []),
   ]);
-  const [scanRows, track] = await Promise.all([select("dbv5_scans?select=ts,markets,deriv,note,ms&order=id.desc&limit=1").catch(() => []), trackStatus()]);
+  const [scanRows, track] = await Promise.all([select("dbv5_scans?select=ts,markets,deriv,note,ms,work&order=id.desc&limit=1").catch(() => select("dbv5_scans?select=ts,markets,deriv,note,ms&order=id.desc&limit=1")).catch(() => []), trackStatus()]);
   const scan = scanRows?.[0] ?? null;
   const st = s?.[0]?.state ?? null;
   const experiment = await experimentStatus();
@@ -437,7 +456,7 @@ async function status() {
     books[sym] = r?.[0] ? { name: SYMBOLS[sym].name, hl: SYMBOLS[sym].hl, integrity: await integrityFor(sym, resolvedCfg(r[0].state?.cfg)), state: r[0].state, lastRun: r[0].last_run, updated: r[0].updated_at, curve: c } : { name: SYMBOLS[sym].name, hl: SYMBOLS[sym].hl, state: null };
   }
   const curve = (eq ?? []).filter((_: unknown, i: number, a: unknown[]) => a.length < 600 || i % Math.ceil(a.length / 600) === 0 || i === a.length - 1);
-  return { version: VERSION, mode: "PAPER", now: new Date().toISOString(), updated: s?.[0]?.updated_at ?? null, integrity, state: st, lastRun: s?.[0]?.last_run ?? null, events: ev, agents: agents ?? [], trades: tr, curve, books, backtest: bt?.[0] ?? null, experiment, config, scan, track, chat: { enabled: !!CHAT_KEY, ai: providersFromEnv().map((p) => p.name) } };
+  return { version: VERSION, mode: "PAPER", now: new Date().toISOString(), updated: s?.[0]?.updated_at ?? null, integrity, state: st, lastRun: s?.[0]?.last_run ?? null, events: ev, agents: agents ?? [], trades: tr, curve, books, backtest: bt?.[0] ?? null, experiment, config, scan, track, chat: { enabled: !!CHAT_KEY, ai: providersFromEnv().map((p) => p.name) }, ai: { providers: providersFromEnv().map((p) => p.name), agentAi: AGENT_AI, deskWorkflow: DESK_WORKFLOW, newsAi: NEWS_AI, newsMode: NEWS_MODE } };
 }
 
 // ─── AI assistant (owner only; password = DESKBOT_CHAT_KEY secret) ─────────
