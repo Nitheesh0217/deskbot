@@ -16,7 +16,7 @@ import { providersFromEnv, type Usage } from "./ai.ts";
 import { chat, validatePatch, mergeCfg, EDITABLE, type ChatTurn } from "./chat.ts";
 import { configIntegrity, serialExecutor } from "./runtime.ts";
 import { runDesk, deskChart, type AgentRow } from "./agents.ts";
-import { preTradeChecks, postTradeReview, runDeskWorkflow } from "./desk.ts";
+import { preTradeChecks, postTradeReview, runDeskWorkflow, analystReports, lessonsFrom } from "./desk.ts";
 import { verdictsFor, filterReport } from "./experiment.ts";
 import { catchUp } from "./catchup.ts";
 import { captureDecision, pickEntry, decisionIdFor } from "./provenance.ts";
@@ -37,7 +37,9 @@ const NEWS_EVERY_MIN = +(Deno.env.get("NEWS_EVERY_MIN") ?? 30);
 const NEWS_AI = (Deno.env.get("NEWS_AI") ?? "on") !== "off";
 const AGENT_AI = (Deno.env.get("AGENT_AI") ?? "shadow") !== "off";   // optional free-LLM stages of the desk review (advisory, never blocks)
 const CATCHUP_MODE = Deno.env.get("CATCHUP") ?? "on";   // on | shadow | off: re-check boundary bars skipped by a late run (catchup.ts)
-const DESK_WORKFLOW = (Deno.env.get("DESK_WORKFLOW") ?? "shadow") !== "off";   // deterministic pre-trade checks + post-trade reviews + optional LLM roles; advisory only
+const DESK_WORKFLOW = (Deno.env.get("DESK_WORKFLOW") ?? "shadow") !== "off";
+const DEBATE_ROUNDS = Math.min(3, Math.max(1, +(Deno.env.get("DEBATE_ROUNDS") ?? 1) || 1));   // bull/bear rounds (TradingAgents max_debate_rounds)
+const RISK_ROUNDS = Math.min(2, Math.max(1, +(Deno.env.get("RISK_ROUNDS") ?? 1) || 1));       // aggressive/conservative/neutral rounds   // deterministic pre-trade checks + post-trade reviews + optional LLM roles; advisory only
 const EXPERIMENT_ID = Deno.env.get("DESKBOT_EXPERIMENT_ID") ?? "baseline-paper";
 const CHAT_KEY = Deno.env.get("DESKBOT_CHAT_KEY") ?? "";
 const CHAT_DAILY_CAP = +(Deno.env.get("CHAT_DAILY_CAP") ?? 150);
@@ -283,9 +285,15 @@ async function runOnce(sym: Sym = "BTC") {
       if (p) {
         const checks = preTradeChecks({ plan: { dir: p.dir, entry: p.entry, stop0: p.stop0, tp1: p.tp1, maxHoldH: p.maxHoldH, strategy: p.strategy }, atr15: snap.atr15, hour: snap.hour, funding: ctx?.funding ?? null, costs: { taker: CFG.TAKER_FEE, slippage: CFG.SLIPPAGE }, newsRisk: sx._news?.risk ?? null, levels: desk.chart.levels });
         const usageBefore = JSON.stringify(sx._aiUsage ?? {});
-        const wf = await runDeskWorkflow({ ref: p.id, sym, strategy: p.strategy, dir: p.dir, regime: p.regime, why: p.why, newsRisk: sx._news?.risk ?? null, chart: deskChart(desk.chart), checks,
+        const analysts = analystReports({ price: snap.price, regime: snap.regime, bias: desk.chart.bias ?? null, trend: { "5m": snap.st5, "15m": snap.st15, "1h": snap.st1h, "4h": snap.st4h }, rsi15: snap.rsi15, rsi1h: snap.rsi1h, chop15: snap.chop15, vwapDev: snap.vwapDev, atr15: snap.atr15,
+          support: desk.chart.support ?? null, resistance: desk.chart.resistance ?? null, funding: ctx?.funding ?? null, oi: ctx?.oi ?? null, fng: fng?.value ?? null, flow24: flow?.imb24 ?? null,
+          newsRisk: sx._news?.risk ?? null, newsReason: sx._news?.reason ?? null, headlines: (sx._news?.headlines ?? []).map((h) => h.title) });
+        // memory: the last closed trades of this strategy on this book (TradingAgents' reflection memory, kept deterministic)
+        let lessons: string[] = [];
+        try { lessons = lessonsFrom(await select(`dbv5_trades?select=strategy,dir,r,reason,close_t&symbol=eq.${sym}&strategy=eq.${encodeURIComponent(p.strategy)}&order=close_t.desc&limit=8`)); } catch { /* memory is optional */ }
+        const wf = await runDeskWorkflow({ ref: p.id, sym, strategy: p.strategy, dir: p.dir, regime: p.regime, why: p.why, newsRisk: sx._news?.risk ?? null, chart: deskChart(desk.chart), checks, analysts, lessons,
           plan: { dir: p.dir, entry: p.entry, stop0: p.stop0, tp1: p.tp1, tp2: p.tp2, tp3: p.tp3, maxHoldH: p.maxHoldH, strategy: p.strategy, riskAmt: p.riskAmt } },
-          { providers: AGENT_AI ? providersFromEnv() : [], usage: (sx._aiUsage ??= {}), now });
+          { providers: AGENT_AI ? providersFromEnv() : [], usage: (sx._aiUsage ??= {}), now, debateRounds: DEBATE_ROUNDS, riskRounds: RISK_ROUNDS });
         rows.push(...wf.rows);
         // FILTER-1 shadow verdicts: recorded now, before this trade has an outcome. Append-only; a failure here is visible and changes nothing else.
         try { await insert("dbv5_filter_verdicts", verdictsFor(p.id, sym, p.strategy, checks, wf.rows)); } catch (e) { notes.push(`filter verdicts: ${(e as Error).message}`.slice(0, 120)); }

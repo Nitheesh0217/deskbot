@@ -13,10 +13,13 @@ const FR: Record<string, Bar[]> = { "1m": [], "5m": m5, "15m": agg(3), "1h": agg
 const LOOSE = { MIN_SCORE: 0 };
 const candidates = (): number[] => { applyCfg(LOOSE as never); const S = buildSeries({ m5, m15: FR["15m"], h1: FR["1h"], h4: FR["4h"] }), out: number[] = []; for (let i = 34000; i < 35000; i++) { const st = ensureState(initState(350, T0)); if (evaluate(snapshot(S, i, { funding: 0.0001, oi: 5, markPx: null, fng: 50 }), st.enabled, S, st).signals.length) out.push(i); } applyCfg(); return out; };
 
-const good = {
-  analyst: { summary: "Sweep and reclaim with a rejection wick.", key_facts: ["sweep"], risks: ["costs"] }, bear: { case: "Costs are heavy.", strongest_point: "costs" },
-  bull: { case: "Clean rejection.", strongest_point: "wick" }, judge: { verdict: "agree", reason: "Rules satisfied.", concerns: ["costs"], would_change_my_mind: "News." },
-};
+const sp = (a: string) => ({ argument: a, strongest_point: a.slice(0, 20) });
+// the PM rates in the trade's direction (Buy for a long, Sell for a short), so its stance is always "keep"
+const good = (role: string, dir: string): unknown => ({
+  bull: sp("Clean rejection."), bear: sp("Costs are heavy."), research: { rating: "Overweight", rationale: "Rules satisfied.", stronger_side: "bull" },
+  trader: { action: "take", reason: "Plan matches the rules.", execution_note: "Filled." }, aggressive: sp("Reward covers costs."), conservative: sp("Costs are heavy."), neutral: sp("Both hold."),
+  pm: { rating: dir === "short" ? "Sell" : "Buy", executive_summary: "Keep.", thesis: "Rules satisfied.", would_change_my_mind: "News." },
+} as Record<string, unknown>)[role];
 async function run(i5: number, o: { env?: Record<string, string>; llm?: "ok" | "down"; lastEvalT?: number } = {}) {
   const nowMs = m5[i5].ct + 4000, env: Record<string, string> = { SUPABASE_URL: "https://deskbot.test", SUPABASE_SERVICE_ROLE_KEY: "test-only", DESKBOT_CRON_SECRET: "test-only", NEWS_MODE: "off", DESKBOT_BOOKS: "BTC", GROQ_API_KEY: "gsk_test_key_not_real", ...(o.env ?? {}) };
   const order: string[] = []; let state: State = initState(350, T0); state.cfg = LOOSE as never; state.lastEvalT = o.lastEvalT ?? 0; const evRows: any[] = [], decisions: any[] = []; const agentRows: any[] = [], verdicts: any[] = []; let stateWrites = 0;
@@ -37,8 +40,8 @@ async function run(i5: number, o: { env?: Record<string, string>; llm?: "ok" | "
     }
     if (url.includes("api.groq.com")) {
       order.push("llm"); if (o.llm === "down") return json({ error: "down" }, 500);
-      const sys = JSON.parse(String(init.body)).messages[0].content as string, role = sys.includes("desk analyst") ? "analyst" : sys.includes("skeptical") ? "bear" : sys.includes("supportive") ? "bull" : "judge";
-      return json({ choices: [{ message: { content: JSON.stringify((good as any)[role]) } }] });
+      const sys = JSON.parse(String(init.body)).messages[0].content as string, role = (["Bull Researcher", "Bear Researcher", "Research Manager", "the Trader", "Aggressive Risk", "Conservative Risk", "Neutral Risk", "Portfolio Manager"] as const).map((k, j) => sys.includes(k) ? ["bull", "bear", "research", "trader", "aggressive", "conservative", "neutral", "pm"][j] : null).find(Boolean)!;
+      return json({ choices: [{ message: { content: JSON.stringify(good(role, JSON.parse(JSON.parse(String(init.body)).messages[1].content).facts.direction)) } }] });
     }
     if (url.includes("hyperliquid")) {
       if (body.type === "metaAndAssetCtxs") return json([{ universe: [{ name: "BTC" }] }, [{ funding: "0.0001", openInterest: "5", markPx: String(closes[i5]) }]]);
@@ -56,17 +59,17 @@ const entryBar = async (o: Parameters<typeof run>[1] = {}) => { for (const i of 
 test("an entry triggers the desk review after state is saved; counters are persisted by a second save; rows reach the agent log", async () => {
   const { r } = await entryBar();
   assert.ok(r.order.indexOf("state") < r.order.indexOf("llm"), "state saved before any LLM call");
-  assert.equal(r.order.filter((x) => x === "llm").length, 4); assert.ok(r.stateWrites >= 2, "second save persists provider usage");
-  assert.equal((r.state as any)._aiUsage.groq.calls, 4, "daily-cap counters survive the run");
-  const agents = r.agentRows.map((x) => x.agent); for (const a of ["desk-checks", "desk-analyst", "desk-bear", "desk-bull", "desk-judge"]) assert.ok(agents.includes(a), a);
-  const judge = r.agentRows.find((x) => x.agent === "desk-judge"); assert.equal(judge.output.verdict, "agree"); assert.equal(judge.output.ref, r.state.pos!.id); assert.equal(judge.output.authority, "advisory");
+  assert.equal(r.order.filter((x) => x === "llm").length, 8); assert.ok(r.stateWrites >= 2, "second save persists provider usage");
+  assert.equal((r.state as any)._aiUsage.groq.calls, 8, "daily-cap counters survive the run");
+  const agents = r.agentRows.map((x) => x.agent); for (const a of ["desk-checks", "desk-analysts", "desk-bull", "desk-bear", "desk-research", "desk-trader", "desk-risk-neutral", "desk-pm"]) assert.ok(agents.includes(a), a);
+  const pm = r.agentRows.find((x) => x.agent === "desk-pm"); assert.ok(["Buy", "Sell"].includes(pm.output.rating)); assert.equal(pm.output.ref, r.state.pos!.id); assert.equal(pm.output.authority, "advisory"); assert.ok(["keep", "skip"].includes(pm.output.stance));
   assert.ok(r.order.indexOf("llm") < r.order.lastIndexOf("agent_log"), "rows are written after the LLM stages");
 });
 
 test("a provider outage changes nothing about the trade: position, equity and state are identical to a run with no providers", async () => {
   const { i, r: down } = await entryBar({ llm: "down" }); const none = await run(i, { env: { GROQ_API_KEY: "", GEMINI_API_KEY: "" } });
   assert.deepEqual(down.state.pos, none.state.pos); assert.equal(down.state.equity, none.state.equity); assert.equal(down.res.books.BTC.ok, true);
-  assert.ok(down.agentRows.some((x) => x.agent === "desk-analyst" && x.error), "outage recorded on the stage row"); assert.ok(!none.order.includes("llm"), "no providers: no calls");
+  assert.ok(down.agentRows.some((x) => x.agent === "desk-bull" && x.error), "outage recorded on the stage row"); assert.ok(!none.order.includes("llm"), "no providers: no calls");
   assert.ok(none.agentRows.some((x) => x.agent === "desk-checks"), "deterministic checks still logged without providers");
 });
 
@@ -79,7 +82,7 @@ test("FILTER-1: an entry records one rules verdict and one AI verdict after the 
   const { r } = await entryBar();
   assert.deepEqual(r.verdicts.map((v: any) => v.arm).sort(), ["ai", "rules"]);
   for (const v of r.verdicts) assert.equal(v.ref, r.state.pos!.id);
-  assert.equal(r.verdicts.find((v: any) => v.arm === "ai").take, true, "judge said agree");
+  assert.equal(r.verdicts.find((v: any) => v.arm === "ai").take, true, "PM rated in the trade's direction");
   assert.ok(r.order.lastIndexOf("llm") < r.order.indexOf("verdicts"));
   assert.ok(r.order.indexOf("state") < r.order.indexOf("verdicts"), "state is saved before any verdict");
 });

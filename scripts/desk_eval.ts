@@ -1,12 +1,14 @@
 // Measures whether the desk review's verdicts carry information about outcomes. Prospective, descriptive, never an authority.
 //   npx tsx scripts/desk_eval.ts export.json     export = { rows: dbv5_agent_log rows (agent, output), trades: [{ id, r, net, strategy }] }
-// Joins each desk-judge row to its closed trade by `output.ref` (the position id). Reports per verdict: n, mean R, win rate, net R, worst R, and the
+// Joins each desk-judge (or desk-pm) row to its closed trade by `output.ref` (the position id). Reports per verdict: n, mean R, win rate, net R, worst R, and the
 // disagree-minus-agree difference in mean R with an iid bootstrap interval (trades are not independent, so treat it as optimistic).
 import { readFileSync } from "node:fs";
-type Row = { agent: string; output?: { ref?: string; verdict?: string } }; type Tr = { id: string; r: number; net: number; strategy?: string };
+type Row = { agent: string; output?: { ref?: string; verdict?: string; stance?: string } };
+// desk-pm (agentic flow, v20+) records a direction-mapped stance; it maps onto the old judge verdicts so both eras are read the same way.
+const PM: Record<string, string> = { keep: "agree", skip: "disagree", abstain: "unsure" }; type Tr = { id: string; r: number; net: number; strategy?: string };
 export function evaluate(rows: Row[], trades: Tr[], seed = 20261029) {
   const byId = new Map(trades.map((t) => [t.id, t])), groups: Record<string, Tr[]> = { agree: [], disagree: [], unsure: [] }; let pending = 0;
-  for (const r of rows) if (r.agent === "desk-judge" && r.output?.verdict && r.output.ref) { const t = byId.get(r.output.ref); if (t) groups[r.output.verdict]?.push(t); else pending++; }
+  for (const r of rows) { const v = r.agent === "desk-judge" ? r.output?.verdict : r.agent === "desk-pm" ? PM[r.output?.stance ?? ""] : undefined; if (v && r.output?.ref) { const t = byId.get(r.output.ref); if (t) groups[v]?.push(t); else pending++; } }
   const stat = (g: Tr[]) => ({ n: g.length, meanR: g.length ? +(g.reduce((a, t) => a + t.r, 0) / g.length).toFixed(3) : null, winRate: g.length ? +(g.filter((t) => t.net > 0).length / g.length).toFixed(3) : null, netR: +g.reduce((a, t) => a + t.r, 0).toFixed(2), worstR: g.length ? +Math.min(...g.map((t) => t.r)).toFixed(2) : null });
   let s = seed; const rnd = () => ((s = (s * 1664525 + 1013904223) % 4294967296) / 4294967296);
   const a = groups.agree.map((t) => t.r), d = groups.disagree.map((t) => t.r); let diff: { diff: number; lo: number; hi: number } | null = null;
