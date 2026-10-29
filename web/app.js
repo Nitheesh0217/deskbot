@@ -319,6 +319,7 @@ function renderScanner() {
   const S = globalThis.DeskScanner; if (!S) return;
   const now = Date.now();
   S.renderScan($("scanBody"), RAW && RAW.scan, now, RAW && RAW.track);
+  S.renderMini($("miniBoard"), RAW && RAW.scan, RAW && RAW.track);
   S.renderCommittee($("committeeBody"), RAW && RAW.agents, RAW && RAW.chat && RAW.chat.ai);
   if (!RAW) { S.renderState($("tradeState"), { state: "HALTED", reasons: ["account status not loaded"] }); return; }
   const g = RAW.books && RAW.books.GOLD, gold = BOOK === "GOLD";
@@ -330,13 +331,13 @@ function renderScanner() {
 const VIEWS = ["desk", "tower", "markets", "scanner", "committee", "chart", "strategies", "trades", "activity", "system"];
 const PAGE_META = {
   markets:["Markets terminal","Clocks, sessions, crypto, macro, the economic calendar and news around the bot\u2019s two books. Context only; the bot does not read it."],
-  scanner:["Market scanner","The bot\u2019s own rules run on every Hyperliquid market every 15 minutes, with options and futures context from Deribit. Setups are rules firing, not predictions."],
+  scanner:["Market board","Every market checked every 15 minutes: a rule-based 4-hour call, its live track record, and any strategy firing."],
   committee:["Investment committee","Each new paper entry reviewed by an analyst team, a bull/bear debate, a research manager, a trader, a three-way risk debate and a portfolio manager. Advisory only."],
   tower:["The trading tower","Every agent on its floor, what it reported, and how each check is handed from desk to desk."],
-  desk:["Your desk. A clearer perspective.","Follow the evidence, explore different setups, and keep every paper result in view."],
+  desk:["Overview","Money, the open position and a call on every market."],
   chart:["Chart workspace","Market structure and the paper runner’s reported levels. Observations are not forecasts."],
   strategies:["Strategy monitor","See what is configured, what was reported, and what has actually traded."],
-  trades:["Trade journal","Review net outcomes and the execution path behind each closed paper trade."],
+  trades:["Journal","Every closed paper trade with its costs and exit path."],
   activity:["Activity stream","The latest returned events from the paper runner, with source timestamps."],
   system:["System & research","Keep operational health, configuration identity and historical evidence separate."]
 };
@@ -352,7 +353,12 @@ function show(v) {
   document.dispatchEvent(new CustomEvent("desk:view",{detail:{view:v}}));
   if (v === "chart") setTimeout(() => chartShow(), 0);
 }
-document.querySelectorAll(".tab").forEach((b) => b.addEventListener("click", () => show(b.dataset.v)));
+document.querySelectorAll(".tab[data-v]").forEach((b) => b.addEventListener("click", () => { show(b.dataset.v); if (b.classList.contains("more") && matchMedia("(max-width: 1099px)").matches) setMore(false); }));
+document.querySelectorAll("[data-go]").forEach((b) => b.addEventListener("click", () => show(b.dataset.go)));
+// "More" holds the secondary views: a collapsible group in the sidebar, a sheet above the bottom bar on phones
+function setMore(open) { const n = document.querySelector("nav.tabs"); n.classList.toggle("more-open", open); $("moreBtn").setAttribute("aria-expanded", String(open)); }
+$("moreBtn").addEventListener("click", () => setMore(!document.querySelector("nav.tabs").classList.contains("more-open")));
+document.addEventListener("desk:view", (e) => { const t = document.querySelector(`.tab[data-v="${e.detail.view}"]`); document.getElementById("moreBtn").classList.toggle("has-active", !!(t && t.classList.contains("more"))); if (t && t.classList.contains("more") && matchMedia("(min-width: 1100px)").matches) setMore(true); });
 
 // ── Chart: TradingView Lightweight Charts (Apache-2.0) + the bot's real levels ──
 const CH = { lib: null, chart: null, series: {}, tf: "1h", mode: "bot", timer: null, tvLoaded: false, request: 0, prims: [], zlines: [], layers: { focus: true, trade: true, FVG: true, IFVG: true, OB: true, value: true, pd: true, structure: false, liq: false } };

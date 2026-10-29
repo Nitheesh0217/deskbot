@@ -4,15 +4,17 @@ const { chromium } = require("playwright"); const http = require("http"), fs = r
 const [fixturePath, outDir] = process.argv.slice(2); fs.mkdirSync(outDir, { recursive: true });
 const fx = JSON.parse(fs.readFileSync(fixturePath, "utf8")); const web = path.join(__dirname, "..", "..", "web");
 const iso = (ms) => new Date(Date.now() + ms).toISOString();
-const mk = (sym, price, setups = [], o = {}) => ({ sym, ok: true, name: sym, book: sym === "BTC" || sym === "GOLD", barT: Date.now() - 60e3, price, chg24h: 1.2, regime: "TREND", trend: "up on 15m/1h/4h", rsi15: 61, rsi1h: 58, chop15: 41, atr15Pct: 0.31, vwapDev: 0.8, funding: 0.0000125, oi: 1e6, notes: [], setups, blocked: [{ reason: "Score 0.4 < 0.55", n: 2 }], ...o });
+const PRI = { BTC: 1, GOLD: 1, ETH: 2, SOL: 2 };
+const callOf = (setups, o) => setups.length ? { lean: setups[0].dir === "long" ? "LONG" : "SHORT", votes: 2, source: "rules setup", cautions: [] } : o.trend === "mixed" ? { lean: "NONE", votes: 1, source: "none", cautions: [] } : { lean: (o.chg24h ?? 1) < 0 ? "SHORT" : "LONG", votes: 3, source: "trend vote", cautions: o.caution ? [o.caution] : [] };
+const mk = (sym, price, setups = [], o = {}) => ({ sym, ok: true, name: sym, book: sym === "BTC" || sym === "GOLD", priority: PRI[sym] || 3, call: callOf(setups, o), barT: Date.now() - 60e3, price, chg24h: 1.2, regime: "TREND", trend: "up on 15m/1h/4h", rsi15: 61, rsi1h: 58, chop15: 41, atr15Pct: 0.31, vwapDev: 0.8, funding: 0.0000125, oi: 1e6, notes: [], setups, blocked: [{ reason: "Score 0.4 < 0.55", n: 2 }], ...o });
 const status = JSON.parse(JSON.stringify(fx.status));
 status.scan = { ts: iso(-4 * 60e3), ms: 8200, note: "Rule-based scan, not a prediction. TEST DATA.", markets: [
   mk("SOL", 182.4, [{ strategy: "EMA_PB", dir: "long", entry: 182.4, stop: 180.9, stopPct: 0.82, score: 0.71, why: ["EMA20 pullback in an up-trend", "1h trend up"] }]),
-  mk("BTC", 81234, [], { trend: "mixed", regime: "RANGE" }), mk("ETH", 3010, [], { chg24h: -0.6 }), { sym: "SUI", ok: false, error: "not enough history" }],
+  mk("BTC", 81234, [], { trend: "mixed", regime: "RANGE" }), mk("GOLD", 4018.8, [], { caution: "RSI15 78: stretched up" }), mk("ETH", 3010, [], { chg24h: -0.6, trend: "down on 15m/1h/4h" }), mk("DOGE", 0.0795, [], {}), { sym: "SUI", ok: false, error: "not enough history", priority: 3 }],
   deriv: [{ currency: "BTC", index: 81200, dvol: { last: 48.2, chg24h: -1.3 }, options: { putCallOI: 0.62, callOI: 250000, putOI: 155000, contracts: 800, nearestExpiry: iso(20 * 3600e3), maxPainNearest: 80000, underlying: 81200, atmIV: 46.1, putMinusCallIV: 2.4, ivExpiry: iso(8 * 86400e3), topOIStrikes: [{ strike: 100000, oi: 22000 }, { strike: 80000, oi: 18000 }] },
     futures: [{ instrument: "BTC-PERPETUAL", expiry: null, mark: 81230, basisPct: 0.037, annualisedPct: null }, { instrument: "BTC-26DEC26", expiry: iso(58 * 86400e3), mark: 82100, basisPct: 1.1, annualisedPct: 6.9 }], errors: [] },
     { currency: "ETH", index: 3010, dvol: null, options: null, futures: null, errors: ["deribit 503"] }] };
-status.track = { promotion: "≥30 resolved setups, mean net R > 0 and the 95% bootstrap lower bound > 0. TEST DATA.", recent: [], markets: [
+status.track = { calls: [{ sym: "BTC", priority: 1, scored: 14, open: 1, hitRate: 57.1, meanMoveAtr: 0.12, verdict: "collecting (14/30)" }, { sym: "GOLD", priority: 1, scored: 9, open: 1, hitRate: 44.4, meanMoveAtr: -0.1, verdict: "collecting (9/30)" }, { sym: "ETH", priority: 2, scored: 31, open: 0, hitRate: 61.3, meanMoveAtr: 0.3, verdict: "CALLS AHEAD OF MARKET" }], promotion: "≥30 resolved setups, mean net R > 0 and the 95% bootstrap lower bound > 0. TEST DATA.", recent: [], markets: [
   { sym: "BTC", priority: 1, open: 1, resolved: 12, wins: 7, meanNetR: 0.12, sumNetR: 1.4, lo95: null, verdict: "collecting (12/30)", byStrategy: [{ strategy: "SWEEP_REV", n: 8, meanNetR: 0.2 }] },
   { sym: "GOLD", priority: 1, open: 0, resolved: 4, wins: 1, meanNetR: -0.4, sumNetR: -1.6, lo95: null, verdict: "collecting (4/30)", byStrategy: [] },
   { sym: "SOL", priority: 2, open: 2, resolved: 33, wins: 22, meanNetR: 0.31, sumNetR: 10.2, lo95: 0.05, verdict: "CANDIDATE", byStrategy: [{ strategy: "EMA_PB", n: 20, meanNetR: 0.4 }] }] };
@@ -56,7 +58,15 @@ const srv = http.createServer((q, r) => { const f = path.join(web, q.url === "/"
     await page.screenshot({ path: path.join(outDir, `committee_${name}.png`), fullPage: true });
     await page.click('.tab[data-v="tower"]'); await page.waitForTimeout(1200);
     const tw = await page.evaluate(() => ({ seats: ["analyst", "bull", "bear", "judge", "trader", "riskdebate", "cio"].map((id) => !!document.querySelector(`.emp[data-emp="${id}"]`)), cio: (document.querySelector('.emp[data-emp="cio"] .say') || {}).innerText }));
-    result[name] = { sc, cm, tw };
+    await page.click('.tab[data-v="desk"]'); await page.waitForTimeout(900);
+    const ov = await page.evaluate(() => ({ mini: document.querySelectorAll("#miniBoard .mini-row").length, calls: [...document.querySelectorAll("#miniBoard .mini-call")].map((x) => x.innerText), engineOpen: document.querySelector("details.engine-more").open, hero: document.querySelector(".pulse-hero").hidden, hScroll: document.documentElement.scrollWidth > innerWidth + 1 }));
+    await page.screenshot({ path: path.join(outDir, `overview_${name}.png`), fullPage: true });
+    await page.click("#moreBtn"); await page.waitForTimeout(250);
+    const more = await page.evaluate(() => [...document.querySelectorAll("#moreGroup .tab")].filter((t) => t.offsetParent !== null).map((t) => t.innerText.trim()));
+    await page.screenshot({ path: path.join(outDir, `more_${name}.png`) });
+    await page.click('#moreGroup .tab[data-v="system"]'); await page.waitForTimeout(400);
+    const sys = await page.evaluate(() => ({ title: document.getElementById("pageTitle").innerText, sheetOpen: document.querySelector("nav.tabs").classList.contains("more-open") }));
+    result[name] = { sc, cm, tw, ov, more, sys };
   }
   await browser.close(); srv.close();
   console.log(JSON.stringify({ result, problems }, null, 1));

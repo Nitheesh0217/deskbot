@@ -81,12 +81,51 @@
     const cards = setups.flatMap((m) => m.setups.map((g) => `<div class="sc-card ${g.dir}"><div><b>${esc(m.sym)}</b> <span class="sc-set ${g.dir}">${esc(g.dir.toUpperCase())}</span> ${esc(g.strategy)}${m.book ? '' : ' <small class="faint">untested market</small>'}</div>
       <div class="cm-kv"><span>Entry ref</span><b>${px(g.entry)}</b><span>Stop</span><b>${px(g.stop)} (${num(g.stopPct, 2)}%)</b><span>Rule score</span><b>${num(g.score, 2)} <small class="faint">heuristic, not a probability</small></b></div>
       <ul class="cm-l">${(g.why || []).map((w) => `<li>${esc(w)}</li>`).join('')}</ul></div>`)).join('');
-    el.innerHTML = `<div class="mk-bar"><span><b>SCAN</b> ${esc(ago(scan.ts, now))} · ${ms.length} markets · ${setups.length} with a rule firing · ${num(scan.ms / 1000, 1)} s</span><span class="faint">every 15 min · Hyperliquid perps</span></div>
-      ${cards ? `<div class="sc-cards">${cards}</div>` : '<p class="mk-note">No strategy fired on the last closed 5m bar of any market. Most bars have no setup; that is the rules working, not a fault.</p>'}
-      <section class="card mk-panel"><div class="mk-h"><b>ALL MARKETS</b><span class="mk-sub">ranked: rule fired → aligned trend → 24h move. Ordering, not a forecast.</span></div><div class="mk-body"><table class="mk-t"><thead><tr><th>Market</th><th class="r">Price</th><th class="r">24h</th><th>Regime</th><th>Trend</th><th class="r">RSI15</th><th class="r hide-s">ATR15</th><th class="r hide-s">Funding/h</th><th>Rules</th></tr></thead><tbody>${rows}</tbody></table></div></section>
-      ${trackPanel(track)}
-      <div class="mk-grid">${(scan.deriv || []).map(derivPanel).join('')}</div>
-      <p class="mk-note">${esc(scan.note || '')}</p>`;
+    const recs = Object.fromEntries(((track && track.calls) || []).map((c) => [c.sym, c]));
+    const order = [...ms].sort((a, b) => byBoard(a, b));
+    el.innerHTML = `<div class="bd-head"><span><b>${ms.length} markets</b> checked ${esc(ago(scan.ts, now))}</span><span class="faint">every 15 min · calls are rule-based leans for the next 4 h, scored afterwards</span></div>
+      <div class="bd-grid">${order.map((m) => boardCard(m, recs[m.sym])).join('')}</div>
+      ${cards ? `<h3 class="bd-sub">Rules firing now</h3><div class="sc-cards">${cards}</div>` : ''}
+      <details class="bd-more"><summary>Details: call record, setup record, options &amp; futures, all indicators</summary>
+        ${callPanel(track)}
+        ${trackPanel(track)}
+        <div class="mk-grid">${(scan.deriv || []).map(derivPanel).join('')}</div>
+        <section class="card mk-panel"><div class="mk-h"><b>ALL MARKETS</b><span class="mk-sub">indicators per market</span></div><div class="mk-body"><table class="mk-t"><thead><tr><th>Market</th><th class="r">Price</th><th class="r">24h</th><th>Regime</th><th>Trend</th><th class="r">RSI15</th><th class="r hide-s">ATR15</th><th class="r hide-s">Funding/h</th><th>Rules</th></tr></thead><tbody>${rows}</tbody></table></div></section>
+        <p class="mk-note">${esc(scan.note || '')}</p>
+      </details>`;
+  }
+  const P1 = ['BTC', 'GOLD'], byBoard = (a, b) => (a.priority || 3) - (b.priority || 3) || (P1.indexOf(a.sym) - P1.indexOf(b.sym)) || callRank(b) - callRank(a);
+  const callRank = (m) => (m && m.ok && m.call && m.call.lean !== 'NONE' ? 10 + Math.abs(m.call.votes || 0) : 0);
+  const TIERS = { 1: 'TRADING', 2: 'NEXT', 3: 'WATCH' };
+  /** One market, one card: price, the call and how this market's calls have done. */
+  function boardCard(m, rec) {
+    if (!m.ok) return `<div class="bd-card off"><div class="bd-top"><b>${esc(m.sym)}</b></div><p class="faint">${esc(m.error)}</p></div>`;
+    const c = m.call || { lean: 'NONE', votes: 0, cautions: [] }, cls = c.lean === 'LONG' ? 'long' : c.lean === 'SHORT' ? 'short' : 'none';
+    const arrow = c.lean === 'LONG' ? '▲' : c.lean === 'SHORT' ? '▼' : '•';
+    const strength = c.lean === 'NONE' ? 'trend frames disagree' : c.source === 'rules setup' ? 'a strategy fired' : `${Math.abs(c.votes)} of 4 signals agree`;
+    const r = rec && rec.scored ? `${num(rec.hitRate, 0)}% right · ${rec.scored} scored` : rec && rec.open ? 'first call being scored' : 'no calls scored yet';
+    return `<div class="bd-card ${cls} ${m.priority === 1 ? 'p1' : ''}">
+      <div class="bd-top"><b>${esc(m.sym)}</b><span class="tier t${m.priority || 3}">${TIERS[m.priority || 3]}</span><span class="bd-px">${px(m.price)} ${sgn(m.chg24h)}</span></div>
+      <div class="bd-call ${cls}"><span class="bd-arrow">${arrow}</span><div><b>${c.lean === 'NONE' ? 'NO CALL' : c.lean}</b><small>${esc(strength)}</small></div></div>
+      ${c.cautions && c.cautions.length ? `<div class="bd-caution">⚠ ${esc(c.cautions.join(' · '))}</div>` : ''}
+      <div class="bd-foot"><span>${esc(m.regime || '')} · ${esc(m.trend || '')}</span><span>${esc(r)}</span></div></div>`;
+  }
+  /** Compact list for the Overview: one line per market. */
+  function renderMini(el, scan, track) {
+    if (!el) return;
+    const ms = (scan && scan.markets) || [];
+    if (!ms.length) { el.innerHTML = '<p class="note">No scan yet.</p>'; return; }
+    const recs = Object.fromEntries(((track && track.calls) || []).map((c) => [c.sym, c]));
+    el.innerHTML = [...ms].sort((a, b) => byBoard(a, b)).map((m) => {
+      const c = (m.ok && m.call) || { lean: 'NONE' }, cls = c.lean === 'LONG' ? 'long' : c.lean === 'SHORT' ? 'short' : 'none', rec = recs[m.sym];
+      return `<div class="mini-row ${m.priority === 1 ? 'p1' : ''}"><b>${esc(m.sym)}</b><span class="num">${m.ok ? px(m.price) : '—'}</span><span class="num">${m.ok ? sgn(m.chg24h) : ''}</span><span class="mini-call ${cls}">${c.lean === 'NONE' ? 'NO CALL' : esc(c.lean)}</span><span class="faint">${rec && rec.scored ? num(rec.hitRate, 0) + '% of ' + rec.scored : 'scoring'}</span></div>`;
+    }).join('');
+  }
+  function callPanel(t) {
+    const cs = (t && t.calls) || []; if (!cs.length) return '';
+    return `<section class="card mk-panel"><div class="mk-h"><b>CALL RECORD</b><span class="mk-sub">each market's 4-hour call, scored on the price move (before costs)</span></div><div class="mk-body"><table class="mk-t"><thead><tr><th>Market</th><th class="r">Scored</th><th class="r">Open</th><th class="r">Right</th><th class="r">Mean move</th><th>Status</th></tr></thead><tbody>
+      ${cs.map((m) => `<tr class="${m.priority === 1 ? 'book' : ''}"><td><b>${esc(m.sym)}</b></td><td class="r">${m.scored}</td><td class="r">${m.open}</td><td class="r">${m.hitRate == null ? '—' : num(m.hitRate, 0) + '%'}</td><td class="r">${m.meanMoveAtr == null ? '—' : sgn(m.meanMoveAtr, 2, ' ATR')}</td><td><span class="verdict ${/AHEAD/.test(m.verdict) ? 'up' : /NO EDGE/.test(m.verdict) ? 'down' : 'faint'}">${esc(m.verdict)}</span></td></tr>`).join('')}</tbody></table></div>
+      <p class="mk-note">A call is right when price moved its way 4 hours later. 50% is a coin flip; a market needs 30 scored calls and a positive lower bound on the mean move before its calls count as ahead of the market.</p></section>`;
   }
   const TIER = { 1: 'P1 · trading', 2: 'P2 · next', 3: 'P3 · watch' };
   /** Forward record: every setup the rules fired, followed to TP1, stop or max hold. The evidence a market needs before a paper book. */
@@ -117,6 +156,6 @@
     el.innerHTML = `<b>${esc(ts.state)}</b><span>${esc(ts.reasons[0])}</span>`;
   }
 
-  const api = { trackPanel, tradingState, committees, renderCommittee, renderScan, renderState, STAGES };
+  const api = { renderMini, boardCard, trackPanel, tradingState, committees, renderCommittee, renderScan, renderState, STAGES };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.DeskScanner = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
