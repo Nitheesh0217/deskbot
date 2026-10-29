@@ -88,6 +88,12 @@ test("authority: the desk module imports nothing that can trade, and the run loo
   const imports = [...src.matchAll(/^import .* from "(.+)";/gm)].map((m) => m[1]); assert.deepEqual(imports, ["./ai.ts", "./agents.ts"]);
   assert.ok(!/engine\.ts/.test(src), "no engine import: it cannot call openPosition, entryGates, managePosition or change CFG");
   const idx = readFileSync(new URL("../supabase/functions/deskbot-v5/index.ts", import.meta.url), "utf8");
-  assert.ok(!/wf\.verdict/.test(idx) && !/verdict/.test(idx.slice(idx.indexOf("Desk review layer"), idx.indexOf("Desk review layer") + 2600)), "the verdict is never read by trading logic");
+  // the only use of a verdict is one append-only shadow record (FILTER-1); remove that exact line and nothing else may mention it
+  const shadow = 'try { await insert("dbv5_filter_verdicts", verdictsFor(p.id, sym, p.strategy, checks, wf.rows)); }';
+  assert.equal(idx.split(shadow).length, 2, "exactly one shadow-verdict write");
+  const block = idx.slice(idx.indexOf("Desk review layer"), idx.indexOf("Desk review layer") + 2900).replace(/^.*dbv5_filter_verdicts.*$/m, "").replace(/^.*FILTER-1 shadow verdicts.*$/m, "");
+  assert.ok(!/wf\.verdict/.test(idx) && !/verdict/.test(block), "the verdict is never read by trading logic");
+  const exp = readFileSync(new URL("../supabase/functions/deskbot-v5/experiment.ts", import.meta.url), "utf8");
+  assert.deepEqual([...exp.matchAll(/^import (.*) from "(.+)";/gm)].map((m) => [m[1].startsWith("type "), m[2]]), [[true, "./desk.ts"]], "experiment.ts imports types only");
   assert.ok(idx.indexOf("await events(evs)") < idx.indexOf("runDeskWorkflow("), "state and ledger are saved before any LLM call");
 });

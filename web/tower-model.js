@@ -1,160 +1,209 @@
-// Trading Tower model. Pure functions: status payload in, floors / staff / hand-offs out. No DOM, no network.
-// Staff are software agents (fixed rules, plus optional free LLM roles that are advisory only). A person-like name is a label for a role.
-// Every line a staff member "says" is copied from a field the runner actually reported. A missing field says "not reported"; nothing is invented.
+// Trading Tower model. Pure functions: status payload in, departments / staff / workflow / hand-offs out. No DOM, no network.
+// The building follows the departments of a systematic trading firm (data, intelligence, research, strategy desks, portfolio, risk,
+// execution, operations). They are logical departments, not a claim about any particular firm's floors.
+// Staff are software agents: fixed rules in the cloud runner, plus optional free-LLM roles that are advisory only. Names are labels for roles.
+// Every line a staff member "says" is copied from a field the runner reported. A missing field says "not reported"; nothing is invented.
 (function (root) {
   'use strict';
   const finite = (n) => typeof n === 'number' && Number.isFinite(n);
   const num = (n, d = 0) => (finite(n) ? n.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }) : '—');
   const usd = (n) => (finite(n) ? (n < 0 ? '−$' : '$') + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—');
+  const pct = (x, d = 3) => (finite(x) ? (x * 100).toFixed(d) + '%' : '—');
   const NR = 'not reported';
-  const FRESH_MS = 30 * 60000;
+  const FRESH_MS = 30 * 60000, RUN_FRESH_MS = 12 * 60000;
 
-  // The roster: id, display name, title, kind (RULES = fixed code, AI = optional free-LLM, advisory only), floor.
+  // Top floor first (the page draws the building from the roof down).
   const FLOORS = [
-    { id: 'penthouse', name: 'Penthouse', sub: 'Portfolio office' },
-    { id: 'risk', name: 'Floor 8', sub: 'Risk office' },
-    { id: 'committee', name: 'Floor 7', sub: 'Investment committee (advisory)' },
-    { id: 'trading', name: 'Floor 6', sub: 'Trading floor' },
-    { id: 'research', name: 'Floor 5', sub: 'Research lab' },
-    { id: 'data', name: 'Floor 4', sub: 'Market data room' },
-    { id: 'execution', name: 'Floor 3', sub: 'Paper execution desk' },
-    { id: 'compliance', name: 'Basement', sub: 'Compliance & audit' },
+    { id: 'ops', n: 8, name: 'Operations & review', job: 'Reconcile records; attribute results to signals, costs, execution and failures; run controlled experiments.' },
+    { id: 'execution', n: 7, name: 'Execution', job: 'Model executable prices, fees, slippage, funding and the position lifecycle. Paper fills only.' },
+    { id: 'risk', n: 6, name: 'Risk management', job: 'Deterministic sizing, limits, stale-data rejection and vetoes. Can block; cannot raise risk.' },
+    { id: 'portfolio', n: 5, name: 'Portfolio management', job: 'Compare eligible candidates, attach evidence, allocate one position or none (WAIT).' },
+    { id: 'desks', n: 4, name: 'Strategy desks', job: 'Trend, breakout, reversal and mean-reversion candidates from the same snapshot.' },
+    { id: 'research', n: 3, name: 'Quantitative research', job: 'Specify features, horizons and experiments offline; keep failed results. Never edits live rules.' },
+    { id: 'intel', n: 2, name: 'Market intelligence', job: 'Structure, levels, catalysts and sentiment as timestamped evidence.' },
+    { id: 'data', n: 1, name: 'Data infrastructure', job: 'Validate timestamps, candles, venue, instrument and freshness. Reject unusable data.' },
   ];
+  // id: [name, title, kind, floor]. kind: RULES = fixed code in the runner, AI = optional free LLM (advisory only), OFFLINE = research tooling, not in the live loop.
   const ROSTER = {
-    pm: ['Morgan', 'Portfolio manager', 'RULES', 'penthouse'],
-    cro: ['Reese', 'Chief risk officer', 'RULES', 'risk'],
-    riskplan: ['Quinn', 'Risk planner', 'RULES', 'risk'],
-    analyst: ['Avery', 'Desk analyst', 'AI', 'committee'],
-    bear: ['Blake', 'Skeptic (bear case)', 'AI', 'committee'],
-    bull: ['Sky', 'Supporter (bull case)', 'AI', 'committee'],
-    judge: ['Judge Harper', 'Committee judge', 'AI', 'committee'],
-    chart: ['Ada', 'Market-structure analyst', 'RULES', 'research'],
-    zones: ['Zed', 'Zone mapper (FVG / OB / value)', 'RULES', 'research'],
-    news: ['Nora', 'News desk', 'RULES+AI', 'research'],
+    auditor: ['Rex', 'Auditor (decision records)', 'RULES', 'ops'],
+    postmortem: ['Pat', 'Post-trade reviewer', 'RULES', 'ops'],
+    config: ['Iris', 'Config auditor', 'RULES', 'ops'],
+    experiment: ['Elle', 'Experiment officer (FILTER-1)', 'RULES', 'ops'],
+    exec: ['Xavi', 'Paper execution trader', 'RULES', 'execution'],
+    manager: ['Theo', 'Position manager', 'RULES', 'execution'],
+    cro: ['Reese', 'Risk controller', 'RULES', 'risk'],
+    riskplan: ['Quinn', 'Risk planner (stops & targets)', 'RULES', 'risk'],
+    validator: ['Val', 'Independent checker', 'RULES', 'risk'],
+    pm: ['Morgan', 'Portfolio allocator', 'RULES', 'portfolio'],
+    evaluator: ['Eve', 'Evaluation service', 'RULES', 'portfolio'],
+    analyst: ['Avery', 'Committee analyst', 'AI', 'portfolio'],
+    bear: ['Blake', 'Skeptical reviewer', 'AI', 'portfolio'],
+    bull: ['Sky', 'Supporting reviewer', 'AI', 'portfolio'],
+    judge: ['Harper', 'Committee judge', 'AI', 'portfolio'],
+    scout: ['Sage', 'Setup scout', 'RULES', 'desks'],
+    researcher: ['Rhea', 'Offline researcher', 'OFFLINE', 'research'],
+    chart: ['Ada', 'Market-structure analyst', 'RULES', 'intel'],
+    zones: ['Zed', 'Zone mapper (FVG / OB / value)', 'RULES', 'intel'],
+    news: ['Nora', 'Catalyst analyst (news)', 'RULES+AI', 'intel'],
+    steward: ['Stella', 'Evidence steward', 'RULES', 'data'],
     feed: ['Felix', 'Price & candle feed', 'RULES', 'data'],
     deriv: ['Dara', 'Derivatives data (funding, OI)', 'RULES', 'data'],
-    mood: ['Mina', 'Sentiment data', 'RULES', 'data'],
-    scout: ['Sage', 'Setup scout', 'RULES', 'trading'],
-    validator: ['Val', 'Independent checker', 'RULES', 'risk'],
-    manager: ['Theo', 'Position manager', 'RULES', 'execution'],
-    recorder: ['Rex', 'Decision recorder', 'RULES', 'compliance'],
-    auditor: ['Iris', 'Config auditor', 'RULES', 'compliance'],
-    postmortem: ['Pat', 'Post-trade reviewer', 'RULES', 'compliance'],
   };
+  const FAMILY = { D_THRUST: 'Trend', TREND_MTF: 'Trend', EMA_CROSS: 'Trend', EMA_PB: 'Trend', HTF_TREND: 'Breakout', SESSION_BO: 'Breakout', D_BEARTRAP: 'Reversal', SWEEP_REV: 'Reversal', HTF_SWEEP: 'Reversal', SSR: 'Reversal', VWAP_REVERT: 'Mean reversion' };
+  // Proposed research desks: hypotheses to test, NOT established edges. Only signal quality has a live experiment.
+  const RESEARCH = [
+    { id: 'orderflow', name: 'Order-flow desk', inputs: 'Trades, bid/ask depth, cancellations, liquidity changes', question: 'Do observations available now predict a later executable return? (feature window strictly before outcome window)' },
+    { id: 'volatility', name: 'Volatility desk', inputs: 'Compression, unusual volume, changing volatility', question: 'Can it forecast expansion, and separately, its direction?' },
+    { id: 'catalyst', name: 'Catalyst desk', inputs: 'First-seen news, scheduled events', question: 'Does genuinely new information improve a defined continuation or reversal forecast?' },
+    { id: 'relval', name: 'Relative-value desk', inputs: 'Eligible instruments and venues (e.g. HL PAXG vs Binance PAXGUSDT)', question: 'Does an apparent discrepancy survive costs, delays and instrument differences?' },
+    { id: 'signalq', name: 'Signal-quality desk', inputs: 'Existing signals and their outcomes', question: 'Can a filter reject weak entries without discarding too many good ones? (FILTER-1)' },
+  ];
+  const WORKFLOW = [
+    ['steward', 'Evidence steward', 'one timestamped snapshot; reject unusable data'],
+    ['scout', 'Specialist desks', 'candidates from the same snapshot'],
+    ['news', 'Catalyst analyst', 'attach news and event evidence'],
+    ['bear', 'Skeptical reviewer', 'contradictions and missing assumptions'],
+    ['evaluator', 'Evaluation service', 'results for this strategy, instrument and cost model'],
+    ['pm', 'Portfolio allocator', 'one candidate or WAIT'],
+    ['cro', 'Risk controller', 'approve size or veto'],
+    ['exec', 'Paper execution & auditor', 'fill, record, reconcile'],
+    ['researcher', 'Offline researcher', 'propose a new experiment; never edit live rules'],
+  ];
 
   const rowsOf = (agents, name) => (Array.isArray(agents) ? agents : []).filter((a) => a && a.agent === name);
   const ts = (x) => { const t = Date.parse(x && x.ts); return Number.isFinite(t) ? t : null; };
   const fresh = (t, now) => t != null && now - t <= FRESH_MS;
+  function member(id, status, line, detail = [], at = null) { const [name, title, kind, floor] = ROSTER[id]; return { id, name, title, kind, floor, status, line, detail, at }; }
 
-  function member(id, status, line, detail = [], at = null) {
-    const [name, title, kind, floor] = ROSTER[id];
-    return { id, name, title, kind, floor, status, line, detail, at };
-  }
-
-  // status: working (reported activity in the last 30 min or live now), idle (configured, nothing recent), off (switched off / no provider), alert (error or warning)
+  // status: working (reported activity recently), idle (configured, nothing recent), off (switched off / no provider / offline), alert (failed check or warning)
   function build(input, now = Date.now()) {
     const S = input.state || {}, st = S.state || {}, lr = S.last_run || {}, m = lr.market || {}, desk = lr.desk || {};
-    const agents = input.agents || [], trades = input.trades || [], curve = input.curve || [];
+    const agents = input.agents || [], trades = input.trades || [], curve = input.curve || [], cfg = input.config || {};
+    const providers = Array.isArray(input.aiProviders) ? input.aiProviders : null;
     const have = finite(st.equity);
-    const strategies = input.strategies || [];
     const dec = lr.decision || {}, signals = Array.isArray(dec.signals) ? dec.signals : [], rejects = Array.isArray(dec.rejects) ? dec.rejects : [];
-    const runT = Date.parse(lr.ts), runFresh = Number.isFinite(runT) && now - runT <= 12 * 60000;
+    const runT = Date.parse(lr.ts), runAge = Number.isFinite(runT) ? now - runT : null, runFresh = runAge != null && runAge >= -60000 && runAge <= RUN_FRESH_MS;
     const integ = S.integrity || lr.integrity || {};
     const book = input.book === 'GOLD' ? 'PAXG' : 'BTC';
-    const staff = {};
-    const add = (m2) => { staff[m2.id] = m2; };
+    const staff = {}, add = (x) => { staff[x.id] = x; };
+    const p = st.pos && typeof st.pos === 'object' ? st.pos : null;
 
-    // data room
+    // 1 data infrastructure
     const px = finite(m.price) ? m.price : null;
-    add(member('feed', runFresh ? 'working' : 'idle', px != null ? `${book} ${usd(px)} via ${lr.source || 'unknown feed'}` : NR, [`Source: ${lr.source || NR}`, `Last run: ${Number.isFinite(runT) ? new Date(runT).toISOString().slice(11, 19) + ' UTC' : NR}`]));
+    const checks = [
+      ['last run within 12 min', runFresh], ['feed named', !!lr.source], ['price present', px != null], ['config fingerprint reported', !!integ.hash], ['no decision-record failure', !lr.provenanceError],
+    ];
+    const failed = checks.filter((c) => !c[1]).map((c) => c[0]);
+    add(member('steward', !have ? 'idle' : failed.length ? 'alert' : 'working', !have ? NR : failed.length ? `${failed.length} evidence check(s) failed: ${failed.join(', ')}` : `snapshot usable · ${checks.length}/${checks.length} checks pass`, checks.map((c) => `${c[1] ? '✓' : '✗'} ${c[0]}`)));
+    add(member('feed', runFresh ? 'working' : 'idle', px != null ? `${book} ${usd(px)} via ${lr.source || 'unnamed feed'}` : NR, [`Source: ${lr.source || NR}`, `Last run: ${Number.isFinite(runT) ? new Date(runT).toISOString().slice(11, 19) + ' UTC' : NR}`]));
     const fund = finite(m.funding) ? m.funding : null, oi = finite(m.oi) ? m.oi : null;
-    add(member('deriv', fund != null || oi != null ? (runFresh ? 'working' : 'idle') : 'idle', fund != null ? `funding ${(fund * 100).toFixed(4)}% per interval${oi != null ? ` · OI ${num(oi, 0)}` : ''}` : NR, [`Funding: ${fund == null ? NR : (fund * 100).toFixed(4) + '%'}`, `Open interest: ${oi == null ? NR : num(oi, 0)}`]));
-    const fng = m.fng != null ? m.fng : (m.fear ?? null);
-    add(member('mood', fng != null ? 'working' : 'idle', fng != null ? `Fear & Greed ${typeof fng === 'object' ? JSON.stringify(fng) : fng}` : NR, []));
+    add(member('deriv', fund != null || oi != null ? (runFresh ? 'working' : 'idle') : 'idle', fund != null ? `funding ${pct(fund, 4)} per interval${oi != null ? ` · OI ${num(oi, 0)}` : ''}` : NR, []));
 
-    // research lab
+    // 2 market intelligence
     const c = desk.chart || {}, tr = c.trend || {}, arrow = (v) => (v === 1 ? '▲' : v === -1 ? '▼' : '·');
     const chartRows = rowsOf(agents, 'chart');
-    add(member('chart', c.bias || chartRows.length ? (fresh(ts(chartRows[0]), now) || runFresh ? 'working' : 'idle') : 'idle',
+    add(member('chart', c.bias ? (runFresh || fresh(ts(chartRows[0]), now) ? 'working' : 'idle') : 'idle',
       c.bias ? `bias ${String(c.bias).toUpperCase()} · 1m${arrow(tr.m1)} 5m${arrow(tr.m5)} 15m${arrow(tr.m15)} 1h${arrow(tr.h1)} 4h${arrow(tr.h4)}` : NR,
       [c.support ? `Support: ${c.support.name} $${num(c.support.px, 0)} (${c.support.atr} ATR)` : `Support: ${NR}`, c.resistance ? `Resistance: ${c.resistance.name} $${num(c.resistance.px, 0)} (${c.resistance.atr} ATR)` : `Resistance: ${NR}`], ts(chartRows[0])));
     const z = c.zones;
-    add(member('zones', z ? 'working' : 'idle', z ? (typeof z.summary === 'string' ? z.summary : `${Object.keys(z).length} zone groups reported`) : 'zones appear after the next cloud check', []));
+    add(member('zones', z ? 'working' : 'idle', z ? (typeof z.summary === 'string' ? z.summary : `${Object.keys(z).length} zone group(s) reported`) : 'zones appear after the next cloud check', []));
     const news = lr.news;
     add(member('news', news ? (news.risk === 'high' ? 'alert' : 'working') : 'idle', news ? `news risk ${String(news.risk).toUpperCase()} (${String(news.by || '').startsWith('ai:') ? 'AI' : 'keyword rules'}, ${news.mode || NR} mode)` : NR, news && news.reason ? [String(news.reason)] : []));
 
-    // execution desk
+    // 3 research (offline)
+    add(member('researcher', 'off', 'FILTER-1 pre-registered; challengers A_COSTR50 and B_BE_TP1 rejected 28 Oct', ['Works offline on frozen data; promotes nothing without review', 'docs/research/FILTER_EXPERIMENT.md', 'docs/research (profit-improvement brief)']));
+
+    // 4 strategy desks
     const scoutRows = rowsOf(agents, 'signals');
-    add(member('scout', signals.length ? 'working' : runFresh ? 'idle' : 'idle',
-      runFresh || signals.length ? `${signals.length} setup(s) passed the rules, ${rejects.length} rejection record(s)` : NR,
+    add(member('scout', signals.length ? 'working' : runFresh ? 'idle' : 'idle', runFresh || signals.length ? `${signals.length} candidate(s) passed the rules · ${rejects.length} rejection record(s)` : NR,
       signals.slice(0, 4).map((s) => `${s.strategy} ${String(s.dir || '').toUpperCase()} · score ${s.score}`), ts(scoutRows[0])));
-    const valRows = rowsOf(agents, 'validator'), v0 = valRows[0] && valRows[0].output;
-    add(member('validator', valRows.length ? (fresh(ts(valRows[0]), now) ? 'working' : 'idle') : 'idle',
-      v0 ? `${v0.enforcing ? 'ENFORCING' : 'advisory'} · ${(v0.verdicts || []).length} verdict(s)` : (desk.validator === false ? 'advisory (off)' : NR),
-      v0 ? (v0.verdicts || []).slice(0, 4).map((x) => `${x.strategy}: ${x.ok ? 'ok' : 'concern'}${x.roomR != null ? ` · room ${x.roomR}R` : ''}`) : [], ts(valRows[0])));
-    const p = st.pos, mgrRows = rowsOf(agents, 'manager');
-    add(member('manager', p ? 'working' : mgrRows.length && fresh(ts(mgrRows[0]), now) ? 'working' : 'idle',
-      p ? `managing ${String(p.dir).toUpperCase()} ${p.strategy} · stop ${num(p.stop, 0)}${p.tp1Done ? ' · TP1 taken' : ''}` : 'flat, no position to manage',
-      p && Array.isArray(p.plan) ? p.plan.slice(-3).reverse().map((x) => `${new Date(x.t).toISOString().slice(11, 16)} ${x.msg}`) : [], ts(mgrRows[0])));
+    const strategies = (input.strategies || []).map((s) => ({ id: s.id, name: s.name, family: FAMILY[s.id] || 'Other', state: s.state, line: s.reason || '',
+      status: s.state === 'DISABLED' ? 'off' : s.state === 'ERROR' || s.state === 'DATA BLOCKED' ? 'alert' : s.state === 'RUNNING' ? 'working' : 'idle',
+      signal: signals.find((x) => x.strategy === s.id) || null, position: !!(p && p.strategy === s.id) }));
+    const desks = ['Trend', 'Breakout', 'Reversal', 'Mean reversion'].map((f) => ({ family: f, strategies: strategies.filter((s) => s.family === f) }));
 
-    // risk office
-    const cb = st.cb || {}, cooling = finite(cb.cooldownUntil) && cb.cooldownUntil > now;
-    const rk = lr.risk;
-    add(member('cro', cooling ? 'alert' : have ? 'working' : 'idle',
-      cooling ? `circuit breaker active until ${new Date(cb.cooldownUntil).toISOString().slice(11, 16)} UTC` : have ? `breaker clear · ${cb.consec || 0} consecutive loss(es)${rk && finite(rk.pct) ? ` · risk per trade ${(rk.pct * 100).toFixed(2)}%` : ''}` : NR,
-      ['Rules: 3 losses in 4 h pause entries; 5% daily loss cap; 6 trades per day', 'Authority: can block entries; cannot raise risk']));
-    const rp = rowsOf(agents, 'risk')[0], plans = rp && rp.output && rp.output.plans || [];
-    add(member('riskplan', rp ? (fresh(ts(rp), now) ? 'working' : 'idle') : 'idle', rp ? `${plans.length} stop/target plan(s) drafted` : NR,
-      plans.slice(0, 3).map((x) => `${x.strategy} ${x.dir}: stop ${x.stop} (${x.stopPct}%) · TP1 ${x.tp1}`), ts(rp)));
-
-    // committee
+    // 5 portfolio management
+    const best = signals.slice().sort((a, b) => (b.score || 0) - (a.score || 0))[0];
+    const opened = /^OPEN/.test(lr.action || '');
+    add(member('pm', !have ? 'idle' : 'working', !have ? NR : opened && p ? `allocated: ${p.strategy} ${String(p.dir).toUpperCase()} (highest-scoring eligible candidate)` : p ? `holding ${p.strategy}; one position per book, no new allocation` : signals.length ? `${signals.length} candidate(s); best ${best.strategy} score ${best.score}; ${lr.action || NR}` : 'WAIT · no eligible candidate this check',
+      ['Rule: one position per book; highest score among candidates that pass every gate; WAIT is a valid outcome']));
+    const bt = input.bt;
+    add(member('evaluator', bt ? 'working' : 'idle', bt && bt.a ? `${bt.label}: ${bt.a.n} trades, ${finite(bt.a.expR) ? (bt.a.expR >= 0 ? '+' : '') + bt.a.expR.toFixed(3) + 'R/trade' : NR} after costs` : 'no live-config backtest returned',
+      bt ? [`Ran ${String(bt.ran_at || NR).slice(0, 16)}`, 'Historical evidence for this config label only; does not certify the current runtime'] : []));
     const prov = (name) => rowsOf(agents, name)[0];
-    const chk = prov('desk-checks');
     const role = (id, agent, label) => {
       const r = prov(agent), o = r && r.output;
-      const off = !r && !(lr.ai && lr.ai.provider) ? true : false;
-      const line = o ? (o.verdict ? `${o.verdict}: ${o.reason || ''}` : (o.summary || o.case || NR)) : (off ? 'no AI provider configured; rule checks still run' : NR);
-      return member(id, r && !r.error ? (fresh(ts(r), now) ? 'working' : 'idle') : r && r.error ? 'alert' : 'off', String(line).slice(0, 220), r && r.error ? [String(r.error)] : [`Authority: advisory only (${label})`], ts(r));
+      const noProvider = providers ? providers.length === 0 : !(lr.ai && Array.isArray(lr.ai.providers) && lr.ai.providers.length);
+      const line = o ? (o.verdict ? `${o.verdict}: ${o.reason || ''}` : (o.summary || o.case || NR)) : noProvider ? 'no AI provider configured; this seat is empty' : 'waiting for the next entry to review';
+      const status = r && r.error ? 'alert' : r ? (fresh(ts(r), now) ? 'working' : 'idle') : noProvider ? 'off' : 'idle';
+      return member(id, status, String(line).slice(0, 220), r && r.error ? [String(r.error)] : [`Advisory only (${label}); cannot place, size or block a trade`], ts(r));
     };
     add(role('analyst', 'desk-analyst', 'summarises the setup'));
     add(role('bear', 'desk-bear', 'argues against'));
     add(role('bull', 'desk-bull', 'argues for'));
-    add(role('judge', 'desk-judge', 'weighs both sides'));
-    staff.analyst.chk = chk ? (chk.output && chk.output.checks || []).map((x) => `${x.level || 'info'}: ${x.code || x.id || ''}`).slice(0, 4) : [];
+    add(role('judge', 'desk-judge', 'its verdict is scored in FILTER-1'));
+    const chk = prov('desk-checks');
+    staff.analyst.chk = chk ? ((chk.output && chk.output.checks) || []).map((x) => `${x.level || 'info'}: ${x.id || x.code || ''}`).slice(0, 5) : [];
 
-    // portfolio / compliance
-    const closedPnl = trades.reduce((a, t) => a + (finite(+t.net) ? +t.net : 0), 0);
-    const startEq = finite(st.startEquity) && st.startEquity > 0 ? st.startEquity : null;
-    add(member('pm', have ? 'working' : 'idle', have ? `paper equity ${usd(st.equity + (finite(lr.upnl) ? lr.upnl : 0))}${startEq ? ` · ${(((st.equity + (lr.upnl || 0)) / startEq - 1) * 100).toFixed(2)}% since start` : ''}` : NR,
-      [`Closed trades: ${st.stats && st.stats.all ? st.stats.all.n : trades.length}`, `Closed net P&L in view: ${usd(closedPnl)}`, 'Paper account. No funded orders.']));
+    // 6 risk management
+    const cb = st.cb || {}, cooling = finite(cb.cooldownUntil) && cb.cooldownUntil > now;
+    const rk = lr.risk;
+    add(member('cro', cooling ? 'alert' : have ? 'working' : 'idle',
+      cooling ? `VETO: circuit breaker until ${new Date(cb.cooldownUntil).toISOString().slice(11, 16)} UTC` : have ? `entries permitted · breaker clear · ${cb.consec || 0} consecutive loss(es)${rk && finite(rk.pct) ? ` · risk/trade ${(rk.pct * 100).toFixed(2)}%` : ''}` : NR,
+      ['3 losses in 4 h pause entries · 5% daily loss cap · 6 entries/day · leverage ≤ 5×', integ.approved === false ? 'Config fingerprint not approved (warning only unless enforcement is on)' : 'Config fingerprint approved']));
+    const rp = prov('risk'), plans = (rp && rp.output && rp.output.plans) || [];
+    add(member('riskplan', rp ? (fresh(ts(rp), now) ? 'working' : 'idle') : 'idle', rp ? `${plans.length} stop/target plan(s) drafted` : NR, plans.slice(0, 3).map((x) => `${x.strategy} ${x.dir}: stop ${x.stop} (${x.stopPct}%) · TP1 ${x.tp1}`), ts(rp)));
+    const vr = prov('validator'), v0 = vr && vr.output;
+    add(member('validator', vr ? (fresh(ts(vr), now) ? 'working' : 'idle') : 'idle', v0 ? `${v0.enforcing ? 'ENFORCING' : 'advisory'} · ${(v0.verdicts || []).length} check(s)` : desk.validator === false ? 'advisory (off)' : NR,
+      v0 ? (v0.verdicts || []).slice(0, 4).map((x) => `${x.strategy}: ${x.ok ? 'ok' : 'concern'}${x.roomR != null ? ` · room ${x.roomR}R` : ''}`) : [], ts(vr)));
+
+    // 7 execution
+    const costs = finite(cfg.TAKER_FEE) ? `taker ${pct(cfg.TAKER_FEE)} · maker ${pct(cfg.MAKER_FEE)} · slippage ${pct(cfg.SLIPPAGE)} · funding hourly` : 'cost model not reported';
+    add(member('exec', opened ? 'working' : have ? 'idle' : 'idle', opened && p ? `paper fill ${String(p.dir).toUpperCase()} @ ${num(p.entry, book === 'PAXG' ? 2 : 0)} incl. slippage` : `no order this check · ${costs}`, [costs, 'Paper only: no exchange account, no funded orders']));
+    const mgr = prov('manager');
+    add(member('manager', p ? 'working' : mgr && fresh(ts(mgr), now) ? 'working' : 'idle', p ? `managing ${String(p.dir).toUpperCase()} ${p.strategy} · stop ${num(p.stop, 0)}${p.tp1Done ? ' · TP1 taken' : ''}` : 'flat, no position to manage',
+      p && Array.isArray(p.plan) ? p.plan.slice(-3).reverse().map((x) => `${new Date(x.t).toISOString().slice(11, 16)} ${x.msg}`) : [], ts(mgr)));
+
+    // 8 operations & review
     const pe = lr.provenanceError;
-    add(member('recorder', pe ? 'alert' : have ? 'working' : 'idle', pe ? String(pe).slice(0, 160) : lr.action && /^OPEN/.test(lr.action) ? 'decision record written before the position was adopted' : 'records every new entry before it opens', ['Immutable record: inputs, hashes, config, chosen signal']));
-    add(member('auditor', integ && integ.approved === false ? 'alert' : have ? 'working' : 'idle', integ.hash ? `config ${String(integ.hash).slice(0, 8)} · fingerprint ${integ.approved ? 'approved' : 'not approved'}` : NR, integ.reason ? [String(integ.reason)] : []));
-    const pm = prov('desk-postmortem');
-    add(member('postmortem', pm ? 'working' : 'idle', pm && pm.output ? `${pm.input_summary || ''}: ${(pm.output.flags || []).map((f) => f.code || f).join(', ') || 'no flags'}` : 'reviews each closed trade; none returned yet', []));
+    add(member('auditor', pe ? 'alert' : have ? 'working' : 'idle', pe ? String(pe).slice(0, 160) : opened ? 'decision record written before the position was adopted' : 'every new entry is recorded before it opens', ['Immutable record: inputs, hashes, config, chosen signal']));
+    add(member('config', integ.approved === false ? 'alert' : integ.hash ? 'working' : 'idle', integ.hash ? `config ${String(integ.hash).slice(0, 8)} · fingerprint ${integ.approved ? 'approved' : 'not approved'}` : NR, integ.reason ? [String(integ.reason)] : []));
+    const pmr = prov('desk-postmortem');
+    add(member('postmortem', pmr ? 'working' : 'idle', pmr && pmr.output ? `${pmr.input_summary || ''}: ${((pmr.output.flags || []).map((f) => f.code || f.id || f)).join(', ') || 'no flags'}` : 'reviews each closed trade; none returned yet', []));
+    const ex = input.experiment;
+    const exLine = ex == null ? 'verdict table not live yet' : !ex.started ? 'waiting for the first entry' : (ex.arms || []).map((a) => `${a.arm}: ${a.decided} decided · ${a.result}`).join(' · ');
+    add(member('experiment', ex && ex.started ? 'working' : 'idle', `FILTER-1 · ${exLine}`, ['Baseline vs baseline + rules filter vs baseline + AI filter; filters are shadow-only', 'Verdicts recorded before outcomes in an append-only table']));
 
-    // strategy traders (one desk per strategy, taken from the registry the page passes in)
-    const traders = strategies.map((s) => ({ id: s.id, name: s.name, state: s.state, line: s.reason || '', status: s.state === 'DISABLED' ? 'off' : s.state === 'ERROR' || s.state === 'DATA BLOCKED' ? 'alert' : s.state === 'RUNNING' ? 'working' : 'idle', position: !!(p && p.strategy === s.id) }));
-
-    // hand-offs of the latest cycle: each label is copied from a reported field
+    // the 9-step workflow for the latest check, each label copied from a reported field
+    const stepLabel = {
+      steward: staff.steward.line, scout: `${signals.length} candidate(s)`, news: news ? `news ${news.risk}` : NR, bear: staff.bear.status === 'off' ? 'seat empty (no provider)' : prov('desk-bear') ? 'reviewed' : 'nothing to review',
+      evaluator: bt ? bt.label : 'no evidence attached', pm: opened ? 'allocated' : p ? 'holding; no new allocation' : signals.length ? (lr.action || NR) : 'WAIT', cro: cooling ? 'VETO' : have ? 'permitted' : NR, exec: opened ? 'paper fill recorded' : 'no order', researcher: 'offline',
+    };
+    const workflow = WORKFLOW.map(([id, label, job], i) => ({ i: i + 1, id, label, job, owner: staff[id], status: staff[id].status, out: stepLabel[id] }));
     const flow = [
-      { from: 'feed', to: 'chart', label: px != null ? `${book} ${usd(px)}` : NR },
+      { from: 'feed', to: 'steward', label: px != null ? `${book} ${usd(px)}` : NR },
+      { from: 'steward', to: 'chart', label: failed.length ? `${failed.length} check(s) failed` : 'snapshot ok' },
       { from: 'chart', to: 'scout', label: c.bias ? `bias ${String(c.bias).toUpperCase()}` : NR },
-      { from: 'scout', to: 'validator', label: `${signals.length} setup(s)` },
-      { from: 'validator', to: 'riskplan', label: v0 ? `${(v0.verdicts || []).filter((x) => x.ok).length} ok` : NR },
-      { from: 'riskplan', to: 'manager', label: lr.action || NR },
-      { from: 'manager', to: 'recorder', label: p ? 'position logged' : 'no change' },
-      { from: 'recorder', to: 'pm', label: have ? usd(st.equity) : NR },
-      { from: 'scout', to: 'analyst', label: signals.length ? 'for review' : 'nothing to review', advisory: true },
-      { from: 'analyst', to: 'judge', label: 'summary', advisory: true },
+      { from: 'news', to: 'scout', label: news ? `news ${news.risk}` : 'no catalyst data' },
+      { from: 'scout', to: 'pm', label: `${signals.length} candidate(s)` },
+      { from: 'evaluator', to: 'pm', label: bt ? 'evidence attached' : 'no evidence' },
+      { from: 'scout', to: 'bear', label: signals.length ? 'for challenge' : 'nothing to challenge', advisory: true },
+      { from: 'bear', to: 'judge', label: 'objections', advisory: true },
+      { from: 'pm', to: 'cro', label: opened ? 'proposal' : 'WAIT' },
+      { from: 'cro', to: 'exec', label: cooling ? 'VETO' : opened ? 'size approved' : 'nothing to size' },
+      { from: 'exec', to: 'manager', label: opened ? 'position opened' : lr.action || NR },
+      { from: 'manager', to: 'auditor', label: p ? 'position logged' : 'no change' },
+      { from: 'judge', to: 'experiment', label: 'verdict (shadow)', advisory: true },
+      { from: 'auditor', to: 'postmortem', label: have ? usd(st.equity) : NR },
     ];
 
     const eq = curve.map((x) => +x.equity).filter(finite);
-    const growth = { points: eq, start: startEq, now: have ? st.equity + (finite(lr.upnl) ? lr.upnl : 0) : null };
+    const startEq = finite(st.startEquity) && st.startEquity > 0 ? st.startEquity : null;
+    const growth = { points: eq, start: startEq, now: have ? st.equity + (finite(lr.upnl) ? lr.upnl : 0) : null, closedNet: trades.reduce((a, t) => a + (finite(+t.net) ? +t.net : 0), 0), closedN: trades.length };
     growth.pct = growth.start && growth.now != null ? (growth.now / growth.start - 1) * 100 : null;
-    return { floors: FLOORS, staff, traders, flow, growth, runFresh, runAt: Number.isFinite(runT) ? runT : null, action: lr.action || null, book };
+    return { floors: FLOORS, staff, desks, research: RESEARCH, workflow, flow, growth, experiment: ex === undefined ? null : ex, runFresh, runAt: Number.isFinite(runT) ? runT : null, action: lr.action || null, book };
   }
 
-  const api = { build, ROSTER, FLOORS, FRESH_MS, NR };
+  const api = { build, ROSTER, FLOORS, FAMILY, RESEARCH, WORKFLOW, FRESH_MS, NR };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.DeskTower = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

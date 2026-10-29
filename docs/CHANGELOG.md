@@ -85,3 +85,7 @@ TradingView injection + Vercel `deskbot-v3` + Google Sheet / Supabase `bot_state
 
 ## Trading Tower release candidate
 - Website: spatial-glass skin merged with the trade-setup/zone chart and the coverage Strategies tab; new Trading Tower tab (floors, staff, hand-off animation, portfolio growth). Web only; no backend, risk or config change. See docs/TOWER.md.
+
+## FILTER-1 experiment + expanded tower
+- Backend: append-only `dbv5_filter_verdicts` (migration 20261029_filter_experiment.sql) and `experiment.ts`. Each new entry records a rules-filter and an AI-filter keep/skip before its outcome; filters never change a trade. Status exposes the mechanical report. Pre-registration: docs/research/FILTER_EXPERIMENT.md.
+- Website: the tower becomes eight departments with a nine-step workflow strip, family strategy desks, proposed research desks (labelled as hypotheses) and the FILTER-1 experiment board.

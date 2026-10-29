@@ -1,11 +1,20 @@
 # Trading Tower (dashboard view)
 
-The first tab of the website draws the desk as a building: eight floors, nineteen staff, one desk per strategy, a lift and message packets that replay how the latest 5-minute check moved from desk to desk.
+The first tab draws DeskBot as a systematic trading firm: eight departments, 23 staff, a nine-step decision workflow, an experiment board and the portfolio's own equity. The departments are logical roles modelled on how systematic firms publicly describe their process (data, research, portfolio construction, risk, execution, operations). They are not a claim about any firm's floors.
 
-**What is real.** Every line a staff member shows is copied from the public status the runner returns (`last_run`, the agent log, state, integrity, the equity series). A missing field reads "not reported". Status dots mean: green = reported activity in the last 30 minutes, grey = idle, hollow = off or no provider, amber = alert. The growth panel is the paper account's own equity, losses included. The live BTC price in the header is a direct public price read for display only.
+| Floor | Department | Staff (software agents) | Real data behind each line |
+|---|---|---|---|
+| 8 | Operations & review | Auditor, Post-trade reviewer, Config auditor, Experiment officer | decision-record errors, `desk-postmortem` rows, config fingerprint, FILTER-1 report |
+| 7 | Execution | Paper execution trader, Position manager | entry fill, cost model from config, open position plan |
+| 6 | Risk management | Risk controller, Risk planner, Independent checker | breaker/limits, `risk` and `validator` rows |
+| 5 | Portfolio management | Allocator, Evaluation service, committee (analyst, skeptic, supporter, judge — AI, advisory) | latest candidates and action, live-config backtest, `desk-*` rows |
+| 4 | Strategy desks | Setup scout + Trend / Breakout / Reversal / Mean-reversion desks (11 strategies) | per-strategy operational state and current candidates |
+| 3 | Quantitative research | Offline researcher + five research desks | proposed hypotheses (order flow, volatility, catalyst, relative value) are labelled **PROPOSED · NOT AN EDGE**; signal quality runs FILTER-1 |
+| 2 | Market intelligence | Market structure, Zone mapper, Catalyst analyst | `last_run.desk.chart`, zones, news |
+| 1 | Data infrastructure | Evidence steward, Price feed, Derivatives data | run age, feed name, price, fingerprint, provenance status (steward turns amber when a check fails) |
 
-**What is not.** The staff are software agents (fixed rules in the cloud runner, plus optional free-AI roles that are advisory only and cannot place, size or block a trade). Names and faces are labels for roles. Nothing on this page predicts price, estimates a win probability or certifies profitability. The account is paper; no funded orders.
+**Workflow strip**: evidence steward → specialist desks → catalyst analyst → skeptical reviewer → evaluation service → portfolio allocator → risk controller → paper execution & auditor → offline researcher. The replay animation lights each step as its packet moves. Numbers, sizing, permissions and state transitions stay in code; language models only summarise and criticise, and only the judge's verdict is scored (FILTER-1). Agreement between AI roles is not counted as evidence.
 
-Files: `web/tower-model.js` (pure model, tested in `tests/tower_model.test.ts`), `web/tower.js` (DOM + motion, respects `prefers-reduced-motion` and has a Motion off button), `web/tower.css`. Smoke test with mocked network: `node scripts/web_smoke/tower.cjs fixture.json outDir`; its agent rows are test data.
+**What is not shown**: no predicted prices, no win probabilities, no profitability claims. "Not reported" means the runner returned nothing. The account is paper; no funded orders.
 
-Also merged here: the spatial-glass skin (previously deployed by direct upload), the trade setup view and chart zones (PR #4), strategy coverage and the Strategies tab (PRs #5, #6).
+Files: `web/tower-model.js` (pure model; `tests/tower_model.test.ts`), `web/tower.js`, `web/tower.css`. Browser smoke with mocked network (fixture agent rows and experiment numbers are test data): `node scripts/web_smoke/tower.cjs fixture.json outDir`.

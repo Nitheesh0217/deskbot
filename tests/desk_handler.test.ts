@@ -18,7 +18,7 @@ const good = {
 };
 async function run(i5: number, o: { env?: Record<string, string>; llm?: "ok" | "down" } = {}) {
   const nowMs = m5[i5].ct + 4000, env: Record<string, string> = { SUPABASE_URL: "https://deskbot.test", SUPABASE_SERVICE_ROLE_KEY: "test-only", DESKBOT_CRON_SECRET: "test-only", NEWS_MODE: "off", DESKBOT_BOOKS: "BTC", GROQ_API_KEY: "gsk_test_key_not_real", ...(o.env ?? {}) };
-  const order: string[] = []; let state: State = initState(350, T0); state.cfg = LOOSE as never; state.lastEvalT = 0; const agentRows: any[] = []; let stateWrites = 0;
+  const order: string[] = []; let state: State = initState(350, T0); state.cfg = LOOSE as never; state.lastEvalT = 0; const agentRows: any[] = [], verdicts: any[] = []; let stateWrites = 0;
   let handler!: (req: Request) => Promise<Response>; const pD = (globalThis as any).Deno, pF = globalThis.fetch, pN = Date.now; (globalThis as any).Deno = { env: { get: (k: string) => env[k] }, serve: (h: typeof handler) => { handler = h; } }; Date.now = () => nowMs;
   const json = (x: unknown, status = 200) => new Response(x == null ? "" : JSON.stringify(x), { status });
   globalThis.fetch = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
@@ -30,6 +30,7 @@ async function run(i5: number, o: { env?: Record<string, string>; llm?: "ok" | "
       if (path === "rpc/dbv5_record_decision") { order.push("decision"); return json(true); }
       if (path.startsWith("dbv5_state?") && body.state) { stateWrites++; order.push("state"); state = structuredClone(body.state); }
       if (path === "dbv5_agent_log") { order.push("agent_log"); agentRows.push(...body); }
+      if (path === "dbv5_filter_verdicts") { order.push("verdicts"); verdicts.push(...body); }
       return json(null);
     }
     if (url.includes("api.groq.com")) {
@@ -45,7 +46,7 @@ async function run(i5: number, o: { env?: Record<string, string>; llm?: "ok" | "
     if (url.includes("binance.vision")) return json([]);
     throw new Error(`Unexpected request: ${url}`);
   }) as typeof fetch;
-  try { await import("../supabase/functions/deskbot-v5/index.ts?x=" + Math.random()); const res = await (await handler(new Request("https://edge.test", { method: "POST", headers: { "x-deskbot-key": "test-only", "Content-Type": "application/json" }, body: '{"action":"run"}' }))).json(); return { res, order, state, agentRows, stateWrites }; }
+  try { await import("../supabase/functions/deskbot-v5/index.ts?x=" + Math.random()); const res = await (await handler(new Request("https://edge.test", { method: "POST", headers: { "x-deskbot-key": "test-only", "Content-Type": "application/json" }, body: '{"action":"run"}' }))).json(); return { res, order, state, agentRows, stateWrites, verdicts }; }
   finally { globalThis.fetch = pF; (globalThis as any).Deno = pD; Date.now = pN; applyCfg(); }
 }
 const entryBar = async (o: Parameters<typeof run>[1] = {}) => { for (const i of candidates()) { const r = await run(i, o); if (r.state.pos) return { i, r }; } throw new Error("no entry bar found"); };
@@ -70,4 +71,13 @@ test("a provider outage changes nothing about the trade: position, equity and st
 test("switches: AGENT_AI=off keeps the free checks but makes no LLM call; DESK_WORKFLOW=off adds nothing", async () => {
   const { i, r } = await entryBar({ env: { AGENT_AI: "off" } }); assert.ok(!r.order.includes("llm")); assert.ok(r.agentRows.some((x) => x.agent === "desk-checks"));
   const off = await run(i, { env: { DESK_WORKFLOW: "off" } }); assert.ok(!off.agentRows.some((x) => String(x.agent).startsWith("desk-"))); assert.deepEqual(off.state.pos, r.state.pos, "same trade either way");
+});
+
+test("FILTER-1: an entry records one rules verdict and one AI verdict after the LLM stages, keyed to the position; nothing else changes", async () => {
+  const { r } = await entryBar();
+  assert.deepEqual(r.verdicts.map((v: any) => v.arm).sort(), ["ai", "rules"]);
+  for (const v of r.verdicts) assert.equal(v.ref, r.state.pos!.id);
+  assert.equal(r.verdicts.find((v: any) => v.arm === "ai").take, true, "judge said agree");
+  assert.ok(r.order.lastIndexOf("llm") < r.order.indexOf("verdicts"));
+  assert.ok(r.order.indexOf("state") < r.order.indexOf("verdicts"), "state is saved before any verdict");
 });
