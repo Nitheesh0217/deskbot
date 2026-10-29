@@ -1,0 +1,42 @@
+/* Scanner + Committee views and the trading-state pill. Terminal palette shared with markets.css. */
+#v-scanner, #v-committee { --t-bg: #0b0d10; --t-panel: #101317; --t-line: #1f252d; --t-fg: #e6e8eb; --t-dim: #8a94a3; --t-amber: #f2a93b; --t-up: #3fcf8e; --t-dn: #f0616d; }
+#v-scanner .up, #v-committee .up { color: var(--t-up); } #v-scanner .down, #v-committee .down { color: var(--t-dn); } #v-scanner .faint, #v-committee .faint { color: var(--t-dim); }
+#scanBody, #committeeBody { display: grid; gap: 12px; }
+#v-scanner > div > .mk-note, #committeeBody > .mk-note { color: var(--fg-3); margin: 2px; }
+.sc-cards { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+.sc-card { background: var(--t-panel); color: var(--t-fg); border: 1px solid var(--t-line); border-left: 3px solid var(--t-amber); border-radius: 12px; padding: 12px 14px; font: 500 12.5px/1.45 var(--f-mono); display: grid; gap: 8px; }
+.sc-card.long { border-left-color: var(--t-up); } .sc-card.short { border-left-color: var(--t-dn); }
+.sc-set { font: 700 10px/1 var(--f-mono); padding: 3px 6px; border-radius: 4px; background: #1f252d; color: var(--t-fg); white-space: nowrap; }
+.sc-set.long { background: rgba(63, 207, 142, .16); color: var(--t-up); } .sc-set.short { background: rgba(240, 97, 109, .16); color: var(--t-dn); }
+.cm-kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 12px; font: 500 12px/1.4 var(--f-mono); } .cm-kv span { color: var(--t-dim); }
+.cm-l { margin: 0; padding-left: 16px; font: 500 12px/1.5 var(--f-body); } .cm-l li.warn { color: var(--t-amber); }
+/* committee */
+details.cm { background: var(--t-panel); color: var(--t-fg); border: 1px solid var(--t-line); padding: 0; }
+details.cm > summary { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; padding: 12px 16px; cursor: pointer; font: 500 12.5px/1.3 var(--f-mono); list-style: none; }
+details.cm > summary::-webkit-details-marker { display: none; }
+.cm-flow { list-style: none; margin: 0; padding: 4px 16px 16px 30px; display: grid; gap: 10px; position: relative; }
+.cm-flow::before { content: ""; position: absolute; left: 19px; top: 8px; bottom: 22px; width: 2px; background: linear-gradient(var(--t-amber), #3a424d); }
+.cm-flow > li { position: relative; background: #0d1014; border: 1px solid var(--t-line); border-radius: 10px; padding: 10px 12px; font: 500 12.5px/1.5 var(--f-body); }
+.cm-flow > li::before { content: ""; position: absolute; left: -15px; top: 14px; width: 8px; height: 8px; border-radius: 50%; background: var(--t-amber); box-shadow: 0 0 0 3px var(--t-panel); }
+.cm-flow > li.err::before { background: var(--t-dn); } .cm-flow p { margin: 4px 0 0; }
+.cm-h { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; } .cm-h b { font: 700 12px/1.2 var(--f-mono); color: var(--t-amber); letter-spacing: .03em; } .cm-h small { font: 500 10.5px/1.2 var(--f-mono); color: var(--t-dim); }
+.cm-err { color: var(--t-dn); font: 500 11.5px/1.4 var(--f-mono); }
+.cm-rate { display: inline-block; font: 700 11px/1 var(--f-mono); padding: 4px 8px; border-radius: 5px; background: #1f252d; margin-top: 4px; }
+.cm-rate small { font-weight: 500; color: var(--t-dim); }
+.r-Buy, .r-Overweight { background: rgba(63, 207, 142, .18); color: var(--t-up); } .r-Sell, .r-Underweight { background: rgba(240, 97, 109, .18); color: var(--t-dn); } .r-Hold { background: rgba(242, 169, 59, .16); color: var(--t-amber); }
+@media (prefers-reduced-motion: no-preference) { details.cm[open] .cm-flow > li { animation: cmIn .35s ease-out both; } details.cm[open] .cm-flow > li:nth-child(n) { animation-delay: calc(var(--i, 0) * 60ms); } }
+@keyframes cmIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+/* trading state pill (Nautilus ACTIVE / REDUCING / HALTED) */
+.ts-pill { display: inline-flex; gap: 6px; align-items: center; font: 500 10.5px/1 var(--f-mono); padding: 4px 8px; border-radius: 999px; border: 1px solid var(--line-2); }
+.ts-pill:empty { display: none; } .ts-pill b { letter-spacing: .08em; }
+.ts-ACTIVE b { color: #1f9d6b; } .ts-REDUCING b { color: #c97a10; } .ts-HALTED b { color: #d0414f; }
+.ts-pill span { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-3); }
+/* grouped navigation */
+.tabs-in > .nav-label { padding: 16px 14px 6px; }
+@media (min-width: 1100px) { nav.tabs { overflow-y: auto; } .sidebar-footer { position: static; margin: 18px 24px 24px; } }
+@media (max-width: 1099px) {
+  .tabs-in { display: grid; grid-auto-flow: column; grid-template-columns: none !important; grid-auto-columns: minmax(68px, 1fr); overflow-x: auto; scrollbar-width: none; }
+  .tabs-in::-webkit-scrollbar { display: none; } .tabs-in > .nav-label { display: none; }
+}
+@media (max-width: 639px) { .tab[data-v=committee] span { font-size: 9px; } .ts-pill span { display: none; } }
+.cm-kv b { overflow-wrap: anywhere; min-width: 0; }

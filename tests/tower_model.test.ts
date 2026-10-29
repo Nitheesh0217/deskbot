@@ -23,9 +23,9 @@ test("AI roles are advisory and read 'no provider' rather than inventing a verdi
   assert.equal(none.staff.judge.status, "off"); assert.match(none.staff.judge.line, /no AI provider/);
   const waiting = build({ state: { state, last_run: lastRun }, agents: [], trades: [], curve: [], strategies: [], aiProviders: ["groq"] }, now);
   assert.equal(waiting.staff.judge.status, "idle", "a configured provider with nothing to review is idle, not off");
-  const withRows = build({ state: { state, last_run: lastRun }, agents: [{ agent: "desk-judge", ts: iso(30e3), input_summary: "x", output: { verdict: "disagree", reason: "Costs." } }], trades: [], curve: [], strategies: [] }, now);
-  assert.equal(withRows.staff.judge.line, "disagree: Costs."); assert.equal(withRows.staff.judge.status, "working");
-  assert.ok(Object.values(withRows.staff).filter((s: any) => /AI/.test(s.kind)).length >= 4);
+  const withRows = build({ state: { state, last_run: lastRun }, agents: [{ agent: "desk-research", ts: iso(30e3), input_summary: "x", output: { rating: "Hold", rationale: "Costs." } }, { agent: "desk-pm", ts: iso(20e3), input_summary: "x", output: { rating: "Sell", stance: "skip", executive_summary: "Pass." } }], trades: [], curve: [], strategies: [] }, now);
+  assert.equal(withRows.staff.judge.line, "Hold: Costs."); assert.equal(withRows.staff.cio.line, "Sell → skip: Pass."); assert.equal(withRows.staff.judge.status, "working");
+  assert.ok(Object.values(withRows.staff).filter((s: any) => /AI/.test(s.kind)).length >= 6);
 });
 test("growth is the account's own number: start, now, percent, including a loss", () => {
   const m = build({ state: { state, last_run: { ...lastRun, upnl: 0 } }, agents: [], trades: [], curve: [{ equity: 350 }, { equity: 340 }], strategies: [] }, now);

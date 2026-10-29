@@ -15,3 +15,9 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 ## TradingView Lightweight Charts (Apache-2.0) and Motion (MIT)
 See `web/vendor/LICENSE.lightweight-charts`, `web/vendor/NOTICE.lightweight-charts` and `web/vendor/LICENSE.motion.md`.
+
+## TradingAgents (Apache-2.0)
+The desk review's stage structure (analyst team → bull/bear debate → research manager → trader → aggressive/conservative/neutral risk debate → portfolio manager with a 5-tier rating and reflection memory) is adapted from TradingAgents by TauricResearch, https://github.com/TauricResearch/TradingAgents (reviewed at commit c454491, 2026-10-27). No source code was copied; prompts, schemas and validation are DeskBot's own. Licensed under the Apache License, Version 2.0, http://www.apache.org/licenses/LICENSE-2.0.
+
+## NautilusTrader (LGPL-3.0): ideas only
+The ACTIVE / REDUCING / HALTED trading-state view on the dashboard follows the concept of NautilusTrader's `TradingState` (https://github.com/nautechsystems/nautilus_trader, reviewed at commit a77f0b5, 2026-10-29). No NautilusTrader code is copied, linked or distributed.

@@ -36,10 +36,13 @@
     validator: ['Val', 'Independent checker', 'RULES', 'risk'],
     pm: ['Morgan', 'Portfolio allocator', 'RULES', 'portfolio'],
     evaluator: ['Eve', 'Evaluation service', 'RULES', 'portfolio'],
-    analyst: ['Avery', 'Committee analyst', 'AI', 'portfolio'],
-    bear: ['Blake', 'Skeptical reviewer', 'AI', 'portfolio'],
-    bull: ['Sky', 'Supporting reviewer', 'AI', 'portfolio'],
-    judge: ['Harper', 'Committee judge', 'AI', 'portfolio'],
+    analyst: ['Avery', 'Analyst team (market · sentiment · positioning · news)', 'RULES', 'portfolio'],
+    bull: ['Sky', 'Bull researcher', 'AI', 'portfolio'],
+    bear: ['Blake', 'Bear researcher', 'AI', 'portfolio'],
+    judge: ['Harper', 'Research manager (judges the debate)', 'AI', 'portfolio'],
+    trader: ['Tess', 'Committee trader (take or pass)', 'AI', 'portfolio'],
+    cio: ['Cass', 'Portfolio manager (final rating, scored in FILTER-1)', 'AI', 'portfolio'],
+    riskdebate: ['Rio', 'Risk debate (aggressive · conservative · neutral)', 'AI', 'risk'],
     scout: ['Sage', 'Setup scout', 'RULES', 'desks'],
     researcher: ['Rhea', 'Offline researcher', 'OFFLINE', 'research'],
     chart: ['Ada', 'Market-structure analyst', 'RULES', 'intel'],
@@ -137,17 +140,24 @@
     add(member('evaluator', bt ? 'working' : 'idle', bt && bt.a ? `${bt.label}: ${bt.a.n} trades, ${finite(bt.a.expR) ? (bt.a.expR >= 0 ? '+' : '') + bt.a.expR.toFixed(3) + 'R/trade' : NR} after costs` : 'no live-config backtest returned',
       bt ? [`Ran ${String(bt.ran_at || NR).slice(0, 16)}`, 'Historical evidence for this config label only; does not certify the current runtime'] : []));
     const prov = (name) => rowsOf(agents, name)[0];
-    const role = (id, agent, label) => {
-      const r = prov(agent), o = r && r.output;
+    const say = (o) => o.rating ? `${o.rating}${o.stance ? ' → ' + o.stance : ''}: ${o.rationale || o.executive_summary || ''}` : o.action ? `${String(o.action).toUpperCase()}: ${o.reason || ''}` : o.argument ? o.argument : o.verdict ? `${o.verdict}: ${o.reason || ''}` : (o.summary || o.case || NR);
+    const role = (id, agents_, label) => {
+      const rs = [].concat(agents_).map(prov).filter(Boolean), r = rs[0], o = r && r.output;
       const noProvider = providers ? providers.length === 0 : !(lr.ai && Array.isArray(lr.ai.providers) && lr.ai.providers.length);
-      const line = o ? (o.verdict ? `${o.verdict}: ${o.reason || ''}` : (o.summary || o.case || NR)) : noProvider ? 'no AI provider configured; this seat is empty' : 'waiting for the next entry to review';
+      const line = o ? say(o) : noProvider ? 'no AI provider configured; this seat is empty' : 'waiting for the next entry to review';
       const status = r && r.error ? 'alert' : r ? (fresh(ts(r), now) ? 'working' : 'idle') : noProvider ? 'off' : 'idle';
-      return member(id, status, String(line).slice(0, 220), r && r.error ? [String(r.error)] : [`Advisory only (${label}); cannot place, size or block a trade`], ts(r));
+      const detail = rs.length > 1 ? rs.map((x) => `${x.agent.replace('desk-risk-', '')}: ${x.error ? 'error' : say(x.output || {})}`.slice(0, 160)) : [];
+      return member(id, status, String(line).slice(0, 220), r && r.error ? [String(r.error)] : [...detail, `Advisory only (${label}); cannot place, size or block a trade`], ts(r));
     };
-    add(role('analyst', 'desk-analyst', 'summarises the setup'));
-    add(role('bear', 'desk-bear', 'argues against'));
+    const an = prov('desk-analysts'), am = an && an.output && an.output.market;
+    add(member('analyst', an ? (fresh(ts(an), now) ? 'working' : 'idle') : 'idle', am ? `${am.regime} · trend ${am.supertrend_up_frames}↑ ${am.supertrend_down_frames}↓ · RSI15 ${am.rsi15 ?? NR}` : 'reports on the next entry (rule-based, no provider needed)',
+      an && an.output ? [`sentiment: fear/greed ${(an.output.sentiment || {}).fear_greed ?? NR}`, `positioning: funding ${(an.output.positioning || {}).funding_per_interval ?? NR}`, `news: ${(an.output.news || {}).risk ?? NR}`] : [], ts(an)));
     add(role('bull', 'desk-bull', 'argues for'));
-    add(role('judge', 'desk-judge', 'its verdict is scored in FILTER-1'));
+    add(role('bear', 'desk-bear', 'argues against'));
+    add(role('judge', ['desk-research', 'desk-judge'], 'rates the instrument after the debate'));
+    add(role('trader', 'desk-trader', 'take or pass on the plan'));
+    add(role('riskdebate', ['desk-risk-aggressive', 'desk-risk-conservative', 'desk-risk-neutral'], 'three-way risk debate'));
+    add(role('cio', 'desk-pm', 'final rating, scored in FILTER-1'));
     const chk = prov('desk-checks');
     staff.analyst.chk = chk ? ((chk.output && chk.output.checks) || []).map((x) => `${x.level || 'info'}: ${x.id || x.code || ''}`).slice(0, 5) : [];
 
@@ -182,7 +192,7 @@
 
     // the 9-step workflow for the latest check, each label copied from a reported field
     const stepLabel = {
-      steward: staff.steward.line, scout: `${signals.length} candidate(s)`, news: news ? `news ${news.risk}` : NR, bear: staff.bear.status === 'off' ? 'seat empty (no provider)' : prov('desk-bear') ? 'reviewed' : 'nothing to review',
+      steward: staff.steward.line, scout: `${signals.length} candidate(s)`, news: news ? `news ${news.risk}` : NR, bear: staff.bear.status === 'off' ? 'seat empty (no provider)' : prov('desk-pm') ? `committee: ${prov('desk-pm').output.rating || 'no rating'}` : prov('desk-bear') ? 'reviewed' : 'nothing to review',
       evaluator: bt ? bt.label : 'no evidence attached', pm: opened ? 'allocated' : p ? 'holding; no new allocation' : signals.length ? (lr.action || NR) : 'WAIT', cro: cooling ? 'VETO' : have ? 'permitted' : NR, exec: opened ? 'paper fill recorded' : 'no order', researcher: 'offline',
     };
     const workflow = WORKFLOW.map(([id, label, job], i) => ({ i: i + 1, id, label, job, owner: staff[id], status: staff[id].status, out: stepLabel[id] }));
@@ -194,12 +204,17 @@
       { from: 'scout', to: 'pm', label: `${signals.length} candidate(s)` },
       { from: 'evaluator', to: 'pm', label: bt ? 'evidence attached' : 'no evidence' },
       { from: 'scout', to: 'bear', label: signals.length ? 'for challenge' : 'nothing to challenge', advisory: true },
+      { from: 'scout', to: 'bull', label: signals.length ? 'case for' : 'nothing to argue', advisory: true },
+      { from: 'bull', to: 'bear', label: 'debate', advisory: true },
       { from: 'bear', to: 'judge', label: 'objections', advisory: true },
+      { from: 'judge', to: 'trader', label: 'rating', advisory: true },
+      { from: 'trader', to: 'riskdebate', label: 'proposal', advisory: true },
+      { from: 'riskdebate', to: 'cio', label: 'risk views', advisory: true },
       { from: 'pm', to: 'cro', label: opened ? 'proposal' : 'WAIT' },
       { from: 'cro', to: 'exec', label: cooling ? 'VETO' : opened ? 'size approved' : 'nothing to size' },
       { from: 'exec', to: 'manager', label: opened ? 'position opened' : lr.action || NR },
       { from: 'manager', to: 'auditor', label: p ? 'position logged' : 'no change' },
-      { from: 'judge', to: 'experiment', label: 'verdict (shadow)', advisory: true },
+      { from: 'cio', to: 'experiment', label: 'rating (shadow)', advisory: true },
       { from: 'auditor', to: 'postmortem', label: have ? usd(st.equity) : NR },
     ];
 

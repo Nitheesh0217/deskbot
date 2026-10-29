@@ -49,7 +49,7 @@ export function postTradeReview(t: ClosedTrade) {
     separation: { recordedThesis: (t.why ?? []).slice(0, 4), execution: `fees ${t.fees.toFixed(2)} + funding ${t.funding.toFixed(2)} against gross ${t.gross.toFixed(2)}`, outcome: `${t.r >= 0 ? "+" : ""}${t.r.toFixed(2)}R after costs` }, note: "Descriptive. One outcome does not show the decision was good or bad." };
 }
 
-// ─── Agentic desk flow (TradingAgents structure, Apache-2.0, TauricResearch/TradingAgents v0.7.1; adapted, not copied) ──────────
+// ─── Agentic desk flow (TradingAgents structure, Apache-2.0, TauricResearch/TradingAgents @ c454491, 2026-10-27; structure adapted, no code copied) ──────────
 // 1 analysts (deterministic here: facts from the runner's own data, so they cost nothing and cannot hallucinate)
 // 2 bull <-> bear debate (DEBATE_ROUNDS) -> 3 research manager rating -> 4 trader proposal
 // 5 aggressive / conservative / neutral risk debate (RISK_ROUNDS) -> 6 portfolio manager final 5-tier rating, with lessons from past trades.

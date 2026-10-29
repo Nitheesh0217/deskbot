@@ -19,6 +19,7 @@ import { runDesk, deskChart, type AgentRow } from "./agents.ts";
 import { preTradeChecks, postTradeReview, runDeskWorkflow, analystReports, lessonsFrom } from "./desk.ts";
 import { verdictsFor, filterReport } from "./experiment.ts";
 import { catchUp } from "./catchup.ts";
+import { scanMarket, rankScan, derivatives, SCAN_NOTE } from "./scan.ts";
 import { captureDecision, pickEntry, decisionIdFor } from "./provenance.ts";
 import { recordCoverage, dispositions, boundaryFlags } from "./coverage.ts";
 import type { StrategyTrace } from "./engine.ts";
@@ -355,6 +356,29 @@ async function experimentStatus() {
 }
 
 // ─── public status bundle for the dashboard ─────────────────────────────────
+// ─── multi-market scan (read-only; every 15 min by pg_cron). Runs the bot's own rules on each market with a fresh state. ──
+async function runScan() {
+  const now = Date.now(), t0 = now;
+  const cfgOf = async (sym: Sym) => (await select(`dbv5_state?id=eq.${rowId(sym)}&select=state->cfg`).catch(() => []))?.[0]?.cfg ?? undefined;
+  const [btcCfg, goldCfg] = await Promise.all([cfgOf("BTC"), cfgOf("GOLD")]);
+  const syms = Object.keys(SYMBOLS) as Sym[], markets: unknown[] = [];
+  try {
+    for (let k = 0; k < syms.length; k += 3) {   // three markets at a time keeps Hyperliquid request weight low
+      markets.push(...await Promise.all(syms.slice(k, k + 3).map(async (sym) => {
+        try {
+          const [m5, m15, h1, h4, ctx] = await Promise.all([candles("5m", 400, now, "hyperliquid", sym), candles("15m", 400, now, "hyperliquid", sym), candles("1h", 300, now, "hyperliquid", sym), candles("4h", 700, now, "hyperliquid", sym), hlContext(sym).catch(() => null)]);
+          applyCfg(sym === "GOLD" ? goldCfg : btcCfg); setMlAsset(sym === "GOLD");
+          return { ...scanMarket(sym, { m5: m5.bars, m15: m15.bars, h1: h1.bars, h4: h4.bars }, ctx, now), name: SYMBOLS[sym].name, book: sym === "BTC" || sym === "GOLD", source: m5.source };
+        } catch (e) { return { sym, ok: false, error: (e as Error).message.slice(0, 120) }; }
+      })));
+    }
+  } finally { applyCfg(); setMlAsset(false); }
+  const deriv = await Promise.all((["BTC", "ETH"] as const).map((c) => derivatives(c, now).catch((e) => ({ currency: c, errors: [(e as Error).message.slice(0, 80)] }))));
+  const row = { markets: rankScan(markets as never), deriv, note: SCAN_NOTE, ms: Date.now() - t0 };
+  await insert("dbv5_scans", [row]);
+  return { ok: true, markets: markets.length, setups: (row.markets as { setups?: unknown[] }[]).reduce((a, m) => a + (m.setups?.length ?? 0), 0), ms: row.ms };
+}
+
 async function status() {
   const [s, ev, tr, eq, bt, agents] = await Promise.all([
     select("dbv5_state?id=eq.main&select=state,last_run,updated_at"),
@@ -362,8 +386,9 @@ async function status() {
     select("dbv5_trades?select=id,symbol,strategy,dir,entry,exit_avg,net,r,fees,funding,open_t,close_t,reason&order=close_t.desc&limit=100"),
     select(`dbv5_equity?select=ts,equity,upnl,price&symbol=eq.BTC&ts=gte.${new Date(Date.now() - 14 * 86400_000).toISOString()}&order=ts.asc`),
     select("dbv5_backtests?select=ran_at,days,results&results->>label=like.LIVE_CONFIG*&order=id.desc&limit=1"),
-    select("dbv5_agent_log?select=ts,symbol,agent,input_summary,output,provider,error&order=id.desc&limit=60").catch(() => []),
+    select("dbv5_agent_log?select=ts,symbol,agent,input_summary,output,provider,error&order=id.desc&limit=200").catch(() => []),
   ]);
+  const scan = (await select("dbv5_scans?select=ts,markets,deriv,note,ms&order=id.desc&limit=1").catch(() => []))?.[0] ?? null;
   const st = s?.[0]?.state ?? null;
   const experiment = await experimentStatus();
   const config = resolvedCfg(st?.cfg);
@@ -379,7 +404,7 @@ async function status() {
     books[sym] = r?.[0] ? { name: SYMBOLS[sym].name, hl: SYMBOLS[sym].hl, integrity: await integrityFor(sym, resolvedCfg(r[0].state?.cfg)), state: r[0].state, lastRun: r[0].last_run, updated: r[0].updated_at, curve: c } : { name: SYMBOLS[sym].name, hl: SYMBOLS[sym].hl, state: null };
   }
   const curve = (eq ?? []).filter((_: unknown, i: number, a: unknown[]) => a.length < 600 || i % Math.ceil(a.length / 600) === 0 || i === a.length - 1);
-  return { version: VERSION, mode: "PAPER", now: new Date().toISOString(), updated: s?.[0]?.updated_at ?? null, integrity, state: st, lastRun: s?.[0]?.last_run ?? null, events: ev, agents: agents ?? [], trades: tr, curve, books, backtest: bt?.[0] ?? null, experiment, config, chat: { enabled: !!CHAT_KEY, ai: providersFromEnv().map((p) => p.name) } };
+  return { version: VERSION, mode: "PAPER", now: new Date().toISOString(), updated: s?.[0]?.updated_at ?? null, integrity, state: st, lastRun: s?.[0]?.last_run ?? null, events: ev, agents: agents ?? [], trades: tr, curve, books, backtest: bt?.[0] ?? null, experiment, config, scan, chat: { enabled: !!CHAT_KEY, ai: providersFromEnv().map((p) => p.name) } };
 }
 
 // ─── AI assistant (owner only; password = DESKBOT_CHAT_KEY secret) ─────────
@@ -464,6 +489,7 @@ Deno.serve(async (req) => {
     const expected = SECRET || await cronKey();
     if (!expected || req.headers.get("x-deskbot-key") !== expected) return json({ ok: false, error: "unauthorized" }, 401);
     const body = await req.json().catch(() => ({}));
+    if (body.action === "scan") return json(await exclusive(() => runScan()));
     if (body.action === "backtest") return json(await exclusive(() => runBacktest({ sym: isSym(body.sym) ? body.sym : "BTC", endDaysAgo: body.endDaysAgo, days: body.days, source: body.source, cfg: body.cfg, label: body.label, save: body.save, only: body.only, combinedOnly: body.combinedOnly })));
     return json(await exclusive(() => runLocked()));
   } catch (e) {

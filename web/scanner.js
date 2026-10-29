@@ -1,0 +1,111 @@
+// Scanner and Committee views. Display only: reads the public status payload (scan, agents, state, config) and draws it.
+// Scanner: the bot's own rules run on every Hyperliquid market every 15 minutes, plus Deribit options/futures context.
+// Committee: the TradingAgents-structured review of each new paper trade (analysts → debate → research manager → trader →
+// risk debate → portfolio manager), shown stage by stage. Trading state: Nautilus Trader's ACTIVE / REDUCING / HALTED idea,
+// derived here from controls the bot already has; it adds no new control.
+(function (root) {
+  'use strict';
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const num = (x, d = 2) => (typeof x === 'number' && Number.isFinite(x) ? x.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }) : '—');
+  const px = (x) => (typeof x === 'number' ? num(x, x >= 1000 ? 1 : x >= 1 ? 3 : 5) : '—');
+  const sgn = (x, d = 2, u = '%') => (typeof x === 'number' && Number.isFinite(x) ? `<span class="${x > 0 ? 'up' : x < 0 ? 'down' : ''}">${x > 0 ? '+' : ''}${num(x, d)}${u}</span>` : '—');
+  const ago = (iso, now) => { const m = Math.round((now - Date.parse(iso)) / 60000); return !Number.isFinite(m) ? '—' : m < 1 ? 'just now' : m < 60 ? `${m} min ago` : `${Math.round(m / 60)} h ago`; };
+
+  /** ACTIVE: new entries allowed. REDUCING: new entries blocked by a risk control, open positions still managed. HALTED: the book is not running. */
+  function tradingState(state, config, lastRun, now) {
+    if (!state) return { state: 'HALTED', reasons: ['book not initialised'] };
+    const reasons = [], cfg = config || {}, runAt = lastRun && Date.parse(lastRun.ts);
+    if (!runAt || now - runAt > 20 * 60e3) return { state: 'HALTED', reasons: [`no run for ${runAt ? Math.round((now - runAt) / 60e3) + ' min' : 'ever'}`] };
+    if (lastRun.integrity && lastRun.integrity.ok === false) return { state: 'HALTED', reasons: ['configuration integrity check failed'] };
+    const cb = state.cb || {}, day = state.day || {};
+    if (cb.cooldownUntil > now) reasons.push(`circuit-breaker cooldown until ${new Date(cb.cooldownUntil).toISOString().slice(11, 16)} UTC`);
+    const lim = cfg.DAILY_LOSS_LIMIT, eq = state.markedEquity ?? state.equity;
+    if (day.halted || (lim && day.startEquity && eq <= day.startEquity * (1 - lim))) reasons.push('daily loss limit hit');
+    if (cfg.MAX_TRADES_PER_DAY && day.trades >= cfg.MAX_TRADES_PER_DAY) reasons.push('daily trade cap reached');
+    const en = state.enabled || {}; if (Object.keys(en).length && Object.values(en).every((v) => v === false)) reasons.push('every strategy auto-disabled');
+    return reasons.length ? { state: 'REDUCING', reasons } : { state: 'ACTIVE', reasons: ['new entries allowed by every risk control'] };
+  }
+
+  const STAGES = [
+    ['desk-checks', 'Pre-trade checks', 'rules'], ['desk-analysts', 'Analyst team', 'market · sentiment · positioning · news'],
+    ['desk-bull', 'Bull researcher', 'argues for'], ['desk-bear', 'Bear researcher', 'argues against'], ['desk-research', 'Research manager', 'judges the debate'],
+    ['desk-trader', 'Trader', 'take or pass'], ['desk-risk-aggressive', 'Aggressive risk', ''], ['desk-risk-conservative', 'Conservative risk', ''], ['desk-risk-neutral', 'Neutral risk', ''],
+    ['desk-pm', 'Portfolio manager', 'final rating (scored in FILTER-1)'],
+  ];
+  /** Group agent-log rows by trade ref, newest first; a debate with several rounds keeps every speech in order. */
+  function committees(agents) {
+    const by = new Map();
+    for (const a of (agents || []).slice().reverse()) {   // agents arrive newest first
+      const ref = a.output && a.output.ref; if (!ref || !STAGES.some((s) => s[0] === a.agent)) continue;
+      if (!by.has(ref)) by.set(ref, { ref, symbol: a.symbol, ts: a.ts, rows: [] });
+      const c = by.get(ref); c.rows.push(a); c.ts = a.ts;
+    }
+    return [...by.values()].sort((a, b) => String(b.ts).localeCompare(String(a.ts)));
+  }
+
+  function stageBody(a) {
+    const o = a.output || {};
+    if (a.error) return `<p class="cm-err">${esc(a.error)}</p>`;
+    if (a.agent === 'desk-checks') return `<ul class="cm-l">${(o.checks || []).map((c) => `<li class="${c.level}">${esc(c.text || c.id)}</li>`).join('') || '<li>no findings</li>'}</ul>`;
+    if (a.agent === 'desk-analysts') {
+      const m = o.market || {}, s = o.sentiment || {}, p = o.positioning || {}, n = o.news || {};
+      return `<div class="cm-kv"><span>Market</span><b>${esc(m.regime)} · trend ${m.supertrend_up_frames ?? 0}↑ ${m.supertrend_down_frames ?? 0}↓ · RSI15 ${esc(m.rsi15 ?? '—')} · VWAP ${esc(m.vwap_dev_sigma ?? '—')}σ</b>
+        <span>Sentiment</span><b>fear/greed ${esc(s.fear_greed ?? '—')} · 24h flow ${esc(s.order_flow_24h_imbalance ?? '—')}</b>
+        <span>Positioning</span><b>funding ${esc(p.funding_per_interval ?? '—')} · OI ${esc(p.open_interest ?? '—')}</b>
+        <span>News</span><b>${esc(n.risk ?? '—')}${n.reason ? ' · ' + esc(n.reason) : ''}</b></div>`;
+    }
+    if (o.rating) return `<div class="cm-rate r-${esc(o.rating)}">${esc(o.rating)}${o.stance ? ` <small>→ ${esc(o.stance)} the ${esc(o.direction)}</small>` : ''}</div><p>${esc(o.rationale || o.executive_summary || '')}</p>${o.thesis ? `<p class="faint">${esc(o.thesis)}</p>` : ''}${o.would_change_my_mind ? `<p class="faint">Would change my mind: ${esc(o.would_change_my_mind)}</p>` : ''}`;
+    if (o.action) return `<div class="cm-rate ${o.action === 'take' ? 'r-Buy' : 'r-Sell'}">${esc(o.action.toUpperCase())}</div><p>${esc(o.reason)}</p><p class="faint">${esc(o.execution_note)}</p>`;
+    if (o.argument) return `<p>${esc(o.argument)}</p><p class="faint">Strongest point: ${esc(o.strongest_point)}</p>`;
+    return '<p class="faint">recorded</p>';
+  }
+  function renderCommittee(el, agents, providers) {
+    if (!el) return;
+    const cs = committees(agents);
+    const head = `<p class="mk-note">Advisory only: these agents cannot open, size or close anything. The LLM seats are filled only when the owner adds a free GROQ_API_KEY or GEMINI_API_KEY as a Supabase Edge Function secret; ${providers && providers.length ? `<b>configured: ${esc(providers.join(', '))}</b>` : '<b>none configured now, so only the rule-based stages run</b>'}. Structure adapted from TradingAgents (Apache-2.0).</p>`;
+    if (!cs.length) { el.innerHTML = head + '<div class="card"><p>No paper entry has been reviewed in the loaded window yet. The committee convenes on the next entry the rules take.</p></div>'; return; }
+    el.innerHTML = head + cs.slice(0, 6).map((c, i) => {
+      const pm = c.rows.find((r) => r.agent === 'desk-pm' && !r.error), stance = pm && pm.output.stance;
+      return `<details class="card cm" ${i === 0 ? 'open' : ''}><summary><b>${esc(c.ref)}</b><span>${esc(c.symbol || '')}</span><span class="faint">${esc(String(c.ts).slice(0, 16).replace('T', ' '))} UTC</span>${pm ? `<span class="cm-rate r-${esc(pm.output.rating)}">${esc(pm.output.rating)} · ${esc(stance)}</span>` : '<span class="faint">no final rating</span>'}</summary>
+        <ol class="cm-flow">${c.rows.map((a) => { const s = STAGES.find((x) => x[0] === a.agent); return `<li class="${a.error ? 'err' : ''}"><div class="cm-h"><b>${esc(s[1])}</b><small>${esc(s[2])}${a.provider ? ' · ' + esc(a.provider) : ''}${a.ms ? ' · ' + a.ms + ' ms' : ''}</small></div>${stageBody(a)}</li>`; }).join('')}</ol></details>`;
+    }).join('');
+  }
+
+  function renderScan(el, scan, now) {
+    if (!el) return;
+    if (!scan) { el.innerHTML = '<div class="card"><p>No scan recorded yet. The scanner runs every 15 minutes once backend v20 is live.</p></div>'; return; }
+    const ms = (scan.markets || []), setups = ms.filter((m) => m.ok && m.setups && m.setups.length);
+    const rows = ms.map((m) => !m.ok ? `<tr><td>${esc(m.sym)}</td><td colspan="8" class="faint">${esc(m.error)}</td></tr>` :
+      `<tr class="${m.book ? 'book' : ''}"><td><b>${esc(m.sym)}</b>${m.book ? ' <span class="bk">BOOK</span>' : ''}</td><td class="r">${px(m.price)}</td><td class="r">${sgn(m.chg24h)}</td><td>${esc(m.regime)}</td><td>${esc(m.trend)}</td><td class="r">${num(m.rsi15, 0)}</td><td class="r hide-s">${num(m.atr15Pct, 2)}%</td><td class="r hide-s">${m.funding == null ? '—' : sgn(m.funding * 100, 4)}</td>
+       <td>${m.setups.length ? m.setups.map((g) => `<span class="sc-set ${g.dir}">${esc(g.dir.toUpperCase())} ${esc(g.strategy)}</span>`).join(' ') : `<span class="faint">${esc((m.blocked[0] || {}).reason || 'no rule fired')}</span>`}</td></tr>`).join('');
+    const cards = setups.flatMap((m) => m.setups.map((g) => `<div class="sc-card ${g.dir}"><div><b>${esc(m.sym)}</b> <span class="sc-set ${g.dir}">${esc(g.dir.toUpperCase())}</span> ${esc(g.strategy)}${m.book ? '' : ' <small class="faint">untested market</small>'}</div>
+      <div class="cm-kv"><span>Entry ref</span><b>${px(g.entry)}</b><span>Stop</span><b>${px(g.stop)} (${num(g.stopPct, 2)}%)</b><span>Rule score</span><b>${num(g.score, 2)} <small class="faint">heuristic, not a probability</small></b></div>
+      <ul class="cm-l">${(g.why || []).map((w) => `<li>${esc(w)}</li>`).join('')}</ul></div>`)).join('');
+    el.innerHTML = `<div class="mk-bar"><span><b>SCAN</b> ${esc(ago(scan.ts, now))} · ${ms.length} markets · ${setups.length} with a rule firing · ${num(scan.ms / 1000, 1)} s</span><span class="faint">every 15 min · Hyperliquid perps</span></div>
+      ${cards ? `<div class="sc-cards">${cards}</div>` : '<p class="mk-note">No strategy fired on the last closed 5m bar of any market. Most bars have no setup; that is the rules working, not a fault.</p>'}
+      <section class="card mk-panel"><div class="mk-h"><b>ALL MARKETS</b><span class="mk-sub">ranked: rule fired → aligned trend → 24h move. Ordering, not a forecast.</span></div><div class="mk-body"><table class="mk-t"><thead><tr><th>Market</th><th class="r">Price</th><th class="r">24h</th><th>Regime</th><th>Trend</th><th class="r">RSI15</th><th class="r hide-s">ATR15</th><th class="r hide-s">Funding/h</th><th>Rules</th></tr></thead><tbody>${rows}</tbody></table></div></section>
+      <div class="mk-grid">${(scan.deriv || []).map(derivPanel).join('')}</div>
+      <p class="mk-note">${esc(scan.note || '')}</p>`;
+  }
+  function derivPanel(d) {
+    const o = d.options, f = d.futures || [];
+    return `<section class="card mk-panel"><div class="mk-h"><b>${esc(d.currency)} OPTIONS + FUTURES</b><span class="mk-sub">Deribit · index ${px(d.index)}</span></div>
+      <div class="mk-tiles">
+        <div class="mk-tile"><span>DVOL (30d implied)</span><b>${num(d.dvol && d.dvol.last, 1)}</b><i>${d.dvol && d.dvol.chg24h != null ? sgn(d.dvol.chg24h, 1, '') + ' 24h' : ''}</i></div>
+        <div class="mk-tile"><span>Put/call OI</span><b>${num(o && o.putCallOI, 2)}</b><i>${o ? `${num(o.putOI, 0)} P / ${num(o.callOI, 0)} C` : ''}</i></div>
+        <div class="mk-tile"><span>Max pain (next expiry)</span><b>${px(o && o.maxPainNearest)}</b><i>${o ? esc(String(o.nearestExpiry).slice(0, 10)) : ''}</i></div>
+        <div class="mk-tile"><span>ATM IV · put−call</span><b>${num(o && o.atmIV, 1)}</b><i>${o && o.putMinusCallIV != null ? sgn(o.putMinusCallIV, 1, ' vol') : ''}</i></div>
+      </div>
+      ${o && o.topOIStrikes ? `<div class="mk-next">Largest open interest at strikes: ${o.topOIStrikes.map((s) => `<b>${px(s.strike)}</b>`).join(' · ')}</div>` : ''}
+      <table class="mk-t"><thead><tr><th>Future</th><th class="r">Mark</th><th class="r">Basis</th><th class="r">Annualised</th></tr></thead><tbody>${f.map((x) => `<tr><td>${esc(x.instrument)}</td><td class="r">${px(x.mark)}</td><td class="r">${sgn(x.basisPct, 3)}</td><td class="r">${x.annualisedPct == null ? '—' : sgn(x.annualisedPct, 2)}</td></tr>`).join('') || '<tr><td colspan="4" class="faint">unavailable</td></tr>'}</tbody></table>
+      ${d.errors && d.errors.length ? `<p class="mk-note">partial: ${esc(d.errors.join('; '))}</p>` : ''}</section>`;
+  }
+  function renderState(el, ts) {
+    if (!el) return;
+    el.className = 'ts-pill ts-' + ts.state; el.title = ts.reasons.join('; ');
+    el.innerHTML = `<b>${esc(ts.state)}</b><span>${esc(ts.reasons[0])}</span>`;
+  }
+
+  const api = { tradingState, committees, renderCommittee, renderScan, renderState, STAGES };
+  if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.DeskScanner = api;
+})(typeof globalThis !== 'undefined' ? globalThis : this);
