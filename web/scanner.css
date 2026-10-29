@@ -40,3 +40,5 @@ details.cm > summary::-webkit-details-marker { display: none; }
 }
 @media (max-width: 639px) { .tab[data-v=committee] span { font-size: 9px; } .ts-pill span { display: none; } }
 .cm-kv b { overflow-wrap: anywhere; min-width: 0; }
+.tier { font: 700 9px/1 var(--f-mono); padding: 2px 5px; border-radius: 3px; background: #1f252d; color: var(--t-dim); letter-spacing: .05em; } .tier.t1 { background: var(--t-amber); color: var(--t-bg); } .tier.t2 { color: var(--t-amber); }
+.verdict { font: 700 10.5px/1 var(--f-mono); }

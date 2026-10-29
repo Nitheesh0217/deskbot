@@ -1,6 +1,5 @@
-// DeskBot v5.2 — optional AI layer (advisory only). NO Anthropic/Claude dependency.
-// Providers are OpenAI-compatible chat endpoints on free tiers: Groq (primary) and
-// Google Gemini via its OpenAI-compatible endpoint (fallback). Keys come from Supabase
+// DeskBot — optional AI layer (advisory only). NO Anthropic/Claude dependency.
+// Providers are OpenAI-compatible chat endpoints on free tiers (see PROVIDERS), tried in order as fallbacks. Keys come from Supabase
 // secrets. Missing keys / quota / errors ⇒ returns null and the caller degrades to rules.
 // AI output can never open a trade, size a trade or touch exits — see news.ts.
 
@@ -15,11 +14,27 @@ const dailyCap = (key: string, fallback: number) => {
   return Number.isSafeInteger(cap) && cap >= 0 ? cap : 0; // malformed config disables calls
 };
 
+// Free-tier, OpenAI-compatible chat endpoints (researched 29 Oct 2026 from github.com/mnfst/awesome-free-llm-apis and provider docs).
+// Each is used only when its key secret exists; the model can be overridden with <NAME>_MODEL (free tiers rename models often:
+// a 404 cools that provider for 30 min and the next one answers). Order = AI_PROVIDER_ORDER (comma list) or the default below.
+// Free tiers may log prompts; nothing sent here contains keys, balances beyond the paper book, or personal data.
+export const PROVIDERS = [
+  { name: "groq", keyVar: "GROQ_API_KEY", url: "https://api.groq.com/openai/v1/chat/completions", model: "llama-3.3-70b-versatile", cap: 300 },          // ~30 RPM, ~1,000 RPD
+  { name: "gemini", keyVar: "GEMINI_API_KEY", url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", model: "gemini-2.5-flash", cap: 200 },
+  { name: "nvidia", keyVar: "NVIDIA_API_KEY", url: "https://integrate.api.nvidia.com/v1/chat/completions", model: "meta/llama-3.3-70b-instruct", cap: 500 },  // ~40 RPM (NVIDIA Developer Program)
+  { name: "cerebras", keyVar: "CEREBRAS_API_KEY", url: "https://api.cerebras.ai/v1/chat/completions", model: "gpt-oss-120b", cap: 200 },
+  { name: "mistral", keyVar: "MISTRAL_API_KEY", url: "https://api.mistral.ai/v1/chat/completions", model: "mistral-small-latest", cap: 200 },             // ~1 RPS free "Experiment" plan
+  { name: "github", keyVar: "GITHUB_MODELS_TOKEN", url: "https://models.github.ai/inference/chat/completions", model: "openai/gpt-4.1-mini", cap: 100 }, // GitHub Models, fine-grained PAT with models:read
+  { name: "openrouter", keyVar: "OPENROUTER_API_KEY", url: "https://openrouter.ai/api/v1/chat/completions", model: "openrouter/free", cap: 45 },        // ~20 RPM, 50 RPD without credits
+] as const;
+
 export function providersFromEnv(): Provider[] {
-  const out: Provider[] = [];
-  if (env("GROQ_API_KEY")) out.push({ name: "groq", url: "https://api.groq.com/openai/v1/chat/completions", model: env("GROQ_MODEL") || "llama-3.3-70b-versatile", key: env("GROQ_API_KEY"), dailyCap: dailyCap("GROQ_DAILY_CAP", 300) });
-  if (env("GEMINI_API_KEY")) out.push({ name: "gemini", url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", model: env("GEMINI_MODEL") || "gemini-2.5-flash", key: env("GEMINI_API_KEY"), dailyCap: dailyCap("GEMINI_DAILY_CAP", 200) });
-  return out;
+  const order = String(env("AI_PROVIDER_ORDER") || "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean);
+  const rank = (n: string) => (order.includes(n) ? order.indexOf(n) : order.length + PROVIDERS.findIndex((p) => p.name === n));
+  return PROVIDERS.filter((p) => env(p.keyVar)).sort((a, b) => rank(a.name) - rank(b.name)).map((p) => {
+    const up = p.name.toUpperCase();
+    return { name: p.name, url: p.url, model: env(`${up}_MODEL`) || p.model, key: env(p.keyVar), dailyCap: dailyCap(`${up}_DAILY_CAP`, p.cap) };
+  });
 }
 
 export type DecideResult<T> = { value: T; provider: string; model: string; ms: number } | { value: null; errors: string[] };
@@ -43,6 +58,7 @@ export async function decideJSON<T>(
     if (u.day !== day) { u.day = day; u.calls = 0; u.fails = 0; }
     if (u.coolUntil > opts.now) { errors.push(`${p.name}: cooling down`); continue; }
     if (u.calls >= p.dailyCap) { errors.push(`${p.name}: daily cap ${p.dailyCap} reached`); continue; }
+    let jsonMode = true;
     for (let attempt = 0; attempt < 2; attempt++) {
       if (u.calls >= p.dailyCap) { errors.push(`${p.name}: daily cap ${p.dailyCap} reached`); break; }
       const left = end - Date.now(); if (left < 1500) { errors.push("deadline"); return { value: null, errors }; }
@@ -52,7 +68,7 @@ export async function decideJSON<T>(
         const r = await f(p.url, {
           method: "POST", signal: ctl.signal,
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${p.key}` },
-          body: JSON.stringify({ model: p.model, temperature: 0, max_tokens: opts.maxTokens ?? 400, response_format: { type: "json_object" },
+          body: JSON.stringify({ model: p.model, temperature: 0, max_tokens: opts.maxTokens ?? 400, ...(jsonMode ? { response_format: { type: "json_object" } } : {}),
             messages: [{ role: "system", content: system }, { role: "user", content: user }] }),
         });
         if (r.status === 401 || r.status === 403 || r.status === 404) { u.fails++; u.coolUntil = opts.now + 30 * 60_000; errors.push(`${p.name}: HTTP ${r.status} (auth/model) — skipped 30 min`); break; }
@@ -63,6 +79,7 @@ export async function decideJSON<T>(
           if (attempt === 0) { await sleep(Math.min(ra > 0 ? ra : 800 + Math.random() * 700, Math.max(0, end - Date.now() - 1500))); continue; }
           break;
         }
+        if (r.status === 400 && jsonMode && attempt === 0) { jsonMode = false; errors.push(`${p.name}: HTTP 400 with JSON mode, retrying without it`); continue; }   // some free models reject response_format
         if (!r.ok) { u.fails++; errors.push(`${p.name}: HTTP ${r.status}`); break; }
         const j = await r.json();
         const txt: string = j?.choices?.[0]?.message?.content ?? "";

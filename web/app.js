@@ -318,7 +318,7 @@ function renderAll() { document.querySelectorAll(".bookName").forEach((e) => { e
 function renderScanner() {
   const S = globalThis.DeskScanner; if (!S) return;
   const now = Date.now();
-  S.renderScan($("scanBody"), RAW && RAW.scan, now);
+  S.renderScan($("scanBody"), RAW && RAW.scan, now, RAW && RAW.track);
   S.renderCommittee($("committeeBody"), RAW && RAW.agents, RAW && RAW.chat && RAW.chat.ai);
   if (!RAW) { S.renderState($("tradeState"), { state: "HALTED", reasons: ["account status not loaded"] }); return; }
   const g = RAW.books && RAW.books.GOLD, gold = BOOK === "GOLD";

@@ -20,6 +20,7 @@ import { preTradeChecks, postTradeReview, runDeskWorkflow, analystReports, lesso
 import { verdictsFor, filterReport } from "./experiment.ts";
 import { catchUp } from "./catchup.ts";
 import { scanMarket, rankScan, derivatives, SCAN_NOTE } from "./scan.ts";
+import { signalsOverBars, resolve, trackRecord, PRIORITY, PROMOTION, type NewSignal, type OpenSignal, type Resolution } from "./track.ts";
 import { captureDecision, pickEntry, decisionIdFor } from "./provenance.ts";
 import { recordCoverage, dispositions, boundaryFlags } from "./coverage.ts";
 import type { StrategyTrace } from "./engine.ts";
@@ -361,22 +362,43 @@ async function runScan() {
   const now = Date.now(), t0 = now;
   const cfgOf = async (sym: Sym) => (await select(`dbv5_state?id=eq.${rowId(sym)}&select=state->cfg`).catch(() => []))?.[0]?.cfg ?? undefined;
   const [btcCfg, goldCfg] = await Promise.all([cfgOf("BTC"), cfgOf("GOLD")]);
-  const syms = Object.keys(SYMBOLS) as Sym[], markets: unknown[] = [];
+  const syms = (Object.keys(SYMBOLS) as Sym[]).sort((a, b) => (PRIORITY[a] ?? 3) - (PRIORITY[b] ?? 3)), markets: unknown[] = [];
+  // forward tracking (track.ts): best-effort; a failure here is reported and never stops the scan
+  const trackErrors: string[] = [];
+  const open: OpenSignal[] = await select("dbv5_scan_signals?status=eq.open&select=id,sym,strategy,dir,bar_t,entry,stop,tp1,r_dist,cost_r,max_hold_h,checked_t&order=id.asc&limit=2000").catch((e) => { trackErrors.push(String((e as Error).message).slice(0, 120)); return []; });
+  const fresh: NewSignal[] = [], updates: Resolution[] = [];
   try {
     for (let k = 0; k < syms.length; k += 3) {   // three markets at a time keeps Hyperliquid request weight low
       markets.push(...await Promise.all(syms.slice(k, k + 3).map(async (sym) => {
         try {
           const [m5, m15, h1, h4, ctx] = await Promise.all([candles("5m", 400, now, "hyperliquid", sym), candles("15m", 400, now, "hyperliquid", sym), candles("1h", 300, now, "hyperliquid", sym), candles("4h", 700, now, "hyperliquid", sym), hlContext(sym).catch(() => null)]);
+          const frames = { m5: m5.bars, m15: m15.bars, h1: h1.bars, h4: h4.bars };
           applyCfg(sym === "GOLD" ? goldCfg : btcCfg); setMlAsset(sym === "GOLD");
-          return { ...scanMarket(sym, { m5: m5.bars, m15: m15.bars, h1: h1.bars, h4: h4.bars }, ctx, now), name: SYMBOLS[sym].name, book: sym === "BTC" || sym === "GOLD", source: m5.source };
-        } catch (e) { return { sym, ok: false, error: (e as Error).message.slice(0, 120) }; }
+          const row = scanMarket(sym, frames, ctx, now);
+          try { fresh.push(...signalsOverBars(sym, frames)); for (const o of open.filter((x) => x.sym === sym)) { const u = resolve(o, m5.bars); if (u.status !== "open" || u.checked_t !== o.checked_t) updates.push(u); } }
+          catch (e) { trackErrors.push(`${sym}: ${(e as Error).message}`.slice(0, 120)); }
+          return { ...row, name: SYMBOLS[sym].name, book: PRIORITY[sym] === 1, priority: PRIORITY[sym] ?? 3, source: m5.source };
+        } catch (e) { return { sym, ok: false, error: (e as Error).message.slice(0, 120), priority: PRIORITY[sym] ?? 3 }; }
       })));
     }
   } finally { applyCfg(); setMlAsset(false); }
+  if (fresh.length) await rest("dbv5_scan_signals?on_conflict=sym,strategy,bar_t", { method: "POST", headers: { Prefer: "resolution=ignore-duplicates,return=minimal" }, body: JSON.stringify(fresh.map((x) => ({ ...x, checked_t: x.bar_t }))) }).catch((e) => trackErrors.push(`insert: ${(e as Error).message}`.slice(0, 120)));
+  for (const u of updates) {
+    const body = u.status === "open" ? { checked_t: u.checked_t } : { status: u.status, checked_t: u.checked_t, exit_t: u.exit_t, exit_px: u.exit_px, r_gross: u.r_gross, r_net: u.r_net, resolved_at: new Date().toISOString() };
+    await rest(`dbv5_scan_signals?id=eq.${u.id}&status=eq.open`, { method: "PATCH", body: JSON.stringify(body) }).catch((e) => trackErrors.push(`update ${u.id}: ${(e as Error).message}`.slice(0, 120)));
+  }
   const deriv = await Promise.all((["BTC", "ETH"] as const).map((c) => derivatives(c, now).catch((e) => ({ currency: c, errors: [(e as Error).message.slice(0, 80)] }))));
   const row = { markets: rankScan(markets as never), deriv, note: SCAN_NOTE, ms: Date.now() - t0 };
   await insert("dbv5_scans", [row]);
-  return { ok: true, markets: markets.length, setups: (row.markets as { setups?: unknown[] }[]).reduce((a, m) => a + (m.setups?.length ?? 0), 0), ms: row.ms };
+  return { ok: true, markets: markets.length, setups: (row.markets as { setups?: unknown[] }[]).reduce((a, m) => a + (m.setups?.length ?? 0), 0), tracked: { new: fresh.length, resolved: updates.filter((u) => u.status !== "open").length, open: open.length, errors: trackErrors }, ms: row.ms };
+}
+
+// forward record per market for the status payload (null until the table exists)
+async function trackStatus() {
+  try {
+    const rows = await select("dbv5_scan_signals?select=sym,strategy,dir,bar_t,entry,stop,tp1,status,r_net,exit_t,score&order=id.desc&limit=5000");
+    return { markets: trackRecord(rows ?? []), recent: (rows ?? []).slice(0, 25), promotion: PROMOTION.rule };
+  } catch { return null; }
 }
 
 async function status() {
@@ -388,7 +410,8 @@ async function status() {
     select("dbv5_backtests?select=ran_at,days,results&results->>label=like.LIVE_CONFIG*&order=id.desc&limit=1"),
     select("dbv5_agent_log?select=ts,symbol,agent,input_summary,output,provider,error&order=id.desc&limit=200").catch(() => []),
   ]);
-  const scan = (await select("dbv5_scans?select=ts,markets,deriv,note,ms&order=id.desc&limit=1").catch(() => []))?.[0] ?? null;
+  const [scanRows, track] = await Promise.all([select("dbv5_scans?select=ts,markets,deriv,note,ms&order=id.desc&limit=1").catch(() => []), trackStatus()]);
+  const scan = scanRows?.[0] ?? null;
   const st = s?.[0]?.state ?? null;
   const experiment = await experimentStatus();
   const config = resolvedCfg(st?.cfg);
@@ -404,7 +427,7 @@ async function status() {
     books[sym] = r?.[0] ? { name: SYMBOLS[sym].name, hl: SYMBOLS[sym].hl, integrity: await integrityFor(sym, resolvedCfg(r[0].state?.cfg)), state: r[0].state, lastRun: r[0].last_run, updated: r[0].updated_at, curve: c } : { name: SYMBOLS[sym].name, hl: SYMBOLS[sym].hl, state: null };
   }
   const curve = (eq ?? []).filter((_: unknown, i: number, a: unknown[]) => a.length < 600 || i % Math.ceil(a.length / 600) === 0 || i === a.length - 1);
-  return { version: VERSION, mode: "PAPER", now: new Date().toISOString(), updated: s?.[0]?.updated_at ?? null, integrity, state: st, lastRun: s?.[0]?.last_run ?? null, events: ev, agents: agents ?? [], trades: tr, curve, books, backtest: bt?.[0] ?? null, experiment, config, scan, chat: { enabled: !!CHAT_KEY, ai: providersFromEnv().map((p) => p.name) } };
+  return { version: VERSION, mode: "PAPER", now: new Date().toISOString(), updated: s?.[0]?.updated_at ?? null, integrity, state: st, lastRun: s?.[0]?.last_run ?? null, events: ev, agents: agents ?? [], trades: tr, curve, books, backtest: bt?.[0] ?? null, experiment, config, scan, track, chat: { enabled: !!CHAT_KEY, ai: providersFromEnv().map((p) => p.name) } };
 }
 
 // ─── AI assistant (owner only; password = DESKBOT_CHAT_KEY secret) ─────────

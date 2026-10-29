@@ -71,7 +71,7 @@
     }).join('');
   }
 
-  function renderScan(el, scan, now) {
+  function renderScan(el, scan, now, track) {
     if (!el) return;
     if (!scan) { el.innerHTML = '<div class="card"><p>No scan recorded yet. The scanner runs every 15 minutes once backend v20 is live.</p></div>'; return; }
     const ms = (scan.markets || []), setups = ms.filter((m) => m.ok && m.setups && m.setups.length);
@@ -84,8 +84,19 @@
     el.innerHTML = `<div class="mk-bar"><span><b>SCAN</b> ${esc(ago(scan.ts, now))} · ${ms.length} markets · ${setups.length} with a rule firing · ${num(scan.ms / 1000, 1)} s</span><span class="faint">every 15 min · Hyperliquid perps</span></div>
       ${cards ? `<div class="sc-cards">${cards}</div>` : '<p class="mk-note">No strategy fired on the last closed 5m bar of any market. Most bars have no setup; that is the rules working, not a fault.</p>'}
       <section class="card mk-panel"><div class="mk-h"><b>ALL MARKETS</b><span class="mk-sub">ranked: rule fired → aligned trend → 24h move. Ordering, not a forecast.</span></div><div class="mk-body"><table class="mk-t"><thead><tr><th>Market</th><th class="r">Price</th><th class="r">24h</th><th>Regime</th><th>Trend</th><th class="r">RSI15</th><th class="r hide-s">ATR15</th><th class="r hide-s">Funding/h</th><th>Rules</th></tr></thead><tbody>${rows}</tbody></table></div></section>
+      ${trackPanel(track)}
       <div class="mk-grid">${(scan.deriv || []).map(derivPanel).join('')}</div>
       <p class="mk-note">${esc(scan.note || '')}</p>`;
+  }
+  const TIER = { 1: 'P1 · trading', 2: 'P2 · next', 3: 'P3 · watch' };
+  /** Forward record: every setup the rules fired, followed to TP1, stop or max hold. The evidence a market needs before a paper book. */
+  function trackPanel(t) {
+    if (!t) return '';
+    const rows = (t.markets || []).map((m) => `<tr class="${m.priority === 1 ? 'book' : ''}"><td><b>${esc(m.sym)}</b> <span class="tier t${m.priority}">${esc(TIER[m.priority])}</span></td><td class="r">${m.resolved}</td><td class="r">${m.open}</td>
+      <td class="r">${m.resolved ? num((m.wins / m.resolved) * 100, 0) + '%' : '—'}</td><td class="r">${m.meanNetR == null ? '—' : sgn(m.meanNetR, 2, 'R')}</td><td class="r hide-s">${m.lo95 == null ? '—' : sgn(m.lo95, 2, 'R')}</td>
+      <td><span class="verdict ${/CANDIDATE/.test(m.verdict) ? 'up' : /NOT_YET/.test(m.verdict) ? 'down' : 'faint'}">${esc(m.verdict)}</span></td><td class="hide-s faint">${esc((m.byStrategy || []).slice(0, 3).map((x) => `${x.strategy} ${x.n}× ${x.meanNetR >= 0 ? '+' : ''}${x.meanNetR}R`).join(' · '))}</td></tr>`).join('');
+    return `<section class="card mk-panel"><div class="mk-h"><b>FORWARD RECORD</b><span class="mk-sub">every setup the rules fired, followed to TP1 / stop / max hold after costs</span></div><div class="mk-body"><table class="mk-t"><thead><tr><th>Market</th><th class="r">Resolved</th><th class="r">Open</th><th class="r">Hit TP1</th><th class="r">Mean net</th><th class="r hide-s">95% low</th><th>Status</th><th class="hide-s">By strategy</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <p class="mk-note">Promotion: ${esc(t.promotion || '')} Recorded at the bar each setup fired, before its outcome; a bar touching both stop and TP1 counts as the stop.</p></section>`;
   }
   function derivPanel(d) {
     const o = d.options, f = d.futures || [];
@@ -106,6 +117,6 @@
     el.innerHTML = `<b>${esc(ts.state)}</b><span>${esc(ts.reasons[0])}</span>`;
   }
 
-  const api = { tradingState, committees, renderCommittee, renderScan, renderState, STAGES };
+  const api = { trackPanel, tradingState, committees, renderCommittee, renderScan, renderState, STAGES };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.DeskScanner = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
