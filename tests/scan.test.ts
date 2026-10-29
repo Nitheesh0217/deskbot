@@ -28,6 +28,9 @@ test("scanMarket reports measured context and the rules' own setups, with no pro
       assert.ok(!/%\s*(chance|probab)/i.test(JSON.stringify(s)));
     }
     assert.ok(found > 0, "the engine's rules fire somewhere on a long synthetic series");
+    applyCfg({ MIN_SCORE: 0, RISK_SCALE: { EMA_PB: 0 } } as never);
+    const cutT = f.m5[7999].ct, off = scanMarket("ETH", { m5: f.m5.slice(0, 8000), m15: f.m15.filter((b) => b.ct <= cutT), h1: f.h1.filter((b) => b.ct <= cutT), h4: f.h4.filter((b) => b.ct <= cutT) }, null, now);
+    assert.ok(off.ok && off.blocked.every((b) => !/switched off/i.test(b.reason)), "switched-off strategies are not reported as market blocks");
     assert.deepEqual(scanMarket("X", { m5: [], m15: [], h1: [], h4: [] }, null, 0), { sym: "X", ok: false, error: "not enough history" });
   } finally { applyCfg(); }
 });
@@ -44,15 +47,15 @@ test("options: put/call OI, max pain of the nearest expiry, near-the-money put m
   assert.equal(expiryMs("30OCT26"), Date.UTC(2026, 9, 30, 8)); assert.equal(expiryMs("BAD"), null);
   const rows = [
     opt("BTC-30OCT26-95000-P", 100), opt("BTC-30OCT26-100000-C", 50), opt("BTC-30OCT26-105000-C", 300), opt("BTC-30OCT26-100000-P", 20),
-    opt("BTC-6NOV26-100000-C", 10, 48), opt("BTC-6NOV26-100000-P", 10, 52), opt("BTC-6NOV26-104000-P", 5, 54),
+    opt("BTC-6NOV26-100000-C", 10, 48), opt("BTC-6NOV26-100000-P", 10, 48), opt("BTC-6NOV26-92000-P", 5, 55), opt("BTC-6NOV26-108000-C", 5, 50),
     opt("BTC-28OCT26-100000-C", 9999),   // already expired
   ];
   const o = parseOptions(rows, NOW)!;
-  assert.equal(o.callOI, 360); assert.equal(o.putOI, 135); assert.equal(o.putCallOI, +(135 / 360).toFixed(3)); assert.equal(o.contracts, 7);
+  assert.equal(o.callOI, 365); assert.equal(o.putOI, 135); assert.equal(o.putCallOI, +(135 / 365).toFixed(3)); assert.equal(o.contracts, 8);
   assert.equal(o.nearestExpiry, new Date(Date.UTC(2026, 9, 30, 8)).toISOString());
   // payout at 95k: calls 0, puts 20*5000=100000; at 100k: puts 100*0 + calls 0 → 0 + put 95k OTM → 0 ... min is 100000 strike
   assert.equal(o.maxPainNearest, 100000);
-  assert.equal(o.ivExpiry, new Date(Date.UTC(2026, 10, 6, 8)).toISOString()); assert.equal(o.atmIV, 51.3); assert.equal(o.putMinusCallIV, 5);
+  assert.equal(o.ivExpiry, new Date(Date.UTC(2026, 10, 6, 8)).toISOString()); assert.equal(o.atmIV, 48, "ATM = strikes within 2% of spot"); assert.equal(o.putMinusCallIV, 5, "OTM put 55 minus OTM call 50");
   assert.equal(o.topOIStrikes[0].strike, 105000);
   assert.equal(parseOptions([], NOW), null);
 });

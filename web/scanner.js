@@ -94,7 +94,7 @@
         <div class="mk-tile"><span>DVOL (30d implied)</span><b>${num(d.dvol && d.dvol.last, 1)}</b><i>${d.dvol && d.dvol.chg24h != null ? sgn(d.dvol.chg24h, 1, '') + ' 24h' : ''}</i></div>
         <div class="mk-tile"><span>Put/call OI</span><b>${num(o && o.putCallOI, 2)}</b><i>${o ? `${num(o.putOI, 0)} P / ${num(o.callOI, 0)} C` : ''}</i></div>
         <div class="mk-tile"><span>Max pain (next expiry)</span><b>${px(o && o.maxPainNearest)}</b><i>${o ? esc(String(o.nearestExpiry).slice(0, 10)) : ''}</i></div>
-        <div class="mk-tile"><span>ATM IV · put−call</span><b>${num(o && o.atmIV, 1)}</b><i>${o && o.putMinusCallIV != null ? sgn(o.putMinusCallIV, 1, ' vol') : ''}</i></div>
+        <div class="mk-tile"><span>ATM IV · OTM put−call skew</span><b>${num(o && o.atmIV, 1)}</b><i>${o && o.putMinusCallIV != null ? sgn(o.putMinusCallIV, 1, ' vol') : ''}</i></div>
       </div>
       ${o && o.topOIStrikes ? `<div class="mk-next">Largest open interest at strikes: ${o.topOIStrikes.map((s) => `<b>${px(s.strike)}</b>`).join(' · ')}</div>` : ''}
       <table class="mk-t"><thead><tr><th>Future</th><th class="r">Mark</th><th class="r">Basis</th><th class="r">Annualised</th></tr></thead><tbody>${f.map((x) => `<tr><td>${esc(x.instrument)}</td><td class="r">${px(x.mark)}</td><td class="r">${sgn(x.basisPct, 3)}</td><td class="r">${x.annualisedPct == null ? '—' : sgn(x.annualisedPct, 2)}</td></tr>`).join('') || '<tr><td colspan="4" class="faint">unavailable</td></tr>'}</tbody></table>
