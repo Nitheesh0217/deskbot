@@ -199,11 +199,13 @@ function renderSetupRadar(operations) {
   }).join("")||'<p class="note">No setup types match this search. Try another family or clear the search.</p>';
 }
 
+const TOWER_CAL = { at: 0, next: null };
 function renderTower() {
   if (!globalThis.TowerView) return;
   const S = DATA.state || {}, st = S.state || {};
   const strategies = STRATS.map((s) => { const v = stratView(s.id, st), c = v.cov; return { id: s.id, name: s.name, state: OPST[v.state] ? OPST[v.state][1].toUpperCase() : v.state, reason: v.state === "DISABLED" ? (v.offReason || "") : c ? ((c.lastDueCode || c.lastCode || "") + " " + (c.lastDueReason || c.lastReason || "")).trim() : "no evaluation counters yet" }; });
-  globalThis.TowerView.render({ state: S, agents: DATA.agents || [], trades: DATA.trades || [], curve: DATA.curve || [], strategies, book: BOOK, bt: DATA.bt || null,
+  if (globalThis.DeskMarkets && !$("v-tower").hidden && Date.now() - TOWER_CAL.at > 10 * 60e3) { TOWER_CAL.at = Date.now(); globalThis.DeskMarkets.nextHighImpact().then((e) => { TOWER_CAL.next = e; renderTower(); }).catch(() => {}); }
+  globalThis.TowerView.render({ calendarNext: TOWER_CAL.next, state: S, agents: DATA.agents || [], trades: DATA.trades || [], curve: DATA.curve || [], strategies, book: BOOK, bt: DATA.bt || null,
     experiment: RAW ? (RAW.experiment === undefined ? null : RAW.experiment) : null, config: BOOK === "BTC" && RAW ? RAW.config || null : null, aiProviders: RAW && RAW.chat ? RAW.chat.ai || [] : null });
 }
 let strategyFilter = "all";
@@ -313,8 +315,9 @@ function renderSystem() {
 function renderAll() { document.querySelectorAll(".bookName").forEach((e) => { e.textContent = BOOK === "GOLD" ? "PAXG" : "BTC"; }); renderDesk(); renderStrategies(); renderTrades(); renderEvents(); renderSystem(); renderTower(); }
 
 // tabs
-const VIEWS = ["tower", "desk", "chart", "strategies", "trades", "activity", "system"];
+const VIEWS = ["tower", "markets", "desk", "chart", "strategies", "trades", "activity", "system"];
 const PAGE_META = {
+  markets:["Markets terminal","Clocks, sessions, crypto, macro, the economic calendar and news around the bot\u2019s two books. Context only; the bot does not read it."],
   tower:["The trading tower","Every agent on its floor, what it reported, and how each check is handed from desk to desk."],
   desk:["Your desk. A clearer perspective.","Follow the evidence, explore different setups, and keep every paper result in view."],
   chart:["Chart workspace","Market structure and the paper runner’s reported levels. Observations are not forecasts."],
@@ -386,6 +389,47 @@ async function chartShow() {
   clearInterval(CH.timer); CH.timer = setInterval(() => { if (!document.hidden && CH.mode === "bot" && !$("v-chart").hidden) chartDraw(); }, 60000);
 }
 
+// ── indicator panes + hover legend (indicators.js, ported from OpenTerminal, MIT). Display only. ──
+const IND = { on: { VOL: true, SMA20: false, SMA50: false, SMA200: false, VWAP: false, BOLL: false, RSI: false, MACD: false }, s: {}, last: null };
+try { Object.assign(IND.on, JSON.parse(localStorage.getItem("deskbot.ind") || "{}")); } catch (_) { /* storage optional */ }
+document.querySelectorAll("#indSeg button").forEach((b) => { b.setAttribute("aria-pressed", String(!!IND.on[b.dataset.ind])); b.addEventListener("click", () => {
+  IND.on[b.dataset.ind] = !IND.on[b.dataset.ind]; b.setAttribute("aria-pressed", String(IND.on[b.dataset.ind])); try { localStorage.setItem("deskbot.ind", JSON.stringify(IND.on)); } catch (_) { /* optional */ }
+  if (IND.last) drawIndicators(IND.last); }); });
+const IND_STYLE = { SMA20: "#e3c14d", SMA50: "#5aa9e6", SMA200: "#d46bd6", VWAP: "#f2a93b", BOLL: "#8a9bb0" };
+function drawIndicators(b) {
+  if (!CH.chart || !globalThis.DeskIndicators) return; IND.last = b;
+  const I = globalThis.DeskIndicators, c = b.map((x) => ({ time: sec(x.t), open: x.o, high: x.h, low: x.l, close: x.c, volume: +x.v || 0 }));
+  const want = (k, make) => { if (IND.on[k] && !IND.s[k]) IND.s[k] = make(); if (!IND.on[k] && IND.s[k]) { [].concat(IND.s[k]).forEach((s) => CH.chart.removeSeries(s)); delete IND.s[k]; } return IND.s[k]; };
+  const line = (color, opts = {}) => CH.chart.addLineSeries({ color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, ...opts });
+  const osc = ["RSI", "MACD"].filter((k) => IND.on[k]), paneH = 0.15, mainBottom = 0.04 + paneH * osc.length;
+  CH.series.c.priceScale().applyOptions({ scaleMargins: { top: 0.06, bottom: mainBottom + (IND.on.VOL ? 0.1 : 0) } });
+  const v = want("VOL", () => CH.chart.addHistogramSeries({ priceScaleId: "vol", priceFormat: { type: "volume" }, priceLineVisible: false, lastValueVisible: false }));
+  if (v) { CH.chart.priceScale("vol").applyOptions({ scaleMargins: { top: 1 - mainBottom - 0.12, bottom: mainBottom } }); v.setData(c.map((x) => ({ time: x.time, value: x.volume, color: x.close >= x.open ? "rgba(63,207,142,.35)" : "rgba(240,97,109,.35)" }))); }
+  for (const [k, p] of [["SMA20", 20], ["SMA50", 50], ["SMA200", 200]]) { const s = want(k, () => line(IND_STYLE[k])); s && s.setData(I.sma(c, p)); }
+  const vw = want("VWAP", () => line(IND_STYLE.VWAP, { lineStyle: 2 })); vw && vw.setData(I.vwap(c));
+  const bb = want("BOLL", () => [line(IND_STYLE.BOLL), line(IND_STYLE.BOLL, { lineStyle: 2 }), line(IND_STYLE.BOLL)]); if (bb) { const r = I.bollinger(c); bb[0].setData(r.upper); bb[1].setData(r.middle); bb[2].setData(r.lower); }
+  const pane = (k) => { const i = osc.indexOf(k); return { top: 1 - paneH * (osc.length - i) + 0.01, bottom: paneH * (osc.length - i - 1) }; };
+  const rs = want("RSI", () => [line("#b48ef0", { priceScaleId: "rsi", lineWidth: 1.5 }), line("#67778a", { priceScaleId: "rsi", lineStyle: 2 }), line("#67778a", { priceScaleId: "rsi", lineStyle: 2 })]);
+  if (rs) { CH.chart.priceScale("rsi").applyOptions({ scaleMargins: pane("RSI") }); const r = I.rsi(c); rs[0].setData(r); rs[1].setData(r.map((p) => ({ time: p.time, value: 70 }))); rs[2].setData(r.map((p) => ({ time: p.time, value: 30 }))); }
+  const md = want("MACD", () => [CH.chart.addHistogramSeries({ priceScaleId: "macd", priceLineVisible: false, lastValueVisible: false }), line("#5aa9e6", { priceScaleId: "macd" }), line("#f2a93b", { priceScaleId: "macd" })]);
+  if (md) { CH.chart.priceScale("macd").applyOptions({ scaleMargins: pane("MACD") }); const r = I.macd(c); md[0].setData(r.histogram.map((p) => ({ ...p, color: p.value >= 0 ? "rgba(63,207,142,.55)" : "rgba(240,97,109,.55)" }))); md[1].setData(r.macd); md[2].setData(r.signal); }
+  if (!IND.hover) { IND.hover = true; CH.chart.subscribeCrosshairMove((p) => hoverLegend(p)); }
+  hoverLegend(null);
+}
+function hoverLegend(p) {
+  const el = $("hoverLegend"); if (!el || !IND.last) return;
+  const bar = p && p.seriesData ? p.seriesData.get(CH.series.c) : null, src = IND.last, lastBar = src[src.length - 1];
+  const o = bar ? bar : { open: lastBar.o, high: lastBar.h, low: lastBar.l, close: lastBar.c };
+  const val = (s) => { if (!s) return null; const d = p && p.seriesData ? p.seriesData.get(s) : null; return d && isFinite(d.value) ? d.value : null; };
+  const vol = p && p.time != null ? (src.find((x) => sec(x.t) === p.time) || {}).v : lastBar.v;
+  const parts = [`O <b>${fmtPx(o.open)}</b>`, `H <b>${fmtPx(o.high)}</b>`, `L <b>${fmtPx(o.low)}</b>`, `C <b class="${o.close >= o.open ? "up" : "down"}">${fmtPx(o.close)}</b>`];
+  if (vol != null) parts.push(`Vol <b>${(+vol).toLocaleString("en-US", { maximumFractionDigits: 1 })}</b>`);
+  for (const k of ["SMA20", "SMA50", "SMA200", "VWAP"]) { const x = val(IND.s[k]); if (x != null) parts.push(`<span style="color:${IND_STYLE[k]}">${k}</span> <b>${fmtPx(x)}</b>`); }
+  if (IND.s.RSI) { const x = val(IND.s.RSI[0]); if (x != null) parts.push(`<span style="color:#b48ef0">RSI</span> <b>${x.toFixed(1)}</b>`); }
+  if (IND.s.MACD) { const x = val(IND.s.MACD[1]), y = val(IND.s.MACD[2]); if (x != null) parts.push(`MACD <b>${x.toFixed(2)}</b>${y != null ? ` sig <b>${y.toFixed(2)}</b>` : ""}`); }
+  el.innerHTML = parts.join(" &nbsp;");
+}
+
 async function chartDraw() {
   const tf = CH.tf, book = BOOK, request = ++CH.request;
   try {
@@ -394,6 +438,7 @@ async function chartDraw() {
     $("lwMsg").hidden = true;
     const b = main.bars;
     CH.series.c.setData(b.map((x) => ({ time: sec(x.t), open: x.o, high: x.h, low: x.l, close: x.c })));
+    drawIndicators(b);
     const e20 = emaArr(b, 20), e50 = emaArr(b, 50);
     CH.series.e20.setData(b.map((x, i) => ({ time: sec(x.t), value: e20[i] })).filter((p) => isFinite(p.value)));
     CH.series.e50.setData(b.map((x, i) => ({ time: sec(x.t), value: e50[i] })).filter((p) => isFinite(p.value)));

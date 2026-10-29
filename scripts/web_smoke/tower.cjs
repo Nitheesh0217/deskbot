@@ -29,6 +29,7 @@ const srv = http.createServer((q, r) => { const f = path.join(web, q.url === "/"
     page.on("console", (m) => { if (m.type() === "error") problems.push(`${name} console: ${m.text()}`); }); page.on("pageerror", (e) => problems.push(`${name} pageerror: ${e.message}`));
     await page.route("**/*", async (route) => {
       const u = route.request().url();
+      if (u.startsWith(base + "api/feeds")) return route.fulfill({ contentType: "application/json", body: JSON.stringify({ feed: "calendar", data: [{ title: "FOMC Statement", country: "USD", date: new Date(Date.now() + 7200e3).toISOString(), impact: "High" }] }) });   // TEST DATA
       if (u.startsWith(base)) return route.continue();
       if (u.includes("fonts.g")) return route.fulfill({ contentType: "text/css", body: "" });
       if (u.includes("api.hyperliquid.xyz")) { const b = JSON.parse(route.request().postData()); if (b.type === "allMids") return route.fulfill({ contentType: "application/json", body: JSON.stringify({ BTC: "81234.5" }) });
@@ -48,7 +49,7 @@ const srv = http.createServer((q, r) => { const f = path.join(web, q.url === "/"
       working: document.querySelectorAll('.emp[data-status="working"]').length, off: document.querySelectorAll('.emp[data-status="off"]').length,
       judge: document.querySelector('.emp[data-emp="judge"] .say').innerText, drawer: document.getElementById("drawer").innerText.slice(0, 160), now: document.getElementById("gNow").innerText, pct: document.getElementById("gPct").innerText, px: document.getElementById("towerPx").innerText,
       feed: document.querySelectorAll("#towerFeed div").length, steps: document.querySelectorAll("#towerFlow .step").length, fams: document.querySelectorAll(".fam").length, rdesks: document.querySelectorAll(".rdesk").length,
-      board: document.getElementById("expBoard").innerText.slice(0, 200), allocator: document.querySelector('.emp[data-emp="pm"] .say').innerText, steward: document.querySelector('.emp[data-emp="steward"] .say').innerText, hScroll: document.documentElement.scrollWidth > innerWidth + 1 }));
+      board: document.getElementById("expBoard").innerText.slice(0, 200), allocator: document.querySelector('.emp[data-emp="pm"] .say').innerText, steward: document.querySelector('.emp[data-emp="steward"] .say').innerText, nora: document.querySelector('.emp[data-emp="news"] .say').innerText, hScroll: document.documentElement.scrollWidth > innerWidth + 1 }));
     info.packetsSeen = sawPacket; result[name] = info;
     await page.screenshot({ path: path.join(outDir, `tower_${name}.png`), fullPage: true });
     for (const v of ["chart", "strategies", "desk"]) { await page.click(`.tab[data-v="${v}"]`); await page.waitForTimeout(v === "chart" ? 2800 : 700); await page.screenshot({ path: path.join(outDir, `${v}_${name}.png`), fullPage: true }); }

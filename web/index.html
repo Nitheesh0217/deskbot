@@ -10,6 +10,7 @@
 <link rel="stylesheet" href="./desk-layout.css">
 <link rel="stylesheet" href="./features.css">
 <link rel="stylesheet" href="./tower.css">
+<link rel="stylesheet" href="./markets.css">
 <script src="./evidence.js" defer></script>
 <script src="./desk-model.js" defer></script>
 <script src="./vendor/motion-14.7.1.js" defer></script>
@@ -19,6 +20,9 @@
 <script src="./setup.js" defer></script>
 <script src="./tower-model.js" defer></script>
 <script src="./tower.js" defer></script>
+<script src="./indicators.js" defer></script>
+<script src="./markets.js" defer></script>
+<script src="./palette.js" defer></script>
 <script src="./app.js" defer></script>
 </head><body>
 <a class="skip-link" href="#workspace">Skip to workspace</a>
@@ -28,6 +32,7 @@
     <div class="breadcrumb">DESKBOT <span>/</span> <span id="pageCrumb">Overview</span></div>
     <span class="chip paper">Paper execution</span>
     <div class="px"><div class="v num" id="hdrPx">—</div><div class="s"><span class="dot" id="hdrDot"></span><span id="hdrAge">Connecting</span></div></div>
+    <button class="kbd-btn" id="cmdBtn" type="button" aria-label="Open command palette" title="Command palette (Ctrl+K or /)"><span>Search commands</span><kbd>⌘K</kbd></button>
     <button class="icon-button" id="globalRefresh" type="button" aria-label="Refresh account data" title="Refresh account data">↻</button>
   </div>
 </header>
@@ -71,6 +76,20 @@
         <div class="card"><div class="section-top"><h2>Hand-offs</h2><span class="chip">Latest check + agent log</span></div><div class="feed" id="towerFeed"></div></div>
       </aside>
     </div>
+  </section>
+
+  <!-- MARKETS -->
+  <section class="view" id="v-markets" role="tabpanel" aria-labelledby="tab-markets" aria-label="Markets" hidden>
+    <div class="mk-bar"><div class="mk-clocks" id="mkClocks"></div><div class="mk-feeds" id="mkFeeds">feeds: loading…</div></div>
+    <div class="mk-grid">
+      <section class="card mk-panel mk-crypto"><div class="mk-h"><b>CRYPTO</b><div class="mk-sub" id="mkCryptoHead"></div></div><div id="mkCrypto" class="mk-body"></div></section>
+      <section class="card mk-panel mk-cal"><div class="mk-h"><b>CALENDAR</b><div class="seg mini" id="mkCalFilter" role="group" aria-label="Impact filter"><button type="button" data-f="h" aria-pressed="false">High</button><button type="button" data-f="hm" aria-pressed="true">High + Med</button><button type="button" data-f="all" aria-pressed="false">All</button></div></div>
+        <div class="mk-next" id="mkNext">—</div><div id="mkCal" class="mk-body"></div>
+        <p class="mk-note">Display only. The bot's own news pause (NEWS_MODE) is a separate, rule-based layer.</p></section>
+      <section class="card mk-panel mk-macro"><div class="mk-h"><b>MACRO</b><span class="mk-sub faint">FRED daily closes</span></div><div id="mkMacro" class="mk-tiles"></div></section>
+      <section class="card mk-panel mk-news"><div class="mk-h"><b>NEWS</b><div class="seg mini" id="mkNewsTabs" role="group" aria-label="News topic"><button type="button" data-n="btc" aria-pressed="true">BTC</button><button type="button" data-n="gold" aria-pressed="false">Gold</button><button type="button" data-n="macro" aria-pressed="false">Macro</button></div></div><div id="mkNews" class="mk-body"></div></section>
+    </div>
+    <p class="mk-note">Public, delayed or indicative data from CoinGecko/Binance, FRED, Forex Factory and Google News, fetched through a fixed-allowlist proxy. Not execution-grade and never used by the bot. Terminal layout and data approach adapted from OpenTerminal (MIT).</p>
   </section>
 
   <!-- DESK -->
@@ -162,6 +181,7 @@
         <div class="seg" id="chartMode" style="margin-left:auto"><button type="button" data-m="bot" aria-pressed="true">Bot levels</button><button type="button" data-m="tv" aria-pressed="false">TradingView</button></div>
       </div>
       <div class="seg" id="tfSeg" style="margin-top:10px"><button type="button" data-tf="15m" aria-pressed="false">15m</button><button type="button" data-tf="1h" aria-pressed="true">1H</button><button type="button" data-tf="4h" aria-pressed="false">4H</button><button type="button" data-tf="1d" aria-pressed="false">1D</button></div>
+      <div class="seg ind" id="indSeg" role="group" aria-label="Indicators"><button type="button" data-ind="VOL">VOL</button><button type="button" data-ind="SMA20">SMA20</button><button type="button" data-ind="SMA50">SMA50</button><button type="button" data-ind="SMA200">SMA200</button><button type="button" data-ind="VWAP">VWAP</button><button type="button" data-ind="BOLL">BOLL</button><button type="button" data-ind="RSI">RSI</button><button type="button" data-ind="MACD">MACD</button></div>
       <div class="layers" id="layers" role="group" aria-label="Chart layers">
         <label><input type="checkbox" data-layer="focus" checked> Focus on trade</label>
         <label><input type="checkbox" data-layer="trade" checked> Trade box</label>
@@ -173,7 +193,7 @@
         <label><input type="checkbox" data-layer="structure"> BOS / CHoCH</label>
         <label><input type="checkbox" data-layer="liq"> Liquidity</label>
       </div>
-      <div class="chartbox" id="lwBox"><div class="msg" id="lwMsg">Loading candles…</div></div>
+      <div class="chartbox" id="lwBox"><div class="hover-legend" id="hoverLegend" aria-live="off"></div><div class="msg" id="lwMsg">Loading candles…</div></div>
       <div class="chartbox" id="tvBox" hidden><div id="tvw" style="height:100%"></div><div class="msg" id="tvMsg">Loading TradingView…</div></div>
       <div class="legend" id="legend"></div>
       <p class="note faint" style="margin-top:8px">TradingView Lightweight Charts™ · Copyright (с) 2023 TradingView, Inc. <a href="https://www.tradingview.com/" target="_blank" rel="noopener">TradingView</a></p>
@@ -269,11 +289,13 @@
   </div>
 </section>
 
+<div class="cmd" id="cmd" hidden role="dialog" aria-modal="true" aria-label="Command palette"><div class="cmd-box" id="cmdBox"><input id="cmdQ" type="text" autocomplete="off" spellcheck="false" placeholder="Type a command: a view, a book, a timeframe, an indicator, an employee…" aria-label="Command"><div class="cmd-list" id="cmdList" role="listbox"></div><div class="cmd-foot"><span>↑↓ move · Enter run · Esc close</span><span>Alt+1…9 switch views</span></div></div></div>
 <nav class="tabs" aria-label="Workspace sections">
   <a class="sidebar-brand" href="#desk" aria-label="DeskBot overview"><span class="brand-symbol">D<span>·</span></span><span>DESKBOT<small>Spatial research desk</small></span></a>
   <div class="nav-label">WORKSPACE</div>
   <div class="tabs-in" role="tablist" aria-label="Workspace views">
     <button class="tab" role="tab" id="tab-tower" aria-controls="v-tower" data-v="tower" aria-selected="false"><svg viewBox="0 0 24 24"><path d="M6 21V8l6-5 6 5v13"/><path d="M10 21v-4h4v4M9 11h1M14 11h1M9 14h1M14 14h1"/></svg><span>Tower</span></button>
+    <button class="tab" role="tab" id="tab-markets" aria-controls="v-markets" data-v="markets" aria-selected="false"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 15l3-3 3 2 4-5"/></svg><span>Markets</span></button>
     <button class="tab" role="tab" id="tab-desk" aria-controls="v-desk" data-v="desk" aria-selected="true"><svg viewBox="0 0 24 24"><path d="M3 17l5-5 4 4 8-8"/><path d="M15 8h5v5"/></svg><span>Overview</span></button>
     <button class="tab" role="tab" id="tab-chart" aria-controls="v-chart" data-v="chart" aria-selected="false"><svg viewBox="0 0 24 24"><path d="M6 4v16M6 8h-2v6h2M12 6v12M12 9h-2v5h2M18 3v14M18 6h-2v7h2"/></svg><span>Chart workspace</span></button>
     <button class="tab" role="tab" id="tab-strategies" aria-controls="v-strategies" data-v="strategies" aria-selected="false"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="7" height="7" rx="1"/><rect x="14" y="4" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg><span>Strategies</span></button>
