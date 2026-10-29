@@ -78,3 +78,25 @@ export function trackRecord(rows: Row[]) {
     };
   }).sort((a, b) => a.priority - b.priority || b.resolved - a.resolved);
 }
+
+// ─── CALL-1 scoring: each market's directional call checked CALL_HORIZON_H hours later ─────────────
+export type OpenCall = { id: number; sym: string; t: number; horizon_h: number; lean: "LONG" | "SHORT"; px: number; atr: number };
+export type CallScore = { id: number; px_end: number; end_t: number; move_pct: number; move_atr: number; hit: boolean };
+/** Score a call on the close of the first 5m bar at or after t + horizon. null while that bar has not closed. */
+export function scoreCall(c: OpenCall, m5: Bar[]): CallScore | null {
+  const end = c.t + c.horizon_h * 3600_000, b = m5.find((x) => x.ct >= end);
+  if (!b) return null;
+  const d = c.lean === "LONG" ? 1 : -1, mv = (b.c - c.px) * d;
+  return { id: c.id, px_end: b.c, end_t: b.ct, move_pct: +((mv / c.px) * 100).toFixed(4), move_atr: c.atr > 0 ? +(mv / c.atr).toFixed(3) : 0, hit: mv > 0 };
+}
+type CallRow = { sym: string; lean: string; status: string; hit: boolean | null; move_atr: number | null; move_pct: number | null; source?: string };
+/** Per-market call record. Right = price moved the called way after 4 h (before costs). Compared with 50%, it is descriptive only. */
+export function callRecord(rows: CallRow[]) {
+  return Object.keys(PRIORITY).map((sym) => {
+    const sc = rows.filter((r) => r.sym === sym && r.status === "scored" && typeof r.hit === "boolean"), n = sc.length, hits = sc.filter((r) => r.hit).length;
+    const mean = (xs: number[]) => (xs.length ? +(xs.reduce((a, b) => a + b, 0) / xs.length).toFixed(3) : null);
+    return { sym, priority: PRIORITY[sym], scored: n, open: rows.filter((r) => r.sym === sym && r.status === "open").length, hitRate: n ? +(hits / n * 100).toFixed(1) : null,
+      meanMoveAtr: mean(sc.map((r) => r.move_atr as number)), meanMovePct: mean(sc.map((r) => r.move_pct as number)),
+      verdict: n < 30 ? `collecting (${n}/30)` : (bootLo(sc.map((r) => r.move_atr as number)) ?? 0) > 0 ? "CALLS AHEAD OF MARKET" : "NO EDGE YET" };
+  }).sort((a, b) => a.priority - b.priority);
+}

@@ -19,8 +19,8 @@ import { runDesk, deskChart, type AgentRow } from "./agents.ts";
 import { preTradeChecks, postTradeReview, runDeskWorkflow, analystReports, lessonsFrom } from "./desk.ts";
 import { verdictsFor, filterReport } from "./experiment.ts";
 import { catchUp } from "./catchup.ts";
-import { scanMarket, rankScan, derivatives, SCAN_NOTE } from "./scan.ts";
-import { signalsOverBars, resolve, trackRecord, PRIORITY, PROMOTION, type NewSignal, type OpenSignal, type Resolution } from "./track.ts";
+import { scanMarket, rankScan, derivatives, SCAN_NOTE, CALL_HORIZON_H } from "./scan.ts";
+import { signalsOverBars, resolve, trackRecord, scoreCall, callRecord, PRIORITY, PROMOTION, type NewSignal, type OpenSignal, type Resolution, type OpenCall, type CallScore } from "./track.ts";
 import { captureDecision, pickEntry, decisionIdFor } from "./provenance.ts";
 import { recordCoverage, dispositions, boundaryFlags } from "./coverage.ts";
 import type { StrategyTrace } from "./engine.ts";
@@ -366,7 +366,8 @@ async function runScan() {
   // forward tracking (track.ts): best-effort; a failure here is reported and never stops the scan
   const trackErrors: string[] = [];
   const open: OpenSignal[] = await select("dbv5_scan_signals?status=eq.open&select=id,sym,strategy,dir,bar_t,entry,stop,tp1,r_dist,cost_r,max_hold_h,checked_t&order=id.asc&limit=2000").catch((e) => { trackErrors.push(String((e as Error).message).slice(0, 120)); return []; });
-  const fresh: NewSignal[] = [], updates: Resolution[] = [];
+  const openCalls: OpenCall[] = await select("dbv5_calls?status=eq.open&select=id,sym,t,horizon_h,lean,px,atr&limit=500").catch((e) => { trackErrors.push(`calls: ${(e as Error).message}`.slice(0, 120)); return []; });
+  const fresh: NewSignal[] = [], updates: Resolution[] = [], newCalls: Record<string, unknown>[] = [], scored: CallScore[] = [];
   try {
     for (let k = 0; k < syms.length; k += 3) {   // three markets at a time keeps Hyperliquid request weight low
       markets.push(...await Promise.all(syms.slice(k, k + 3).map(async (sym) => {
@@ -375,6 +376,12 @@ async function runScan() {
           const frames = { m5: m5.bars, m15: m15.bars, h1: h1.bars, h4: h4.bars };
           applyCfg(sym === "GOLD" ? goldCfg : btcCfg); setMlAsset(sym === "GOLD");
           const row = scanMarket(sym, frames, ctx, now);
+          try {
+            // CALL-1: score this market's open call once its horizon has passed; open a new one only when none is open
+            const mine = openCalls.filter((c) => c.sym === sym); for (const c of mine) { const sc = scoreCall(c, m5.bars); if (sc) scored.push(sc); }
+            const c = (row as { call?: { lean: string; votes: number; source: string; cautions: string[]; t: number; px: number; atr: number } }).call;
+            if (c && c.lean !== "NONE" && mine.every((x) => scored.some((y) => y.id === x.id))) newCalls.push({ sym, t: c.t, horizon_h: CALL_HORIZON_H, lean: c.lean, votes: c.votes, source: c.source, cautions: c.cautions, px: c.px, atr: c.atr });
+          } catch (e) { trackErrors.push(`${sym} call: ${(e as Error).message}`.slice(0, 120)); }
           try { fresh.push(...signalsOverBars(sym, frames)); for (const o of open.filter((x) => x.sym === sym)) { const u = resolve(o, m5.bars); if (u.status !== "open" || u.checked_t !== o.checked_t) updates.push(u); } }
           catch (e) { trackErrors.push(`${sym}: ${(e as Error).message}`.slice(0, 120)); }
           return { ...row, name: SYMBOLS[sym].name, book: PRIORITY[sym] === 1, priority: PRIORITY[sym] ?? 3, source: m5.source };
@@ -387,17 +394,20 @@ async function runScan() {
     const body = u.status === "open" ? { checked_t: u.checked_t } : { status: u.status, checked_t: u.checked_t, exit_t: u.exit_t, exit_px: u.exit_px, r_gross: u.r_gross, r_net: u.r_net, resolved_at: new Date().toISOString() };
     await rest(`dbv5_scan_signals?id=eq.${u.id}&status=eq.open`, { method: "PATCH", body: JSON.stringify(body) }).catch((e) => trackErrors.push(`update ${u.id}: ${(e as Error).message}`.slice(0, 120)));
   }
+  for (const sc of scored) await rest(`dbv5_calls?id=eq.${sc.id}&status=eq.open`, { method: "PATCH", body: JSON.stringify({ status: "scored", px_end: sc.px_end, end_t: sc.end_t, move_pct: sc.move_pct, move_atr: sc.move_atr, hit: sc.hit, scored_at: new Date().toISOString() }) }).catch((e) => trackErrors.push(`call ${sc.id}: ${(e as Error).message}`.slice(0, 120)));
+  if (newCalls.length) await rest("dbv5_calls?on_conflict=sym,t", { method: "POST", headers: { Prefer: "resolution=ignore-duplicates,return=minimal" }, body: JSON.stringify(newCalls) }).catch((e) => trackErrors.push(`calls insert: ${(e as Error).message}`.slice(0, 120)));
   const deriv = await Promise.all((["BTC", "ETH"] as const).map((c) => derivatives(c, now).catch((e) => ({ currency: c, errors: [(e as Error).message.slice(0, 80)] }))));
   const row = { markets: rankScan(markets as never), deriv, note: SCAN_NOTE, ms: Date.now() - t0 };
   await insert("dbv5_scans", [row]);
-  return { ok: true, markets: markets.length, setups: (row.markets as { setups?: unknown[] }[]).reduce((a, m) => a + (m.setups?.length ?? 0), 0), tracked: { new: fresh.length, resolved: updates.filter((u) => u.status !== "open").length, open: open.length, errors: trackErrors }, ms: row.ms };
+  return { ok: true, markets: markets.length, setups: (row.markets as { setups?: unknown[] }[]).reduce((a, m) => a + (m.setups?.length ?? 0), 0), calls: { new: newCalls.length, scored: scored.length }, tracked: { new: fresh.length, resolved: updates.filter((u) => u.status !== "open").length, open: open.length, errors: trackErrors }, ms: row.ms };
 }
 
 // forward record per market for the status payload (null until the table exists)
 async function trackStatus() {
   try {
     const rows = await select("dbv5_scan_signals?select=sym,strategy,dir,bar_t,entry,stop,tp1,status,r_net,exit_t,score&order=id.desc&limit=5000");
-    return { markets: trackRecord(rows ?? []), recent: (rows ?? []).slice(0, 25), promotion: PROMOTION.rule };
+    const calls = await select("dbv5_calls?select=sym,t,lean,votes,source,cautions,px,status,hit,move_pct,move_atr&order=id.desc&limit=5000").catch(() => []);
+    return { markets: trackRecord(rows ?? []), recent: (rows ?? []).slice(0, 25), promotion: PROMOTION.rule, calls: callRecord(calls ?? []), recentCalls: (calls ?? []).slice(0, 40) };
   } catch { return null; }
 }
 

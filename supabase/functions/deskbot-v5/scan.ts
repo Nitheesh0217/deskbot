@@ -10,6 +10,26 @@ export type Frames = { m5: Bar[]; m15: Bar[]; h1: Bar[]; h4: Bar[] };
 export type MarketCtx = { funding: number; oi: number; markPx: number; premium: number } | null;
 const r = (x: number, d = 2) => (Number.isFinite(x) ? +x.toFixed(d) : null);
 
+// CALL-1 (frozen 29 Oct 2026, before any call was scored): one directional call per market per scan, 4-hour horizon.
+//   votes = SuperTrend direction on 15m + 1h + 4h (each +1 / -1) + VWAP side (+1 above +0.5σ, -1 below -0.5σ): range -4..+4.
+//   If a strategy fired, the call is that setup's direction ("rules setup"). Otherwise LONG at votes >= +3, SHORT at <= -3, else NO CALL.
+//   Cautions (shown, never change the call): RSI15 stretched in the call's direction; funding crowded in the call's direction.
+// Every call is scored 4 hours later on the price move (track.ts). It is a rule-based lean, not a probability or a price target.
+export const CALL_HORIZON_H = 4;
+export type Call = { lean: "LONG" | "SHORT" | "NONE"; votes: number; source: "rules setup" | "trend vote" | "none"; cautions: string[]; t: number; px: number; atr: number };
+export function marketCall(s: { T: number; price: number; atr15: number; st15: number; st1h: number; st4h: number; vwapDev: number; rsi15: number }, setups: { dir: string; score: number }[], funding: number | null): Call {
+  const sg = (x: number) => (x > 0 ? 1 : x < 0 ? -1 : 0);
+  const votes = sg(s.st15) + sg(s.st1h) + sg(s.st4h) + (s.vwapDev > 0.5 ? 1 : s.vwapDev < -0.5 ? -1 : 0);
+  const best = [...setups].sort((a, b) => b.score - a.score)[0];
+  const lean: Call["lean"] = best ? (best.dir === "long" ? "LONG" : "SHORT") : votes >= 3 ? "LONG" : votes <= -3 ? "SHORT" : "NONE";
+  const cautions: string[] = [];
+  if (lean === "LONG" && s.rsi15 >= 75) cautions.push(`RSI15 ${s.rsi15.toFixed(0)}: stretched up`);
+  if (lean === "SHORT" && s.rsi15 <= 25) cautions.push(`RSI15 ${s.rsi15.toFixed(0)}: stretched down`);
+  if (funding != null && lean === "LONG" && funding >= 0.0001) cautions.push("longs crowded (funding)");
+  if (funding != null && lean === "SHORT" && funding <= -0.0001) cautions.push("shorts crowded (funding)");
+  return { lean, votes, source: best ? "rules setup" : lean === "NONE" ? "none" : "trend vote", cautions, t: s.T, px: s.price, atr: s.atr15 };
+}
+
 export function scanMarket(sym: string, f: Frames, ctx: MarketCtx, now: number) {
   if (f.m5.length < 300 || f.m15.length < 100 || f.h1.length < 60 || f.h4.length < 60) return { sym, ok: false as const, error: "not enough history" };
   const S = buildSeries(f), i5 = f.m5.length - 1;
@@ -33,6 +53,7 @@ export function scanMarket(sym: string, f: Frames, ctx: MarketCtx, now: number) 
     funding: ctx ? ctx.funding : null, oi: ctx ? r(ctx.oi, 0) : null, notes: why,
     setups: signals.slice(0, 4).map((g) => ({ strategy: g.strategy, dir: g.dir, entry: r(g.entryRef, 5), stop: r(g.stop, 5), stopPct: r((Math.abs(g.entryRef - g.stop) / g.entryRef) * 100, 3), score: r(g.score, 2), why: g.why.slice(0, 4) })),
     blocked: [...reasons.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([reason, n]) => ({ reason: reason.slice(0, 80), n })),
+    call: marketCall(s, signals, ctx ? ctx.funding : null),
   };
 }
 export type ScanRow = ReturnType<typeof scanMarket>;

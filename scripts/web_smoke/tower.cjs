@@ -52,7 +52,7 @@ const srv = http.createServer((q, r) => { const f = path.join(web, q.url === "/"
       board: document.getElementById("expBoard").innerText.slice(0, 200), allocator: document.querySelector('.emp[data-emp="pm"] .say').innerText, steward: document.querySelector('.emp[data-emp="steward"] .say').innerText, nora: document.querySelector('.emp[data-emp="news"] .say').innerText, hScroll: document.documentElement.scrollWidth > innerWidth + 1 }));
     info.packetsSeen = sawPacket; result[name] = info;
     await page.screenshot({ path: path.join(outDir, `tower_${name}.png`), fullPage: true });
-    for (const v of ["chart", "strategies", "desk"]) { await page.click(`.tab[data-v="${v}"]`); await page.waitForTimeout(v === "chart" ? 2800 : 700); await page.screenshot({ path: path.join(outDir, `${v}_${name}.png`), fullPage: true }); }
+    for (const v of ["chart", "strategies", "desk"]) { if (!(await page.isVisible(`.tab[data-v="${v}"]`))) await page.click("#moreBtn"); await page.click(`.tab[data-v="${v}"]`); await page.waitForTimeout(v === "chart" ? 2800 : 700); await page.screenshot({ path: path.join(outDir, `${v}_${name}.png`), fullPage: true }); }
     result[name].setupCard = await page.evaluate(() => (document.getElementById("setupCard") || {}).innerText.slice(0, 120));
     result[name].strategyCards = await page.evaluate(() => document.querySelectorAll("#stratList .strat").length);
   }
