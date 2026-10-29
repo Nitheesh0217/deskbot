@@ -1,0 +1,3 @@
+Source: https://github.com/shakeebshaan/claude-code-quant-skills/tree/6b39f8feb4a77f486eed509e40c02a0c69b7750f/skills/data-scrub
+Stars at selection: 2 (GitHub page, 29 Oct 2026; tiny, so judged on content only). License: MIT (LICENSE copied).
+Installed unmodified: SKILL.md only (prompt text; no scripts, no allowed-tools, no network instructions). Reviewed 29 Oct 2026.
