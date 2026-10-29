@@ -113,6 +113,17 @@ p { margin: 0; }
 .size.part { color: var(--accent); background: var(--accent-soft); }
 .size.off { color: var(--fg-3); background: var(--panel-2); }
 .strat p { font-size: 13.5px; color: var(--fg-2); line-height: 1.5; }
+.opst { margin-left: auto; font: 700 10.5px/1 var(--f-mono); letter-spacing: .07em; padding: 5px 8px; border-radius: 4px; text-transform: uppercase; white-space: nowrap; }
+.opst.running { color: #06240f; background: var(--up); } .opst.waiting { color: var(--up); background: var(--up-soft); } .opst.disabled { color: var(--fg-3); background: var(--panel-2); border: 1px solid var(--line-2); }
+.opst.blocked { color: #2a1f00; background: var(--warn); } .opst.error { color: #fff; background: var(--down); } .opst.nodata { color: var(--fg-2); background: var(--panel-2); border: 1px dashed var(--line-2); }
+.paper { font: 700 9.5px/1 var(--f-mono); letter-spacing: .08em; color: var(--accent); border: 1px solid var(--accent); border-radius: 3px; padding: 3px 5px; }
+.kv { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 6px 12px; font-size: 12.5px; }
+.kv .k { font: 500 10px/1.2 var(--f-mono); color: var(--fg-3); letter-spacing: .06em; text-transform: uppercase; } .kv .v { font: 500 12.5px/1.35 var(--f-mono); color: var(--fg); overflow-wrap: anywhere; }
+.counts { display: flex; flex-wrap: wrap; gap: 5px; } .counts span { font: 500 11.5px/1 var(--f-mono); padding: 5px 7px; border-radius: 4px; background: var(--panel-2); color: var(--fg-2); border: 1px solid var(--line); }
+.counts span b { color: var(--fg); font-weight: 600; }
+.reason { font: 500 12px/1.4 var(--f-mono); padding: 7px 9px; border-radius: 6px; background: var(--panel-2); border-left: 3px solid var(--line-2); overflow-wrap: anywhere; }
+.refnote { font-size: 12px; color: var(--fg-3); line-height: 1.45; } .refnote.warn { color: var(--warn); }
+.strat details summary { cursor: pointer; font: 500 11.5px/1.3 var(--f-mono); color: var(--fg-3); } .strat details li { font: 500 11.5px/1.4 var(--f-mono); color: var(--fg-2); margin: 3px 0; overflow-wrap: anywhere; }
 .stats3 { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 8px; padding-top: 8px; border-top: 1px dashed var(--line); }
 .stats3 .k { font: 500 10px/1.2 var(--f-mono); color: var(--fg-3); letter-spacing: .06em; text-transform: uppercase; }
 .stats3 .v { font: 600 13px/1.4 var(--f-mono); margin-top: 2px; }
@@ -256,8 +267,8 @@ nav.tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 25; backgroun
   <!-- STRATEGIES -->
   <section class="view" id="v-strategies" aria-label="Strategies" hidden>
     <div class="card">
-      <h2>v5.1: four strategies on, three off</h2>
-      <p class="note" style="margin-top:6px">Each one is checked every 5 minutes. v5.1 keeps only what survived the walk-forward research: trend strategies that trade with the daily regime. Size follows evidence; anything losing live after 20 trades is switched off automatically.</p>
+      <h2 id="stratHead">Strategies</h2>
+      <p class="note" id="stratNote" style="margin-top:6px"></p>
     </div>
     <div class="view" id="stratList" style="gap:10px"></div>
   </section>
@@ -386,6 +397,7 @@ nav.tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 25; backgroun
 </nav>
 
 <script src="./zones.js"></script>
+<script src="./coverage_view.js"></script>
 <script src="./setup.js"></script>
 <script src="./evidence.js"></script>
 <script>
@@ -398,13 +410,28 @@ const SNAP = {"state":{"state":{"cb":{"trips":0,"consec":0,"cooldownUntil":0},"c
 const PROJECT = "xevymbzgpcsdhygswxlk";
 
 const STRATS = [
-  { id: "D_BEARTRAP", name: "Daily bear trap", desc: "A red engulfing day inside an uptrend, then a day that dips below its low and closes back above. Buys the reclaim, one 2R target.", ev: "v5.1: only when price is 3%+ above the daily EMA50. Research P5 PF 1.20 (2017–2026)." },
-  { id: "D_THRUST", name: "Daily thrust pullback", desc: "A daily candle more than 2× its average range in an uptrend, then the first 1-hour dip to the EMA20 within 72 hours.", ev: "Your research P1: PF 4.5 but only 27 trades. Past year: 2 trades. Rare." },
-  { id: "HTF_TREND", name: "4H trend breakout", desc: "A 4-hour close beyond the 55-bar high or low with 4H SuperTrend and EMA50 agreeing. Wide ATR stop, runs to 6R.", ev: "v5.1 core. Trades only with the daily regime (3%+ beyond EMA50D). 2023–26: PF 1.28, +0.16R/trade; 2026 flipped from −10R to +7.5R." },
-  { id: "TREND_MTF", name: "MTF SuperTrend (v3 + v4)", desc: "The v3 core: 5-minute SuperTrend flip with 15m and 1h aligned, plus v4's 4H bias, chop and EMA gates.", ev: "v5.1: regime-gated, 1.2% minimum stop so fees stop eating it. 2023–26: +0.09R/trade at half size." },
-  { id: "SESSION_BO", name: "Session breakout", desc: "London open breaking the Asian range, or New York open breaking London's, on a 15m close with real volume.", ev: "Off in v5.1. Lost after costs in all four years 2023–26 (−0.19R/trade even with the regime gate)." },
-  { id: "VWAP_REVERT", name: "VWAP snap-back", desc: "Only in ranging markets: price stretched 2σ from the daily VWAP with RSI at an extreme and a reversal candle.", ev: "Off in v5.1. Too few signals and negative after costs." },
-  { id: "SWEEP_REV", name: "Liquidity sweep reversal", desc: "15m wick through a recent high or low that closes back inside. The pattern your old signal indicator traded.", ev: "Off. 6,090 setups 2023–26: +0.21R before costs, −0.33R after. The stop is too tight for the fees." },
+  { id: "D_BEARTRAP", name: "Daily bear trap", desc: "A red engulfing day inside an uptrend, then a day that dips below its low and closes back above. Buys the reclaim, one 2R target. Long only.",
+    ref: { when: "22 Oct 2026, v5.1 research (docs/ML_REPORT.md)", text: "Only when price is 3%+ above the daily EMA50. Research P5: PF 1.20 on daily data 2017–2026.", noteSaysOff: false }, rate: { BTC: 0.55, GOLD: 0.25 } },
+  { id: "D_THRUST", name: "Daily thrust pullback", desc: "A daily candle more than 2× its average range in an uptrend, then the first 1-hour dip to the EMA20 within 72 hours. Long only.",
+    ref: { when: "your research P1 (undated in the repo)", text: "PF 4.5 but only 27 trades; rare.", noteSaysOff: false }, rate: { BTC: 0.30, GOLD: 0.25 } },
+  { id: "HTF_TREND", name: "4H trend breakout", desc: "A 4-hour close beyond the 55-bar high or low with 4H SuperTrend and EMA50 agreeing. Wide ATR stop, runs to 6R.",
+    ref: { when: "22 Oct 2026, v5.1 research", text: "Trades only with the daily regime (3%+ beyond EMA50D). 2023–26: PF 1.28, +0.16R per trade.", noteSaysOff: false }, rate: { BTC: 7.0, GOLD: 6.9 } },
+  { id: "TREND_MTF", name: "MTF SuperTrend (v3 + v4)", desc: "The v3 core: 5-minute SuperTrend flip with 15m and 1h aligned, plus v4's 4H bias, chop and EMA gates. Not before 07:00 UTC.",
+    ref: { when: "22 Oct 2026, v5.1 research", text: "Regime-gated, minimum stop floor. 2023–26: +0.09R per trade, measured at half size (the live scale today may differ).", noteSaysOff: false }, rate: { BTC: 4.3, GOLD: 3.5 } },
+  { id: "SWEEP_REV", name: "Liquidity sweep reversal", desc: "15m wick through a recent high or low that closes back inside. The pattern your old signal indicator traded.",
+    ref: { when: "22 Oct 2026, v5.1 research", text: "Switched off in v5.1: 6,090 setups 2023–26 gave +0.21R before costs and −0.33R after. The stop is tight for the fees.", noteSaysOff: true }, rate: { BTC: 134.6, GOLD: 130.1 } },
+  { id: "VWAP_REVERT", name: "VWAP snap-back", desc: "Only in ranging markets: price stretched 2σ from the daily VWAP with RSI at an extreme and a reversal candle.",
+    ref: { when: "22 Oct 2026, v5.1 research", text: "Switched off in v5.1: too few signals and negative after costs. A 3-year scan on 29 Oct 2026 found zero setups on both books (its conditions are close to mutually exclusive).", noteSaysOff: true }, rate: { BTC: 0, GOLD: 0 } },
+  { id: "SESSION_BO", name: "Session breakout", desc: "London open breaking the Asian range, or New York open breaking London's, on a 15m close with real volume.",
+    ref: { when: "22 Oct 2026, v5.1 research", text: "Switched off in v5.1: lost after costs in all four years 2023–26 (−0.19R per trade even with the regime gate).", noteSaysOff: true }, rate: { BTC: 18.6, GOLD: 11.5 } },
+  { id: "HTF_SWEEP", name: "4H failed breakout", desc: "A bar trades through the 4H 55-bar high or low and closes back inside with a rejection wick. Opt-in.",
+    ref: { when: "no validation recorded", text: "Paper experiment; no research result is stored for it.", noteSaysOff: true }, rate: { BTC: 6.3, GOLD: 6.6 }, optInRate: true },
+  { id: "EMA_CROSS", name: "EMA20/50 cross", desc: "EMA20 crossing EMA50 on 15m closes (your chart idea). Opt-in.",
+    ref: { when: "23 Oct 2026 (CHANGELOG)", text: "Switched on for PAXG at 25% size as a paper experiment; near break-even on BTC research, untested on gold.", noteSaysOff: false }, rate: { BTC: 56.6, GOLD: 62.9 }, optInRate: true },
+  { id: "SSR", name: "Session sweep reversal (SSR)", desc: "STRATEGY.md v1.4: 4H bias, sweep of the Asian range in London 03–05 or NY 08–11 ET, 15m reclaim plus structure shift, 3R. Opt-in.",
+    ref: { when: "no live validation recorded", text: "Ported from your strategy document; opt-in.", noteSaysOff: true }, rate: { BTC: 0.7, GOLD: 0.2 }, optInRate: true },
+  { id: "EMA_PB", name: "XAU pullback (EMA_PB)", desc: "Your saved gold pullback strategy: M15 EMA50/200 trend, 5m pullback to EMA20, 08:00–11:30 ET weekdays. Opt-in.",
+    ref: { when: "no live validation recorded", text: "Ported from 'XAU Pullback v1'; opt-in.", noteSaysOff: true }, rate: { BTC: 53.4, GOLD: 44.1 }, optInRate: true },
 ];
 
 const $ = (id) => document.getElementById(id);
@@ -480,8 +507,8 @@ function renderDesk() {
       <p class="note" style="margin-top:10px">${(p.why || []).map(esc).join(" · ")}</p>
       <div class="note" style="margin-top:10px"><b>Trade manager</b>${(p.plan && p.plan.length) ? p.plan.slice().reverse().map((x) => `<div>${new Date(x.t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · ${esc(x.msg)}</div>`).join("") : `<div class="muted">Watching 1m/5m/1H structure — no adjustment needed yet.</div>`}</div>`;
   } else {
-    const on = STRATS.filter((s) => (st.enabled || {})[s.id] !== false && ((st.cfg && st.cfg.RISK_SCALE) || {})[s.id] !== 0).length;
-    pc.innerHTML = `<div class="flat"><span class="radar" aria-hidden="true"></span><div><h2>Flat, scanning</h2><p class="note">${on} of 7 strategies active. Checks run every 5 minutes in the cloud${st.cb && st.cb.cooldownUntil > Date.now() ? ` · <span class="down">circuit breaker until ${new Date(st.cb.cooldownUntil).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>` : ""}.</p></div></div>`;
+    const on = STRATS.filter((s) => stratView(s.id, st).state !== "DISABLED").length;
+    pc.innerHTML = `<div class="flat"><span class="radar" aria-hidden="true"></span><div><h2>Flat, scanning</h2><p class="note">${on} of ${STRATS.length} strategies on. Checks run every 5 minutes in the cloud${st.cb && st.cb.cooldownUntil > Date.now() ? ` · <span class="down">circuit breaker until ${new Date(st.cb.cooldownUntil).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>` : ""}.</p></div></div>`;
   }
 
   // market
@@ -524,17 +551,52 @@ function renderAgents(lr) {
     `<div class="note" style="margin-top:10px"><b>Recent agent activity</b>${(DATA.agents || []).filter((a) => a.agent !== "chart").slice(0, 8).map((a) => `<div>${esc(ago2(a.ts))} · <b>${esc(a.agent)}</b> · ${esc(a.input_summary || "")}${a.output && a.output.verdict ? ` — ${esc(a.output.verdict)}: ${esc(a.output.reason || "")}` : ""}${a.error ? ` <span class="down">${esc(a.error)}</span>` : ""}</div>`).join("") || `<div class="muted">No signals or adjustments yet. Agents log when they have something to say.</div>`}</div>`;
 }
 
+const OPT_IN = ["HTF_SWEEP", "EMA_CROSS", "SSR", "EMA_PB"], DEFAULT_SCALE = { D_BEARTRAP: 1, D_THRUST: 1, HTF_TREND: 1, TREND_MTF: 1, SWEEP_REV: 1, VWAP_REVERT: 1, SESSION_BO: 1, HTF_SWEEP: 0, EMA_CROSS: 0, SSR: 0, EMA_PB: 0 };
+function stratView(id, st) {
+  // same resolution as the engine: an override RISK_SCALE replaces the default object, so a missing key means "undefined" (opt-in strategies stay off)
+  const cfg = st.cfg || {}, own = cfg.RISK_SCALE && Object.prototype.hasOwnProperty.call(cfg.RISK_SCALE, id), rs = own ? cfg.RISK_SCALE[id] : cfg.RISK_SCALE ? undefined : DEFAULT_SCALE[id];
+  return DeskCoverage.viewStrategy({ id, cfg, riskScale: rs, optIn: OPT_IN.includes(id), enabledFlag: (st.enabled || {})[id], cov: (st.cov || {})[id], stat: (st.stats && st.stats.by || {})[id], probationMin: 10, now: Date.now() });
+}
+const OPST = { RUNNING: ["running", "Running"], WAITING_FOR_BAR: ["waiting", "Waiting for first bar"], DISABLED: ["disabled", "Disabled"], DATA_BLOCKED: ["blocked", "Data blocked"], ERROR: ["error", "Error"], NO_EVALUATION_YET: ["nodata", "No evaluation data yet"] };
 function renderStrategies() {
-  const st = (DATA.state || {}).state || {}, rs = (st.cfg && st.cfg.RISK_SCALE) || {}, by = (st.stats && st.stats.by) || {}, en = st.enabled || {};
-  $("stratList").innerHTML = STRATS.map((s) => {
-    const scale = en[s.id] === false ? 0 : rs[s.id] ?? 1;
-    const size = scale === 0 ? ["off", "Off"] : scale >= 1 ? ["full", "Full size"] : ["part", Math.round(scale * 100) + "% size"];
-    const x = by[s.id] || { n: 0, sumR: 0, net: 0, wins: 0 };
-    return `<article class="strat"><div class="strat-h"><h3>${esc(s.name)}</h3><span class="size ${size[0]}">${size[1]}</span></div>
-      <p>${esc(s.desc)}</p><div class="evidence">${esc(s.ev)}</div>
-      <div class="stats3"><div><div class="k">Live trades</div><div class="v">${x.n}</div></div>
-      <div><div class="k">Avg R</div><div class="v ${x.n ? (x.sumR >= 0 ? "up" : "down") : ""}">${x.n ? sgnR(x.sumR / x.n) : "—"}</div></div>
-      <div><div class="k">Net P/L</div><div class="v ${x.net > 0 ? "up" : x.net < 0 ? "down" : ""}">${x.n ? (x.net >= 0 ? "+" : "−") + fmt$(Math.abs(x.net)) : "—"}</div></div></div></article>`;
+  const S = DATA.state || {}, st = S.state || {}, lr = S.last_run || {}, hasCov = !!(st.cov && Object.keys(st.cov).length), by = (st.stats && st.stats.by) || {};
+  const trades = (DATA.trades || []).slice().sort((a, b) => new Date(a.close_t) - new Date(b.close_t));
+  const views = STRATS.map((s) => stratView(s.id, st)), on = views.filter((v) => v.state !== "DISABLED").length;
+  $("stratHead").textContent = `${on} of ${STRATS.length} strategies are on for ${BOOK === "GOLD" ? "gold (PAXG)" : "BTC"}`;
+  const meta = st.covMeta;
+  $("stratNote").innerHTML = (hasCov ? `Evaluation counters since <b>${esc(new Date(Math.min(...Object.values(st.cov).map((c) => c.since))).toISOString().slice(0, 16).replace("T", " "))} UTC</b>${meta ? ` · bars evaluated ${meta.evalBars} · boundary bars missed ${meta.missedBars} · bars missing from the feed ${Object.values(meta.missingDue || {}).reduce((a, b) => a + b, 0)}` : ""}.`
+    : `<b>No evaluation counters in this data yet.</b> They start when the coverage update is deployed; the states below come from configuration only and do not prove a strategy ran.`) +
+    ` Every number here is <b>PAPER</b> (simulated fills at live prices), not funded trading. <b>Operational state</b> says whether the strategy is being evaluated; <b>sizing</b> is separate. Zero closed trades does not mean it was not evaluated.`;
+  $("stratList").innerHTML = STRATS.map((s, k) => {
+    const v = views[k], c = v.cov, x = by[s.id] || { n: 0, sumR: 0, net: 0 }, mine = trades.filter((t) => t.strategy === s.id);
+    const [cls, label] = OPST[v.state], openNow = st.pos && st.pos.strategy === s.id;
+    // costs and drawdown from the closed trades loaded on this page (the last 100 of the book), labelled as such
+    let cum = 0, pk = 0, dd = 0; mine.forEach((t) => { cum += +t.r; pk = Math.max(pk, cum); dd = Math.max(dd, pk - cum); });
+    const fees = mine.reduce((a, t) => a + (+t.fees || 0), 0), fund = mine.reduce((a, t) => a + (+t.funding || 0), 0);
+    const cadTxt = { "5m": "every 5m bar", "15m": "15m close", "1h": "1H close", "4h": "4H close", "1d": "daily close (00:00 UTC)" }[v.cadence];
+    const sizeTxt = v.state === "DISABLED" ? "none (disabled)" : `${(v.riskScale ?? 1)}× scale${v.probation ? " · probation: half size" : ""}${(v.riskScale ?? 1) >= 1 && !v.probation ? " (full)" : ""}`;
+    const hhmm = (T) => new Date(T + 1).toISOString().slice(11, 16) + " UTC";
+    const evalTxt = c && c.lastDueT != null ? `${ago(c.lastDueT + 1)} · data to ${hhmm(c.lastDueT)}` : c && c.lastEvalT != null ? `no due bar yet (last bar ${hhmm(c.lastEvalT)})` : "no data";
+    const nextTxt = v.nextDueT != null ? `next due bar closes ${hhmm(v.nextDueT)}` : "";
+    const reasonTop = c ? Object.entries(c.reasons || {}).sort((a, b) => b[1] - a[1]).slice(0, 5) : [];
+    const rate = s.rate && s.rate[BOOK === "GOLD" ? "GOLD" : "BTC"];
+    const mismatch = s.ref.noteSaysOff && v.state !== "DISABLED" ? `<div class="refnote warn">The note above says this strategy was switched off. The current effective configuration has it <b>on</b> (${esc(sizeTxt)}), so the research result described may not describe what is running now.</div>` : (!s.ref.noteSaysOff && v.state === "DISABLED" ? `<div class="refnote warn">Disabled now (${esc(v.offReason || "")}), although the research note describes it as active.</div>` : "");
+    const ver = `Engine v${esc((RAW && RAW.version) || "?")} · config ${esc(String(((S.integrity || {}).hash) || "unknown").slice(0, 8))} · fingerprint ${((S.integrity || {}).approved) ? "approved for this paper experiment" : "not approved"} · financial validation: none`;
+    return `<article class="strat" data-strategy="${s.id}"><div class="strat-h"><h3>${esc(s.name)}</h3><span class="paper">PAPER</span><span class="opst ${cls}">${label}</span></div>
+      <p>${esc(s.desc)}</p>
+      <div class="kv"><div><div class="k">Fires on</div><div class="v">${esc(cadTxt)}</div></div><div><div class="k">Sizing (separate)</div><div class="v">${esc(sizeTxt)}</div></div>
+        <div><div class="k">Last due evaluation</div><div class="v">${esc(evalTxt)}${nextTxt && v.state !== "DISABLED" ? `<br><span class="faint">${esc(nextTxt)}</span>` : ""}</div></div><div><div class="k">Position now</div><div class="v">${openNow ? `<b class="${st.pos.dir === "long" ? "up" : "down"}">${esc(st.pos.dir)} open</b>` : "none"}</div></div></div>
+      ${c ? `<div class="counts" aria-label="Evaluation counters"><span>due <b>${c.due}</b></span><span>completed <b>${c.completed}</b></span>${c.windowClosed ? `<span>outside its session window <b>${c.windowClosed}</b></span>` : ""}<span>valid setups <b>${c.setups}</b></span><span>rejected by gates <b>${c.gateRejected}</b></span><span>blocked by portfolio <b>${c.portfolioBlocked}</b></span><span>displaced <b>${c.notSelected}</b></span><span>entered <b>${c.entered}</b></span>${c.skippedData ? `<span>data-blocked <b>${c.skippedData}</b></span>` : ""}${c.failed ? `<span>errors <b>${c.failed}</b></span>` : ""}</div>
+        <div class="reason" title="result of the latest due evaluation"><b>${esc(c.lastDueCode || c.lastCode || "")}</b> · ${esc(c.lastDueReason || c.lastReason || "")}</div>
+        ${reasonTop.length ? `<details><summary>Most common reasons since counters began</summary><ul>${reasonTop.map(([k2, n]) => `<li>${n}× ${esc(k2)}</li>`).join("")}</ul></details>` : ""}`
+        : v.state === "DISABLED" ? `<div class="reason"><b>DISABLED</b> · ${esc(v.offReason || "")}</div>` : `<div class="reason">No evaluation counters yet.</div>`}
+      <div class="stats3"><div><div class="k">Closed trades</div><div class="v">${x.n}</div></div>
+      <div><div class="k">Net R · $ (paper)</div><div class="v ${x.n ? (x.sumR >= 0 ? "up" : "down") : ""}">${x.n ? sgnR(x.sumR) + " · " + (x.net >= 0 ? "+" : "−") + fmt$(Math.abs(x.net)) : "—"}</div></div>
+      <div><div class="k">Costs · max DD</div><div class="v">${mine.length ? fmt$(fees + fund) + " · −" + dd.toFixed(1) + "R" : "—"}</div></div></div>
+      ${mine.length ? `<div class="refnote">Costs and drawdown cover the ${mine.length} closed trade(s) loaded here (${esc(when(mine[0].close_t))} to ${esc(when(mine[mine.length - 1].close_t))}).</div>` : ""}
+      ${rate != null ? `<div class="refnote">Historical frequency: about ${rate} valid setups per 30 days (3-year scan, 29 Oct 2026, engine 5.8.0, Binance spot candles${s.optInRate ? ", opt-in strategies scanned with all gates open" : ", this book's live gates"}); ${rate === 0 ? "none in 3 years" : `at that average rate a week with none happens about ${Math.round(100 * Math.exp(-rate * 7 / 30))}% of the time (setups cluster, so this is rough)`}.</div>` : ""}
+      <div class="refnote"><b>Research reference</b> (${esc(s.ref.when)}): ${esc(s.ref.text)}</div>${mismatch}
+      <div class="refnote">${ver}</div></article>`;
   }).join("");
 }
 

@@ -146,6 +146,9 @@ test("operational states are separate from sizing and name the cause", () => {
   put("D_THRUST", "WARMUP", "x warming up"); assert.equal(operationalState("D_THRUST", st, T).state, "DATA_BLOCKED");
   put("D_THRUST", "ERROR", "Strategy error: x"); assert.equal(operationalState("D_THRUST", st, T).state, "ERROR");
   put("D_THRUST", "REJECT", "No recent daily thrust"); assert.equal(operationalState("D_THRUST", st, T).state, "RUNNING");
+  put("D_THRUST", "REJECT", "Waits for 1H close"); assert.equal(operationalState("D_THRUST", st, T).state, "RUNNING", "an off-cadence bar after a healthy due evaluation does not flip the state");
+  assert.equal(operationalState("D_THRUST", st, T + 3_600_000 * 1.5 + 700_000).state, "DATA_BLOCKED", "bars keep arriving but no due evaluation for over 1.5 cadences: the boundary was missed");
+  assert.ok(operationalState("D_THRUST", st, T).nextDueT! > T && (operationalState("D_THRUST", st, T).nextDueT! + 1) % 3_600_000 === 0, "next due is the next 1H close");
   st.stats.by.D_THRUST = { ...st.stats.by.D_THRUST, n: 12, sumR: -3 }; const s = operationalState("D_THRUST", st, T); assert.equal(s.probation, true); assert.equal(s.sizing, 0.5, "probation halves size; 'full size' would be wrong");
   assert.deepEqual(STRATEGIES.map((id) => cadenceOf(id)).sort(), ["15m", "15m", "15m", "15m", "1d", "1h", "4h", "4h", "5m", "5m", "15m"].sort());
   assert.equal(CADENCE_MS["4h"], 14_400_000); void OPT_IN; void CFG;
@@ -161,4 +164,15 @@ test("a due boundary whose bar is missing from the feed is INSUFFICIENT_DATA, no
   assert.equal(st.covMeta!.missingDue["15m"], 1);
   const ok = recordCoverage(st, { T: T + 300_000, now: 0, trace: [], disp: [], boundary: { due: { "15m": true, "1h": false, "4h": false, "1d": false }, have: { "15m": true, "1h": false, "4h": false, "1d": false } } }); void ok;
   assert.equal(st.covMeta!.missingDue["15m"], 1, "present bars are not counted as missing");
+});
+
+test("a session-window strategy outside its window stays RUNNING: a due bar spent outside the window is a completed evaluation", () => {
+  applyCfg(); const st = newState(), T = 900_000 * 400 - 1;
+  const B = (m15: boolean) => ({ due: { "15m": m15, "1h": false, "4h": false, "1d": false }, have: { "15m": m15, "1h": false, "4h": false, "1d": false } });
+  const tr: StrategyTrace[] = [{ id: "SESSION_BO", kind: "REJECT", reason: "Outside London/NY open window" }];
+  recordCoverage(st, { T, now: T + 60_000, trace: tr, disp: [], boundary: B(true) });
+  recordCoverage(st, { T: T + 300_000, now: T + 360_000, trace: [{ id: "SESSION_BO", kind: "REJECT", reason: "Waits for 15m close" }], disp: [], boundary: B(false) });
+  const c = st.cov!.SESSION_BO; assert.deepEqual([c.due, c.completed, c.windowClosed, c.notDue, c.skippedData], [1, 1, 1, 1, 0]);
+  assert.equal(operationalState("SESSION_BO", st, T + 400_000).state, "RUNNING");
+  assert.equal(operationalState("SESSION_BO", st, T + 3 * 3_600_000).state, "DATA_BLOCKED", "no due evaluation for 3 hours while bars keep arriving would mean missed boundaries");
 });
