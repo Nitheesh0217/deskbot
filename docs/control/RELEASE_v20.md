@@ -18,3 +18,10 @@ Strategies, configs, sizing, risk limits, balances, positions and trade history.
 
 ## Verification
 Local: typecheck, 203 unit tests, browser smokes (scanner, tower, markets) on desktop and mobile with mocked network. Live checks after deploy are recorded below.
+
+## Live record (29 Oct 2026, UTC)
+- 17:46:15 edge function version 20 (pinned 4b690d5). 17:46:28 first manual scan: HTTP 200, 10 markets, 2.0 s; BTC and ETH options/futures parsed (14 futures each, no errors).
+- Found in that scan and fixed: put−call IV read 0 (Deribit quotes one IV per strike; now OTM puts 88–96% minus OTM calls 104–112%, first live reading +11.4 BTC / +11.6 ETH vol points) and block reasons dominated by switched-off strategies and timing (now filtered). PRs #14, #15.
+- 17:48 version 21 (pinned 411f504); scan HTTP 200. pg_cron `deskbot-v5-scan` (job 4, `7-59/15`) and `deskbot-v5-prune-scans` (job 5) scheduled.
+- Books: the 17:46 v19 run filled BTC SWEEP_REV TP2 (stop to entry), normal trade management. Positions and controls otherwise unchanged.
+- Rollback: redeploy the entry pinned to f95d859 (v19) and `select cron.unschedule('deskbot-v5-scan')`.
