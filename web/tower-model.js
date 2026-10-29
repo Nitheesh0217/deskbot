@@ -111,7 +111,9 @@
     const z = c.zones;
     add(member('zones', z ? 'working' : 'idle', z ? (typeof z.summary === 'string' ? z.summary : `${Object.keys(z).length} zone group(s) reported`) : 'zones appear after the next cloud check', []));
     const news = lr.news;
-    add(member('news', news ? (news.risk === 'high' ? 'alert' : 'working') : 'idle', news ? `news risk ${String(news.risk).toUpperCase()} (${String(news.by || '').startsWith('ai:') ? 'AI' : 'keyword rules'}, ${news.mode || NR} mode)` : NR, news && news.reason ? [String(news.reason)] : []));
+    const cal = input.calendarNext && input.calendarNext.label ? input.calendarNext : null;
+    add(member('news', news ? (news.risk === 'high' ? 'alert' : 'working') : cal ? 'working' : 'idle', news ? `news risk ${String(news.risk).toUpperCase()} (${String(news.by || '').startsWith('ai:') ? 'AI' : 'keyword rules'}, ${news.mode || NR} mode)${cal ? ` · next high-impact: ${cal.label}` : ''}` : cal ? `next high-impact: ${cal.label}` : NR,
+      [...(news && news.reason ? [String(news.reason)] : []), ...(cal ? [`Calendar (Forex Factory, display only): ${cal.label}${cal.forecast ? ' · forecast ' + cal.forecast : ''}${cal.previous ? ' · previous ' + cal.previous : ''}`, 'The engine\'s news pause is a separate rule-based layer; the calendar does not gate trades'] : [])]));
 
     // 3 research (offline)
     add(member('researcher', 'off', 'FILTER-1 pre-registered; challengers A_COSTR50 and B_BE_TP1 rejected 28 Oct', ['Works offline on frozen data; promotes nothing without review', 'docs/research/FILTER_EXPERIMENT.md', 'docs/research (profit-improvement brief)']));

@@ -93,3 +93,9 @@ TradingView injection + Vercel `deskbot-v3` + Google Sheet / Supabase `bot_state
 ## No missed trades + live courier hand-offs
 - Backend: `catchup.ts` re-checks boundary bars skipped by late runs (last hour, flat book, same evaluate/snapshot, strict validity: stop untouched, TP1 not reached, ±0.25R drift, 0.75–1.25× stop distance). Otherwise a MISSED event. Decision records carry `catchUpFromT`; replay reproduces catch-up entries. `CATCHUP=on|shadow|off`.
 - Website: person-to-person couriers driven by Motion (the engine behind Framer Motion): typing dots, the sender turns, an envelope card with the sender's face flies along a curved trail, the receiver springs and shows "from …" with the real value; live price ticks hand off from the feed to the evidence steward between runs; the dispatch log streams every hand-off.
+
+## Markets terminal (OpenTerminal integration)
+- New Markets tab: clocks + sessions + per-feed latency, crypto board (dominance, sparklines, flash), macro tiles (FRED), economic calendar (Forex Factory) with next high-impact countdown, de-duplicated news. Served by `web/api/feeds.js`, a fixed-allowlist Vercel function with CDN caching.
+- Chart: VOL, SMA20/50/200, VWAP, Bollinger, RSI and MACD toggles with separate oscillator panes and an OHLC + indicator hover legend (`web/indicators.js`, ported from OpenTerminal, MIT).
+- ⌘K / Ctrl+K command palette and Alt+1…9 view shortcuts. Tower catalyst analyst shows the next high-impact event (display only).
+- Review and attribution: docs/research/OPENTERMINAL_REVIEW.md, THIRD_PARTY_NOTICES.md.

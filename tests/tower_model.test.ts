@@ -63,3 +63,8 @@ test("allocator says WAIT when there is no candidate; the experiment officer rep
   const live = build({ state: { state, last_run: lastRun }, agents: [], trades: [], curve: [], strategies: [], experiment: { started: "x", arms: [{ arm: "rules", decided: 3, result: "INSUFFICIENT_DATA" }] } }, now);
   assert.match(live.staff.experiment.line, /rules: 3 decided · INSUFFICIENT_DATA/);
 });
+
+test("catalyst analyst shows the next high-impact calendar event as display-only context", () => {
+  const m = build({ state: { state, last_run: lastRun }, agents: [], trades: [], curve: [], strategies: [], calendarNext: { label: "USD CPI m/m in 2h 5m", forecast: "0.3%" } }, now);
+  assert.match(m.staff.news.line, /next high-impact: USD CPI m\/m in 2h 5m/); assert.ok(m.staff.news.detail.some((d: string) => /does not gate trades/.test(d)));
+});
