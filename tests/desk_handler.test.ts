@@ -27,6 +27,7 @@ async function run(i5: number, o: { env?: Record<string, string>; llm?: "ok" | "
       const path = url.split("/rest/v1/")[1];
       if (init.method === "GET") return path.startsWith("dbv5_state?") ? json([{ state: structuredClone(state), updated_at: new Date(nowMs).toISOString() }]) : json([]);
       if (path === "rpc/dbv5_lease") return json(true);
+      if (path === "rpc/dbv5_record_decision") { order.push("decision"); return json(true); }
       if (path.startsWith("dbv5_state?") && body.state) { stateWrites++; order.push("state"); state = structuredClone(body.state); }
       if (path === "dbv5_agent_log") { order.push("agent_log"); agentRows.push(...body); }
       return json(null);
