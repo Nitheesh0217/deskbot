@@ -46,3 +46,7 @@ test("crypto: CoinGecko rows with sparkline; Binance fallback when CoinGecko fai
   assert.equal(fb.json.data.source, "binance"); assert.equal(fb.json.data.rows[0].symbol, "BTC"); assert.equal(fb.json.data.rows[0].price, 81000.5);
   const down = await call({ k: "calendar" }, () => new Response("x", { status: 503 })); assert.equal(down.status, 502); assert.match(down.headers["cache-control"], /s-maxage=30/);
 });
+test("deployment shape: plain Node (as Vercel loads it, under the repo's type:module) gets a default-export handler", async () => {
+  const m = await import("../web/api/feeds.js?plain=" + Date.now());
+  assert.equal(typeof (m as any).default, "function", "web/api/package.json must keep this file CommonJS");
+});
