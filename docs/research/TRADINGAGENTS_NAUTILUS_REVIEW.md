@@ -25,5 +25,5 @@ Every stage: strict JSON schema, rejects text that states a probability, a price
 
 ## Scanner, futures and options
 - `scan.ts` runs the bot's own deterministic strategies on all ten Hyperliquid perps in `data.ts SYMBOLS` every 15 minutes, with a fresh state and the live book configs. The rules were tuned on BTC and gold, so setups on other markets are labelled **untested market**. Only the BTC and gold paper books trade.
-- Deribit public data (no key): DVOL, put/call open interest, max pain of the next expiry, near-the-money put-minus-call IV, futures basis annualised by days to expiry. Context only; nothing feeds the executor.
+- Deribit public data (no key): DVOL, put/call open interest, max pain of the next expiry, OTM put-minus-call IV skew, futures basis annualised by days to expiry. Context only; nothing feeds the executor.
 - Nothing in the scanner, the committee or the options panel is a prediction or a probability. The rule score is the engine's uncalibrated heuristic.

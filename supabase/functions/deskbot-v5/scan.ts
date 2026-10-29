@@ -2,8 +2,8 @@
 // scanMarket runs the bot's own deterministic strategies (engine.evaluate) on one market with a FRESH state, so it shows what the
 // rules would say there right now. The strategies were tuned on BTC (and gold); on other markets they are untested, which is stated
 // in every scan. Nothing here is a prediction or a probability: a "setup" is a rule firing, a "context" is a measured fact.
-// Derivatives: Deribit public API (no key). Options: DVOL, put/call open interest, max pain of the nearest expiry, near-the-money
-// put-minus-call IV. Futures: annualised basis per expiry. Parsers are pure so they are unit-tested on fixtures.
+// Derivatives: Deribit public API (no key). Options: DVOL, put/call open interest, max pain of the nearest expiry, OTM put-minus-call
+// IV skew. Futures: annualised basis per expiry. Parsers are pure so they are unit-tested on fixtures.
 import { buildSeries, snapshot, evaluate, initState, ensureState, type Bar } from "./engine.ts";
 
 export type Frames = { m5: Bar[]; m15: Bar[]; h1: Bar[]; h4: Bar[] };
@@ -25,7 +25,8 @@ export function scanMarket(sym: string, f: Frames, ctx: MarketCtx, now: number) 
   if (Number.isFinite(s.rsi15) && s.rsi15 <= 25) why.push(`RSI15 ${s.rsi15.toFixed(0)} (stretched down)`);
   if (Math.abs(s.vwapDev) >= 2) why.push(`${s.vwapDev.toFixed(1)}σ from VWAP`);
   if (ctx && Math.abs(ctx.funding) >= 0.0001) why.push(`funding ${(ctx.funding * 100).toFixed(4)}%/h (${ctx.funding > 0 ? "longs" : "shorts"} paying)`);
-  const reasons = new Map<string, number>(); for (const x of rejects) reasons.set(x.reason, (reasons.get(x.reason) ?? 0) + 1);
+  // switched-off strategies are configuration, not market information, so they are left out of the "blocked by" summary
+  const reasons = new Map<string, number>(); for (const x of rejects) if (!/switched off/i.test(x.reason)) reasons.set(x.reason, (reasons.get(x.reason) ?? 0) + 1);
   return {
     sym, ok: true as const, barT: s.T, price: r(s.price, s.price > 100 ? 2 : 5), chg24h: r(((last - d1) / d1) * 100, 2), regime: s.regime, trend: align,
     rsi15: r(s.rsi15, 1), rsi1h: r(s.rsi1h, 1), chop15: r(s.chop15, 1), atr15Pct: r((s.atr15 / s.price) * 100, 3), vwapDev: r(s.vwapDev, 2),
@@ -60,15 +61,17 @@ export function parseOptions(rows: Summ[], now: number) {
   const strikes = [...new Set(near.map((o) => o.k))].sort((a, b) => a - b);
   let maxPain: number | null = null, best = Infinity;
   for (const s of strikes) { const pay = near.reduce((a, o) => a + o.oi * (o.cp === "C" ? Math.max(0, s - o.k) : Math.max(0, o.k - s)), 0); if (pay < best) { best = pay; maxPain = s; } }
-  // nearest expiry at least 2 days out for the IV read (the front contract's IV is noisy near expiry)
-  const ivT = Math.min(...opts.filter((o) => (o.t as number) - now > 2 * 86400_000).map((o) => o.t as number)), ivSet = opts.filter((o) => o.t === ivT && Number.isFinite(o.iv) && Number.isFinite(o.u) && Math.abs(o.k / o.u - 1) <= 0.05);
-  const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : NaN);
-  const pIV = avg(ivSet.filter((o) => o.cp === "P").map((o) => o.iv)), cIV = avg(ivSet.filter((o) => o.cp === "C").map((o) => o.iv));
+  // nearest expiry at least 2 days out for the IV read (the front contract's IV is noisy near expiry). Deribit quotes one IV per strike,
+  // so skew is read across strikes: out-of-the-money puts (strike 88–96% of spot) minus out-of-the-money calls (104–112%), in vol points.
+  const ivT = Math.min(...opts.filter((o) => (o.t as number) - now > 2 * 86400_000).map((o) => o.t as number)), ivSet = opts.filter((o) => o.t === ivT && Number.isFinite(o.iv) && Number.isFinite(o.u));
+  const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : NaN), m = (o: { k: number; u: number }) => o.k / o.u;
+  const atm = avg(ivSet.filter((o) => Math.abs(m(o) - 1) <= 0.02).map((o) => o.iv));
+  const pIV = avg(ivSet.filter((o) => o.cp === "P" && m(o) >= 0.88 && m(o) <= 0.96).map((o) => o.iv)), cIV = avg(ivSet.filter((o) => o.cp === "C" && m(o) >= 1.04 && m(o) <= 1.12).map((o) => o.iv));
   const byStrike = new Map<number, number>(); for (const o of opts) byStrike.set(o.k, (byStrike.get(o.k) ?? 0) + o.oi);
   return {
     putCallOI: callOI > 0 ? r(putOI / callOI, 3) : null, callOI: r(callOI, 0), putOI: r(putOI, 0), contracts: opts.length,
     nearestExpiry: new Date(nearT).toISOString(), maxPainNearest: maxPain, underlying: r(u, 2),
-    atmIV: r(avg(ivSet.map((o) => o.iv)), 1), putMinusCallIV: Number.isFinite(pIV - cIV) ? r(pIV - cIV, 2) : null, ivExpiry: Number.isFinite(ivT) ? new Date(ivT).toISOString() : null,
+    atmIV: r(atm, 1), putMinusCallIV: Number.isFinite(pIV - cIV) ? r(pIV - cIV, 2) : null, ivExpiry: Number.isFinite(ivT) ? new Date(ivT).toISOString() : null,
     topOIStrikes: [...byStrike.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([k, oi]) => ({ strike: k, oi: r(oi, 0) })),
   };
 }
