@@ -50,6 +50,7 @@
       <button class="btn" id="towerMotion" type="button" aria-pressed="false">Motion on</button>
     </div>
     <p class="tower-note">Every employee is a software agent: fixed rules in the cloud runner, plus optional free-AI roles that are advisory only and cannot place, size or block a trade. Names are labels for roles. What each one says is copied from what the runner reported; “not reported” means nothing was returned. Paper account, no funded orders. Nothing here predicts price.</p>
+    <div class="card" style="padding:12px 14px"><div class="section-top"><div><div class="eyebrow">DECISION WORKFLOW · LATEST CHECK</div><h2>Nine steps from evidence to audit</h2></div><span class="chip">Click a step to meet its owner</span></div><div class="tflow" id="towerFlow" role="list"></div></div>
     <div class="tower-grid">
       <div class="bld" id="bld" aria-label="Trading tower, one floor per function"></div>
       <aside class="tower-side">
@@ -59,7 +60,14 @@
           <svg id="gSvg" viewBox="0 0 300 150" preserveAspectRatio="none" role="img" aria-label="Paper equity history"></svg>
           <p class="tower-note">Dashed line is the starting balance. Growth is whatever the paper account actually did, including the losses.</p>
         </div>
+        <div class="card"><div class="section-top"><div><div class="eyebrow">FLOOR 8 · OPERATIONS &amp; REVIEW</div><h2>Experiment board · FILTER-1</h2></div><span class="chip">Shadow only</span></div>
+          <p class="tower-note">Does a review layer add information beyond the rules? Every entry is still taken; a rules filter and an AI filter each record keep/skip before the outcome. Pre-registered in docs/research/FILTER_EXPERIMENT.md.</p>
+          <div id="expBoard"></div></div>
         <div class="card drawer" id="drawer" aria-live="polite"><h3>Select an employee</h3><p class="tower-note">Click anyone in the building to see their role, authority and latest reported output.</p></div>
+        <details class="card firm-note"><summary>How this firm is meant to make money</summary>
+          <p>DeskBot is a <b>systematic directional</b> desk: it chooses long, short or WAIT from rule-based estimates after costs, then keeps the evidence to find out when those estimates are wrong. It is not a market maker (quoting both sides to earn the spread at scale) and does not try to be one.</p>
+          <ul><li>During trading: select only among strategies already approved, with fixed conditions.</li><li>During research: propose, test on frozen data, and promote a new version only after review. Rules are not rewritten after a loss.</li><li>Agreement between AI roles is not independent evidence; only measured contributions count (FILTER-1).</li></ul>
+          <p class="tower-note">The departments are logical roles modelled on how systematic firms describe their process (data, research, portfolio construction, risk, execution, operations), not a claim about any firm's floors.</p></details>
         <div class="card"><div class="section-top"><h2>Hand-offs</h2><span class="chip">Latest check + agent log</span></div><div class="feed" id="towerFeed"></div></div>
       </aside>
     </div>

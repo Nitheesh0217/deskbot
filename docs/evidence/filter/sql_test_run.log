@@ -1,0 +1,24 @@
+psql:supabase/migrations/20261029_filter_experiment.sql:21: NOTICE:  trigger "dbv5_filter_verdicts_no_change" for relation "public.dbv5_filter_verdicts" does not exist, skipping
+psql:supabase/migrations/20261029_filter_experiment.sql:23: NOTICE:  trigger "dbv5_filter_verdicts_no_truncate" for relation "public.dbv5_filter_verdicts" does not exist, skipping
+psql:supabase/migrations/20261029_filter_experiment.sql:17: NOTICE:  relation "dbv5_filter_verdicts" already exists, skipping
+psql:supabase/migrations/20261029_filter_experiment.sql:18: NOTICE:  relation "dbv5_filter_verdicts_ts" already exists, skipping
+ ref |  arm  | take |   verdict   | ts 
+-----+-------+------+-------------+----
+ p1  | ai    |      | no_provider | t
+ p1  | rules | t    | keep        | t
+(2 rows)
+ERROR:  duplicate key value violates unique constraint "dbv5_filter_verdicts_pkey"
+DETAIL:  Key (ref, arm)=(p1, rules) already exists.
+ERROR:  permission denied for table dbv5_filter_verdicts
+ERROR:  permission denied for table dbv5_filter_verdicts
+ERROR:  new row for relation "dbv5_filter_verdicts" violates check constraint "dbv5_filter_verdicts_arm_check"
+DETAIL:  Failing row contains (p2, vibes, BTC, S, t, x, {}, null, null, FILTER-1, 2026-10-29 01:01:10.798934+00).
+ERROR:  dbv5 filter verdicts are append-only (UPDATE on dbv5_filter_verdicts)
+CONTEXT:  PL/pgSQL function dbv5_filter_verdicts_immutable() line 2 at RAISE
+ERROR:  dbv5 filter verdicts are append-only (TRUNCATE on dbv5_filter_verdicts)
+CONTEXT:  PL/pgSQL function dbv5_filter_verdicts_immutable() line 2 at RAISE
+ERROR:  permission denied for table dbv5_filter_verdicts
+ rows_still_there 
+------------------
+                2
+(1 row)

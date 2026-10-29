@@ -17,6 +17,7 @@ import { chat, validatePatch, mergeCfg, EDITABLE, type ChatTurn } from "./chat.t
 import { configIntegrity, serialExecutor } from "./runtime.ts";
 import { runDesk, deskChart, type AgentRow } from "./agents.ts";
 import { preTradeChecks, postTradeReview, runDeskWorkflow } from "./desk.ts";
+import { verdictsFor, filterReport } from "./experiment.ts";
 import { captureDecision, pickEntry, decisionIdFor } from "./provenance.ts";
 import { recordCoverage, dispositions, boundaryFlags } from "./coverage.ts";
 import type { StrategyTrace } from "./engine.ts";
@@ -274,6 +275,8 @@ async function runOnce(sym: Sym = "BTC") {
           plan: { dir: p.dir, entry: p.entry, stop0: p.stop0, tp1: p.tp1, tp2: p.tp2, tp3: p.tp3, maxHoldH: p.maxHoldH, strategy: p.strategy, riskAmt: p.riskAmt } },
           { providers: AGENT_AI ? providersFromEnv() : [], usage: (sx._aiUsage ??= {}), now });
         rows.push(...wf.rows);
+        // FILTER-1 shadow verdicts: recorded now, before this trade has an outcome. Append-only; a failure here is visible and changes nothing else.
+        try { await insert("dbv5_filter_verdicts", verdictsFor(p.id, sym, p.strategy, checks, wf.rows)); } catch (e) { notes.push(`filter verdicts: ${(e as Error).message}`.slice(0, 120)); }
         if (JSON.stringify(sx._aiUsage ?? {}) !== usageBefore) await saveState(st, lastRun, sym);   // persist the provider call counters (daily caps) after the LLM stages
       }
     } catch (e) { notes.push(`desk review: ${(e as Error).message}`.slice(0, 120)); }
@@ -321,6 +324,16 @@ async function runBacktest(o: BtOpts) {
   return res;
 }
 
+// FILTER-1 report from the append-only verdict table and the trades those entries became. null until the table exists.
+async function experimentStatus() {
+  try {
+    const vs = await select("dbv5_filter_verdicts?select=ref,arm,sym,strategy,take,verdict,detail,provider,ms,recorded_at&order=recorded_at.asc&limit=5000");
+    if (!vs?.length) return { experiment: "FILTER-1", started: false, baseline: { n: 0 }, arms: [] };
+    const tr = await select(`dbv5_trades?select=id,symbol,strategy,r,net,close_t&close_t=gte.${encodeURIComponent(vs[0].recorded_at)}&limit=5000`);
+    return { started: vs[0].recorded_at, open: vs.filter((v: { ref: string }) => !(tr ?? []).some((t: { id: string }) => t.id === v.ref)).length / 2, ...filterReport(tr ?? [], vs) };
+  } catch { return null; }
+}
+
 // ─── public status bundle for the dashboard ─────────────────────────────────
 async function status() {
   const [s, ev, tr, eq, bt, agents] = await Promise.all([
@@ -332,6 +345,7 @@ async function status() {
     select("dbv5_agent_log?select=ts,symbol,agent,input_summary,output,provider,error&order=id.desc&limit=60").catch(() => []),
   ]);
   const st = s?.[0]?.state ?? null;
+  const experiment = await experimentStatus();
   const config = resolvedCfg(st?.cfg);
   const integrity = await integrityFor("BTC", config);
   if (st) { delete st._aiUsage; }
@@ -345,7 +359,7 @@ async function status() {
     books[sym] = r?.[0] ? { name: SYMBOLS[sym].name, hl: SYMBOLS[sym].hl, integrity: await integrityFor(sym, resolvedCfg(r[0].state?.cfg)), state: r[0].state, lastRun: r[0].last_run, updated: r[0].updated_at, curve: c } : { name: SYMBOLS[sym].name, hl: SYMBOLS[sym].hl, state: null };
   }
   const curve = (eq ?? []).filter((_: unknown, i: number, a: unknown[]) => a.length < 600 || i % Math.ceil(a.length / 600) === 0 || i === a.length - 1);
-  return { version: VERSION, mode: "PAPER", now: new Date().toISOString(), updated: s?.[0]?.updated_at ?? null, integrity, state: st, lastRun: s?.[0]?.last_run ?? null, events: ev, agents: agents ?? [], trades: tr, curve, books, backtest: bt?.[0] ?? null, config, chat: { enabled: !!CHAT_KEY, ai: providersFromEnv().map((p) => p.name) } };
+  return { version: VERSION, mode: "PAPER", now: new Date().toISOString(), updated: s?.[0]?.updated_at ?? null, integrity, state: st, lastRun: s?.[0]?.last_run ?? null, events: ev, agents: agents ?? [], trades: tr, curve, books, backtest: bt?.[0] ?? null, experiment, config, chat: { enabled: !!CHAT_KEY, ai: providersFromEnv().map((p) => p.name) } };
 }
 
 // ─── AI assistant (owner only; password = DESKBOT_CHAT_KEY secret) ─────────
