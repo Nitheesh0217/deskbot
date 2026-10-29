@@ -3,16 +3,16 @@ import assert from "node:assert/strict";
 import { verdictsFor, filterReport, bootstrapMean, FILTER_EXPERIMENT } from "../supabase/functions/deskbot-v5/experiment.ts";
 
 const warn = [{ id: "round_trip_cost", level: "warn" as const, text: "" }], ok = [{ id: "tp1_under_1r", level: "info" as const, text: "" }];
-const judge = (verdict: string) => [{ agent: "desk-analyst", output: {}, provider: "groq/x", ms: 400 }, { agent: "desk-judge", output: { verdict, reason: "r" }, provider: "groq/x", ms: 300 }];
+const judge = (stance: string) => [{ agent: "desk-analysts", output: {} }, { agent: "desk-bull", output: {}, provider: "groq/x", ms: 400 }, { agent: "desk-pm", output: { rating: "Buy", stance, executive_summary: "s" }, provider: "groq/x", ms: 300 }];
 
-test("rules arm skips on any warning; AI arm keeps on agree, skips on disagree, abstains otherwise", () => {
+test("rules arm skips on any warning; AI arm keeps/skips on the PM stance, abstains on Hold", () => {
   assert.equal(verdictsFor("p1", "BTC", "S", warn, [])[0].take, false);
   assert.equal(verdictsFor("p1", "BTC", "S", ok, [])[0].take, true);
-  const [, a] = verdictsFor("p1", "BTC", "S", ok, judge("agree")); assert.equal(a.take, true); assert.equal(a.provider, "groq/x"); assert.equal(a.ms, 700); assert.equal((a.detail as any).calls, 2);
-  assert.equal(verdictsFor("p1", "BTC", "S", ok, judge("disagree"))[1].take, false);
-  assert.equal(verdictsFor("p1", "BTC", "S", ok, judge("unsure"))[1].take, null);
+  const [, a] = verdictsFor("p1", "BTC", "S", ok, judge("keep")); assert.equal(a.take, true); assert.equal(a.provider, "groq/x"); assert.equal(a.ms, 700); assert.equal((a.detail as any).calls, 2);
+  assert.equal(verdictsFor("p1", "BTC", "S", ok, judge("skip"))[1].take, false);
+  assert.equal(verdictsFor("p1", "BTC", "S", ok, judge("abstain"))[1].take, null);
   const none = verdictsFor("p1", "BTC", "S", ok, [])[1]; assert.equal(none.take, null); assert.equal(none.verdict, "no_provider");
-  const err = verdictsFor("p1", "BTC", "S", ok, [{ agent: "desk-analyst", output: {}, error: "429" }])[1]; assert.equal(err.take, null); assert.equal(err.verdict, "error");
+  const err = verdictsFor("p1", "BTC", "S", ok, [{ agent: "desk-bull", output: {}, error: "429" }])[1]; assert.equal(err.take, null); assert.equal(err.verdict, "error");
 });
 
 const T0 = Date.parse("2026-11-01T00:00:00Z"), iso = (m: number) => new Date(T0 + m * 60000).toISOString();

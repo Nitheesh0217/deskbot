@@ -10,9 +10,12 @@ For entries the unchanged deterministic engine takes, does a bounded review filt
 |---|---|---|
 | Baseline | the engine as deployed (11 strategies, current config) | every entry is taken and managed as today |
 | Rules filter | `preTradeChecks`: keep unless any check is `warn`: no stop distance, round-trip costs > 0.25R, stop under 0.5×ATR15, TP1 under 1R, funding over the max hold > 0.1R, high news risk, opposing level closer than 1R (thin session, wide stop and medium news are info only) | none: shadow verdict only |
-| AI filter | committee judge (`desk-judge`) after analyst/bear/bull: `agree` = keep, `disagree` = skip, `unsure`/no provider/error = abstain | none: shadow verdict only |
+| AI filter | Portfolio Manager (`desk-pm`) at the end of the agentic flow (analysts → bull/bear debate → research manager → trader → aggressive/conservative/neutral risk debate → PM). Its 5-tier rating is mapped onto the trade's direction: long Buy/Overweight = keep, Underweight/Sell = skip; short reversed; Hold, no provider, error or deadline = abstain | none: shadow verdict only |
 
-The rules arm is the control for "is it the AI or just the checklist". Agreement between AI roles is not counted as evidence; only the judge's recorded verdict is scored.
+The rules arm is the control for "is it the AI or just the checklist". Agreement between AI roles is not counted as evidence; only the PM's recorded rating is scored.
+
+## Amendment 1 (29 Oct 2026, before the first verdict)
+The AI arm originally scored a single `desk-judge` verdict. It was replaced by the TradingAgents-structured flow's final rating before any row existed in `dbv5_filter_verdicts` (count 0 at amendment time), so this is still FILTER-1, not a new experiment. Everything else is unchanged.
 
 ## Recording
 - One row per (entry, arm) in `dbv5_filter_verdicts`, written in the same run that opens the paper position, after state is saved. `recorded_at` is the database clock. The table is append-only (triggers block UPDATE/DELETE/TRUNCATE; service_role may only SELECT/INSERT).

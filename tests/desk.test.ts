@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { preTradeChecks, postTradeReview, runDeskWorkflow, ROLES, type ReviewInput } from "../supabase/functions/deskbot-v5/desk.ts";
+import { preTradeChecks, postTradeReview, runDeskWorkflow, ROLES, analystReports, lessonsFrom, ratingStance, type ReviewInput } from "../supabase/functions/deskbot-v5/desk.ts";
 import type { Provider } from "../supabase/functions/deskbot-v5/ai.ts";
 
 const base = { plan: { dir: "long" as const, entry: 100, stop0: 99, tp1: 101.5, maxHoldH: 16, strategy: "SWEEP_REV" }, atr15: 1, hour: 12, funding: 0, costs: { taker: 0.00045, slippage: 0.0002 } };
@@ -33,13 +33,19 @@ test("post-trade review separates thesis, execution and outcome and flags proces
 
 const provider: Provider = { name: "groq", url: "https://llm.test/v1/chat", model: "m", key: "k", dailyCap: 100 };
 const input = (): ReviewInput => ({ ref: "V5-1", sym: "BTC", strategy: "SWEEP_REV", dir: "long", regime: "RANGE", why: ["Swept 20-bar low"], newsRisk: "LOW", chart: { bias: "mixed" }, checks: preTradeChecks(base), plan: { ...base.plan, tp2: 103, tp3: 104, riskAmt: 7 } });
+const sp = (a: string, p: string) => ({ argument: a, strongest_point: p });
 const good: Record<string, unknown> = {
-  analyst: { summary: "Sweep of the 20-bar low with a rejection wick in a range regime.", key_facts: ["swept low", "range regime"], risks: ["cost share"] },
-  bear: { case: "Costs are a large share of the stop distance and the regime is a range.", strongest_point: "cost share" },
-  bull: { case: "Clean sweep with rejection and nearby support.", strongest_point: "rejection wick" },
-  judge: { verdict: "agree", reason: "Rules satisfied; costs noted.", concerns: ["cost share"], would_change_my_mind: "A high-impact news event." },
+  bull: sp("Clean sweep of the 20-bar low with a rejection wick near support.", "rejection wick"),
+  bear: sp("Costs are a large share of the stop distance and the regime is a range.", "cost share"),
+  research: { rating: "Overweight", rationale: "Setup is clean; cost share is the main weakness.", stronger_side: "bull" },
+  trader: { action: "take", reason: "Plan matches the rules and stop sits beyond the swept low.", execution_note: "Market entry already filled." },
+  aggressive: sp("Reward to TP1 covers costs; the sweep is the edge.", "TP1 over 1R"),
+  conservative: sp("Range regime and cost share argue for caution.", "cost share"),
+  neutral: sp("Both views hold; size is already capped by the rules.", "rules cap size"),
+  pm: { rating: "Overweight", executive_summary: "Keep the paper trade as planned.", thesis: "Sweep with rejection; costs acknowledged.", would_change_my_mind: "A high-impact news event." },
 };
-const roleOf = (sys: string) => (["analyst", "bear", "bull", "judge"] as const).find((r) => sys.includes(ROLES[r].system.slice(0, 40)))!;
+const ORDER = ["bull", "bear", "research", "trader", "aggressive", "conservative", "neutral", "pm"] as const;
+const roleOf = (sys: string) => ORDER.find((r) => sys.includes(ROLES[r].system.slice(0, 40)))!;
 function mockFetch(over: Partial<Record<string, unknown>> = {}, status = 200) {
   const seen: { role: string; user: any }[] = [];
   const f = async (_u: string, init: RequestInit) => {
@@ -49,32 +55,49 @@ function mockFetch(over: Partial<Record<string, unknown>> = {}, status = 200) {
   return { f: f as never, seen };
 }
 const deepFreeze = <T,>(o: T): T => { if (o && typeof o === "object") { Object.freeze(o); for (const v of Object.values(o as object)) deepFreeze(v); } return o; };
+const AGENTS = ["desk-checks", "desk-analysts", "desk-bull", "desk-bear", "desk-research", "desk-trader", "desk-risk-aggressive", "desk-risk-conservative", "desk-risk-neutral", "desk-pm"];
 
-test("workflow: checks row plus analyst, bear, bull, judge; later roles see earlier notes; everything is advisory and the input is untouched", async () => {
-  const m = mockFetch(), inp = deepFreeze(input()), usage = {};
+test("agentic flow: analysts, bull/bear debate, research manager, trader, three-way risk debate, portfolio manager; each stage sees the earlier ones", async () => {
+  const m = mockFetch(), inp = deepFreeze({ ...input(), analysts: analystReports({ price: 100, regime: "RANGE", trend: { "15m": 1, "1h": -1 }, rsi15: 41.234 }), lessons: ["last 2 closed SWEEP_REV trades: 1 won, total 0.50R"] }), usage = {};
   const r = await runDeskWorkflow(inp, { providers: [provider], usage, now: Date.now(), fetchImpl: m.f });
-  assert.deepEqual(r.rows.map((x) => x.agent), ["desk-checks", "desk-analyst", "desk-bear", "desk-bull", "desk-judge"]); assert.equal(r.verdict, "agree");
-  assert.deepEqual(m.seen.map((s) => s.role), ["analyst", "bear", "bull", "judge"]);
-  assert.deepEqual(Object.keys(m.seen[3].user.notes), ["analyst", "bear", "bull"], "the judge sees all three notes");
+  assert.deepEqual(r.rows.map((x) => x.agent), AGENTS); assert.equal(r.rating, "Overweight"); assert.equal(r.stance, "keep");
+  assert.deepEqual(m.seen.map((s) => s.role), [...ORDER]);
+  assert.deepEqual(m.seen[7].user.debate_so_far.map((n: any) => n.role), ["bull", "bear", "research", "trader", "risk-aggressive", "risk-conservative", "risk-neutral"], "the PM sees the whole debate");
+  assert.equal(m.seen[0].user.facts.analyst_reports.market.rsi15, 41.2); assert.deepEqual(m.seen[0].user.facts.lessons_from_past_trades, inp.lessons);
+  const pm = r.rows.at(-1)!.output as any; assert.equal(pm.stance, "keep"); assert.equal(pm.direction, "long");
   assert.ok(r.rows.every((x) => !x.error) && r.rows.every((x) => (x.output as any).authority === "advisory" && (x.output as any).ref === "V5-1"));
-  assert.equal((usage as any).groq.calls, 4, "four counted provider calls");
+  assert.equal((usage as any).groq.calls, 8, "eight counted provider calls");
+  const two = mockFetch(); await runDeskWorkflow(input(), { providers: [provider], usage: {}, now: Date.now(), fetchImpl: two.f, debateRounds: 2, riskRounds: 2 }); assert.equal(two.seen.length, 4 + 2 + 6 + 1, "debate and risk rounds repeat their speakers");
 });
 
-test("workflow: no provider means only the deterministic checks row; failures stop the chain and are recorded, never thrown", async () => {
-  const none = await runDeskWorkflow(input(), { providers: [], usage: {}, now: Date.now() }); assert.deepEqual(none.rows.map((x) => x.agent), ["desk-checks"]); assert.equal(none.verdict, null);
+test("rating maps onto direction: long Buy/Overweight keep, short Underweight/Sell keep, Hold or nothing abstains", () => {
+  assert.equal(ratingStance("Buy", "long"), "keep"); assert.equal(ratingStance("Sell", "long"), "skip"); assert.equal(ratingStance("Underweight", "short"), "keep");
+  assert.equal(ratingStance("Overweight", "short"), "skip"); assert.equal(ratingStance("Hold", "long"), "abstain"); assert.equal(ratingStance(null, "short"), "abstain");
+});
+
+test("memory lessons are facts from closed trades only", () => {
+  assert.deepEqual(lessonsFrom([]), []);
+  const l = lessonsFrom([{ strategy: "S", dir: "long", r: 1.5, reason: "TP1→TP2", close_t: "2026-10-28T10:00:00Z" }, { strategy: "S", dir: "short", r: -1, reason: "STOP", close_t: "2026-10-27T10:00:00Z" }, { strategy: "S", r: null }]);
+  assert.equal(l[0], "last 2 closed S trades: 1 won, total 0.50R"); assert.equal(l[2], "2026-10-27 short: -1.00R (STOP)");
+});
+
+test("workflow: no provider means only deterministic rows; failures stop the chain and are recorded, never thrown", async () => {
+  const none = await runDeskWorkflow({ ...input(), analysts: analystReports({ price: 1, regime: "TREND" }) }, { providers: [], usage: {}, now: Date.now() });
+  assert.deepEqual(none.rows.map((x) => x.agent), ["desk-checks", "desk-analysts"]); assert.equal(none.verdict, null); assert.equal(none.stance, "abstain");
   const down = mockFetch({}, 500), r = await runDeskWorkflow(input(), { providers: [provider], usage: {}, now: Date.now(), fetchImpl: down.f, sleep: async () => {} });
-  assert.equal(r.verdict, null); assert.ok(r.rows[1].agent === "desk-analyst" && r.rows[1].error, "stage failure recorded"); assert.equal(r.rows.length, 2, "chain stops after the first failure");
+  assert.equal(r.verdict, null); assert.ok(r.rows[1].agent === "desk-bull" && r.rows[1].error, "stage failure recorded"); assert.equal(r.rows.length, 2, "chain stops after the first failure");
   const auth = mockFetch({}, 401); const a = await runDeskWorkflow(input(), { providers: [provider], usage: {}, now: Date.now(), fetchImpl: auth.f }); assert.match(a.rows[1].error!, /401/);
 });
 
 test("workflow: output that states a probability, a price target, a URL or breaks the schema is rejected", async () => {
   for (const bad of [
-    { judge: { ...(good.judge as object), reason: "There is a 70% chance this works." } },
-    { judge: { ...(good.judge as object), reason: "Price will reach 90000 soon." } },
-    { judge: { ...(good.judge as object), reason: "See https://x.example for more" } },
-    { judge: { verdict: "buy", reason: "x", concerns: [], would_change_my_mind: "y" } },
-    { judge: { ...(good.judge as object), concerns: "not a list" } },
-  ]) { const m = mockFetch(bad), r = await runDeskWorkflow(input(), { providers: [provider], usage: {}, now: Date.now(), fetchImpl: m.f }); assert.equal(r.verdict, null, JSON.stringify(bad).slice(0, 60)); assert.match(r.rows.at(-1)!.error!, /invalid output/); assert.equal(r.rows.at(-1)!.agent, "desk-judge"); }
+    { pm: { ...(good.pm as object), thesis: "There is a 70% chance this works." } },
+    { pm: { ...(good.pm as object), thesis: "Price will reach 90000 soon." } },
+    { pm: { ...(good.pm as object), thesis: "See https://x.example for more" } },
+    { pm: { ...(good.pm as object), rating: "Strong Buy" } },
+    { pm: { rating: "Buy" } },
+  ]) { const m = mockFetch(bad), r = await runDeskWorkflow(input(), { providers: [provider], usage: {}, now: Date.now(), fetchImpl: m.f }); assert.equal(r.verdict, null, JSON.stringify(bad).slice(0, 60)); assert.match(r.rows.at(-1)!.error!, /invalid output/); assert.equal(r.rows.at(-1)!.agent, "desk-pm"); }
+  const t = mockFetch({ trader: { action: "buy", reason: "x", execution_note: "y" } }), rt = await runDeskWorkflow(input(), { providers: [provider], usage: {}, now: Date.now(), fetchImpl: t.f }); assert.equal(rt.rows.at(-1)!.agent, "desk-trader");
 });
 
 test("workflow: respects the total deadline and the provider daily cap", async () => {

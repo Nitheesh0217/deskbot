@@ -11,6 +11,7 @@
 <link rel="stylesheet" href="./features.css">
 <link rel="stylesheet" href="./tower.css">
 <link rel="stylesheet" href="./markets.css">
+<link rel="stylesheet" href="./scanner.css">
 <script src="./evidence.js" defer></script>
 <script src="./desk-model.js" defer></script>
 <script src="./vendor/motion-14.7.1.js" defer></script>
@@ -22,6 +23,7 @@
 <script src="./tower.js" defer></script>
 <script src="./indicators.js" defer></script>
 <script src="./markets.js" defer></script>
+<script src="./scanner.js" defer></script>
 <script src="./palette.js" defer></script>
 <script src="./app.js" defer></script>
 </head><body>
@@ -40,7 +42,7 @@
 <main id="workspace" tabindex="-1">
   <div class="page-heading"><div><div class="eyebrow">SPACE TO THINK. ROOM TO GROW.</div><h1 id="pageTitle">Desk overview</h1><p id="pageSubtitle">A clear view of capital, positions and the conditions behind every decision.</p></div>
   <div class="seg book-seg" id="bookSeg" role="group" aria-label="Paper book"><button type="button" data-b="BTC" aria-pressed="true"><span class="coin"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M8 4h6a4 4 0 0 1 0 8H8m0 0h7a4 4 0 0 1 0 8H8V4m2-3v3m4-3v3m-4 16v3m4-3v3"/></svg></span> Bitcoin</button><button type="button" data-b="GOLD" aria-pressed="false"><span class="coin">Au</span> Gold · PAXG</button></div></div>
-  <div class="context-line"><span id="deskInstrument">Instrument not loaded</span><span id="deskSource">Waiting for account status</span><span id="deskClock">UTC</span></div>
+  <div class="context-line"><span id="deskInstrument">Instrument not loaded</span><span id="deskSource">Waiting for account status</span><span id="deskClock">UTC</span><span class="ts-pill" id="tradeState" role="status" title="Trading state"></span></div>
   <div class="banner" id="srcBanner" role="status">Connecting to the public paper runner. No account figures are loaded yet.</div>
   <div class="banner down" id="integrityBanner" role="status" hidden></div>
   <!-- TOWER -->
@@ -91,6 +93,12 @@
     </div>
     <p class="mk-note">Public, delayed or indicative data from CoinGecko/Binance, FRED, Forex Factory and Google News, fetched through a fixed-allowlist proxy. Not execution-grade and never used by the bot. Terminal layout and data approach adapted from OpenTerminal (MIT).</p>
   </section>
+
+  <!-- SCANNER -->
+  <section class="view" id="v-scanner" role="tabpanel" aria-labelledby="tab-scanner" aria-label="Scanner" hidden><div id="scanBody"></div></section>
+
+  <!-- COMMITTEE -->
+  <section class="view" id="v-committee" role="tabpanel" aria-labelledby="tab-committee" aria-label="Committee" hidden><div id="committeeBody"></div></section>
 
   <!-- DESK -->
   <section class="view" id="v-desk" aria-label="Desk" role="tabpanel" aria-labelledby="tab-desk">
@@ -292,13 +300,17 @@
 <div class="cmd" id="cmd" hidden role="dialog" aria-modal="true" aria-label="Command palette"><div class="cmd-box" id="cmdBox"><input id="cmdQ" type="text" autocomplete="off" spellcheck="false" placeholder="Type a command: a view, a book, a timeframe, an indicator, an employee…" aria-label="Command"><div class="cmd-list" id="cmdList" role="listbox"></div><div class="cmd-foot"><span>↑↓ move · Enter run · Esc close</span><span>Alt+1…9 switch views</span></div></div></div>
 <nav class="tabs" aria-label="Workspace sections">
   <a class="sidebar-brand" href="#desk" aria-label="DeskBot overview"><span class="brand-symbol">D<span>·</span></span><span>DESKBOT<small>Spatial research desk</small></span></a>
-  <div class="nav-label">WORKSPACE</div>
   <div class="tabs-in" role="tablist" aria-label="Workspace views">
+    <div class="nav-label" role="presentation">LIVE</div>
+    <button class="tab" role="tab" id="tab-desk" aria-controls="v-desk" data-v="desk" aria-selected="true"><svg viewBox="0 0 24 24"><path d="M3 17l5-5 4 4 8-8"/><path d="M15 8h5v5"/></svg><span>Overview</span></button>
     <button class="tab" role="tab" id="tab-tower" aria-controls="v-tower" data-v="tower" aria-selected="false"><svg viewBox="0 0 24 24"><path d="M6 21V8l6-5 6 5v13"/><path d="M10 21v-4h4v4M9 11h1M14 11h1M9 14h1M14 14h1"/></svg><span>Tower</span></button>
     <button class="tab" role="tab" id="tab-markets" aria-controls="v-markets" data-v="markets" aria-selected="false"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 15l3-3 3 2 4-5"/></svg><span>Markets</span></button>
-    <button class="tab" role="tab" id="tab-desk" aria-controls="v-desk" data-v="desk" aria-selected="true"><svg viewBox="0 0 24 24"><path d="M3 17l5-5 4 4 8-8"/><path d="M15 8h5v5"/></svg><span>Overview</span></button>
+    <button class="tab" role="tab" id="tab-scanner" aria-controls="v-scanner" data-v="scanner" aria-selected="false"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5M8 11h6M11 8v6"/></svg><span>Scanner</span></button>
+    <div class="nav-label" role="presentation">ANALYSIS</div>
+    <button class="tab" role="tab" id="tab-committee" aria-controls="v-committee" data-v="committee" aria-selected="false"><svg viewBox="0 0 24 24"><circle cx="7" cy="8" r="2.5"/><circle cx="17" cy="8" r="2.5"/><circle cx="12" cy="15" r="2.5"/><path d="M8.8 9.8l1.8 3.4M15.2 9.8l-1.8 3.4"/></svg><span>Committee</span></button>
     <button class="tab" role="tab" id="tab-chart" aria-controls="v-chart" data-v="chart" aria-selected="false"><svg viewBox="0 0 24 24"><path d="M6 4v16M6 8h-2v6h2M12 6v12M12 9h-2v5h2M18 3v14M18 6h-2v7h2"/></svg><span>Chart workspace</span></button>
     <button class="tab" role="tab" id="tab-strategies" aria-controls="v-strategies" data-v="strategies" aria-selected="false"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="7" height="7" rx="1"/><rect x="14" y="4" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg><span>Strategies</span></button>
+    <div class="nav-label" role="presentation">RECORDS</div>
     <button class="tab" role="tab" id="tab-trades" aria-controls="v-trades" data-v="trades" aria-selected="false"><svg viewBox="0 0 24 24"><path d="M5 4h14v16H5z"/><path d="M9 9h6M9 13h6M9 17h3"/></svg><span>Trade journal</span></button>
     <button class="tab" role="tab" id="tab-activity" aria-controls="v-activity" data-v="activity" aria-selected="false"><svg viewBox="0 0 24 24"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg><span>Activity</span></button>
     <button class="tab" role="tab" id="tab-system" aria-controls="v-system" data-v="system" aria-selected="false"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2"/></svg><span>System & research</span></button>

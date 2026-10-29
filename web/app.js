@@ -312,12 +312,26 @@ function renderSystem() {
   $("sys").innerHTML = sys.map(([k, v]) => `<div><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`).join("");
 }
 
-function renderAll() { document.querySelectorAll(".bookName").forEach((e) => { e.textContent = BOOK === "GOLD" ? "PAXG" : "BTC"; }); renderDesk(); renderStrategies(); renderTrades(); renderEvents(); renderSystem(); renderTower(); }
+function renderAll() { document.querySelectorAll(".bookName").forEach((e) => { e.textContent = BOOK === "GOLD" ? "PAXG" : "BTC"; }); renderDesk(); renderStrategies(); renderTrades(); renderEvents(); renderSystem(); renderTower(); renderScanner(); }
+
+// scanner, committee and the trading-state pill (scanner.js)
+function renderScanner() {
+  const S = globalThis.DeskScanner; if (!S) return;
+  const now = Date.now();
+  S.renderScan($("scanBody"), RAW && RAW.scan, now);
+  S.renderCommittee($("committeeBody"), RAW && RAW.agents, RAW && RAW.chat && RAW.chat.ai);
+  if (!RAW) { S.renderState($("tradeState"), { state: "HALTED", reasons: ["account status not loaded"] }); return; }
+  const g = RAW.books && RAW.books.GOLD, gold = BOOK === "GOLD";
+  const st = gold ? g && g.state : RAW.state, lr = gold ? g && g.lastRun : RAW.lastRun, cfg = Object.assign({}, RAW.config || {}, (gold && st && st.cfg) || {});
+  S.renderState($("tradeState"), S.tradingState(st, cfg, lr, now));
+}
 
 // tabs
-const VIEWS = ["tower", "markets", "desk", "chart", "strategies", "trades", "activity", "system"];
+const VIEWS = ["desk", "tower", "markets", "scanner", "committee", "chart", "strategies", "trades", "activity", "system"];
 const PAGE_META = {
   markets:["Markets terminal","Clocks, sessions, crypto, macro, the economic calendar and news around the bot\u2019s two books. Context only; the bot does not read it."],
+  scanner:["Market scanner","The bot\u2019s own rules run on every Hyperliquid market every 15 minutes, with options and futures context from Deribit. Setups are rules firing, not predictions."],
+  committee:["Investment committee","Each new paper entry reviewed by an analyst team, a bull/bear debate, a research manager, a trader, a three-way risk debate and a portfolio manager. Advisory only."],
   tower:["The trading tower","Every agent on its floor, what it reported, and how each check is handed from desk to desk."],
   desk:["Your desk. A clearer perspective.","Follow the evidence, explore different setups, and keep every paper result in view."],
   chart:["Chart workspace","Market structure and the paper runner’s reported levels. Observations are not forecasts."],

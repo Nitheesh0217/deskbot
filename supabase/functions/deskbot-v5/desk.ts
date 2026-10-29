@@ -49,38 +49,103 @@ export function postTradeReview(t: ClosedTrade) {
     separation: { recordedThesis: (t.why ?? []).slice(0, 4), execution: `fees ${t.fees.toFixed(2)} + funding ${t.funding.toFixed(2)} against gross ${t.gross.toFixed(2)}`, outcome: `${t.r >= 0 ? "+" : ""}${t.r.toFixed(2)}R after costs` }, note: "Descriptive. One outcome does not show the decision was good or bad." };
 }
 
-// ─── LLM roles (all optional, shadow) ────────────────────────────────────────────────────────────
+// ─── Agentic desk flow (TradingAgents structure, Apache-2.0, TauricResearch/TradingAgents @ c454491, 2026-10-27; structure adapted, no code copied) ──────────
+// 1 analysts (deterministic here: facts from the runner's own data, so they cost nothing and cannot hallucinate)
+// 2 bull <-> bear debate (DEBATE_ROUNDS) -> 3 research manager rating -> 4 trader proposal
+// 5 aggressive / conservative / neutral risk debate (RISK_ROUNDS) -> 6 portfolio manager final 5-tier rating, with lessons from past trades.
+// LLM stages are optional (free providers via ai.ts), strictly validated, capped; a missing/failed provider changes nothing.
 const BAD = /(\b\d{1,3}(\.\d+)?\s?%\s*(chance|probab|likel|odds|confiden))|(\b(will|should) (reach|hit|go to|rise to|fall to)\b)|(\btarget (price )?of\b)|https?:\/\//i;
 const str = (x: unknown, max: number): string | null => (typeof x === "string" && x.trim().length > 0 && x.length <= max * 2 && !BAD.test(x) ? x.trim().slice(0, max) : null);
 const list = (x: unknown, n: number, max: number): string[] | null => (Array.isArray(x) && x.length <= n * 2 ? (x.map((v) => str(v, max)).filter(Boolean).slice(0, n) as string[]) : null);
-const RULES = "Use ONLY the facts in the JSON you are given. Do not invent numbers, news, prices or probabilities. Never state a chance, odds or a price target. You are advisory only: you cannot trade, size or change anything. Reply with one JSON object and nothing else.";
+const RULES = "Use ONLY the facts in the JSON you are given (analyst reports, the rules' plan, checks, lessons, earlier notes). Do not invent numbers, news, prices or probabilities. Never state a chance, odds or a price target. You are advisory only on a PAPER account: you cannot trade, size or change anything. Reply with one JSON object and nothing else.";
+export const RATINGS = ["Buy", "Overweight", "Hold", "Underweight", "Sell"] as const;
+export type Rating = (typeof RATINGS)[number];
+const rating = (x: unknown): Rating | null => (RATINGS as readonly string[]).includes(String(x)) ? (x as Rating) : null;
+const speech = (x: any) => { const a = str(x?.argument, 420), p = str(x?.strongest_point, 160); return a && p ? { argument: a, strongest_point: p } : null; };
+const SPEECH = `Schema: {"argument":"<=420 chars, answer the previous speaker directly","strongest_point":"<=160 chars"}`;
 export const ROLES = {
-  analyst: { system: `You are the desk analyst for a PAPER trading bot. Summarise what the rules saw and the main risks. ${RULES} Schema: {"summary":"<=300 chars","key_facts":["<=5 items"],"risks":["<=4 items"]}`,
-    validate: (x: any) => { const s = str(x?.summary, 300), k = list(x?.key_facts, 5, 140), r = list(x?.risks, 4, 140); return s && k && r ? { summary: s, key_facts: k, risks: r } : null; } },
-  bear: { system: `You are the skeptical researcher. Make the strongest case AGAINST this trade using only the given facts. ${RULES} Schema: {"case":"<=300 chars","strongest_point":"<=160 chars"}`,
-    validate: (x: any) => { const c = str(x?.case, 300), p = str(x?.strongest_point, 160); return c && p ? { case: c, strongest_point: p } : null; } },
-  bull: { system: `You are the supportive researcher. Make the strongest case FOR this trade using only the given facts. ${RULES} Schema: {"case":"<=300 chars","strongest_point":"<=160 chars"}`,
-    validate: (x: any) => { const c = str(x?.case, 300), p = str(x?.strongest_point, 160); return c && p ? { case: c, strongest_point: p } : null; } },
-  judge: { system: `You are the risk reviewer. Weigh the analyst, bear and bull notes and the deterministic checks. Say whether the plan is agreeable, not agreeable, or unclear. ${RULES} Schema: {"verdict":"agree|disagree|unsure","reason":"<=200 chars","concerns":["<=3 items"],"would_change_my_mind":"<=160 chars"}`,
-    validate: (x: any) => { const v = ["agree", "disagree", "unsure"].includes(x?.verdict) ? (x.verdict as "agree" | "disagree" | "unsure") : null, r = str(x?.reason, 200), c = list(x?.concerns, 3, 140), w = str(x?.would_change_my_mind, 160); return v && r && c && w ? { verdict: v, reason: r, concerns: c, would_change_my_mind: w } : null; } },
+  bull: { system: `You are the Bull Researcher. Argue FOR the bot's proposed trade, answering the bear's last point if there is one. ${RULES} ${SPEECH}`, validate: speech },
+  bear: { system: `You are the Bear Researcher. Argue AGAINST the bot's proposed trade, answering the bull's last point. ${RULES} ${SPEECH}`, validate: speech },
+  research: { system: `You are the Research Manager. Judge the bull/bear debate on evidence, not on who spoke last, and rate the instrument for the proposed horizon. ${RULES} Schema: {"rating":"Buy|Overweight|Hold|Underweight|Sell","rationale":"<=300 chars","stronger_side":"bull|bear|balanced"}`,
+    validate: (x: any) => { const r = rating(x?.rating), t = str(x?.rationale, 300), s = ["bull", "bear", "balanced"].includes(x?.stronger_side) ? x.stronger_side as string : null; return r && t && s ? { rating: r, rationale: t, stronger_side: s } : null; } },
+  trader: { system: `You are the Trader. Given the research manager's plan and the rules' entry, stop and targets, say whether executing this exact paper trade is sensible as planned. ${RULES} Schema: {"action":"take|pass","reason":"<=240 chars","execution_note":"<=160 chars"}`,
+    validate: (x: any) => { const a = ["take", "pass"].includes(x?.action) ? x.action as string : null, r = str(x?.reason, 240), e = str(x?.execution_note, 160); return a && r && e ? { action: a, reason: r, execution_note: e } : null; } },
+  aggressive: { system: `You are the Aggressive Risk Analyst. Defend taking the risk where the reward justifies it; answer the other risk analysts. ${RULES} ${SPEECH}`, validate: speech },
+  conservative: { system: `You are the Conservative Risk Analyst. Protect capital: stress costs, stop placement, crowding and what can go wrong; answer the others. ${RULES} ${SPEECH}`, validate: speech },
+  neutral: { system: `You are the Neutral Risk Analyst. Weigh both risk views and say where each overreaches. ${RULES} ${SPEECH}`, validate: speech },
+  pm: { system: `You are the Portfolio Manager. Synthesise the risk debate, the trader's proposal and the lessons from past trades, then deliver the final rating for this instrument. Conflict alone is not a reason to Hold; Hold only when evidence is balanced or too thin. ${RULES} Schema: {"rating":"Buy|Overweight|Hold|Underweight|Sell","executive_summary":"<=240 chars","thesis":"<=300 chars","would_change_my_mind":"<=160 chars"}`,
+    validate: (x: any) => { const r = rating(x?.rating), e = str(x?.executive_summary, 240), t = str(x?.thesis, 300), w = str(x?.would_change_my_mind, 160); return r && e && t && w ? { rating: r, executive_summary: e, thesis: t, would_change_my_mind: w } : null; } },
 } as const;
+export type RoleId = keyof typeof ROLES;
+
+/** Map a 5-tier instrument rating onto the bot's proposed direction: keep, skip or abstain (Hold). */
+export function ratingStance(r: Rating | null | undefined, dir: string): "keep" | "skip" | "abstain" {
+  if (!r || r === "Hold") return "abstain";
+  const bullish = r === "Buy" || r === "Overweight";
+  return (dir === "long") === bullish ? "keep" : "skip";
+}
+
+export type AnalystInput = {
+  price: number; regime: string; bias?: string | null; trend?: Record<string, number | null>; rsi15?: number; rsi1h?: number; chop15?: number; vwapDev?: number; atr15?: number;
+  support?: { px: number; name: string } | null; resistance?: { px: number; name: string } | null;
+  funding?: number | null; oi?: number | null; fng?: number | null; flow24?: number | null;
+  newsRisk?: string | null; newsReason?: string | null; headlines?: string[];
+};
+/** Deterministic analyst team (TradingAgents' market / sentiment / news / fundamentals seats; for perps "fundamentals" becomes positioning). */
+export function analystReports(a: AnalystInput) {
+  const f = (x: number | null | undefined, d = 2) => (typeof x === "number" && Number.isFinite(x) ? +x.toFixed(d) : null);
+  const tr = a.trend ?? {}, up = Object.values(tr).filter((v) => v === 1).length, dn = Object.values(tr).filter((v) => v === -1).length;
+  return {
+    market: { price: f(a.price, a.price > 1000 ? 0 : 2), regime: a.regime, bias: a.bias ?? null, supertrend_up_frames: up, supertrend_down_frames: dn, rsi15: f(a.rsi15, 1), rsi1h: f(a.rsi1h, 1), chop15: f(a.chop15, 1), vwap_dev_sigma: f(a.vwapDev, 2),
+      nearest_support: a.support ? { px: f(a.support.px, 2), name: a.support.name } : null, nearest_resistance: a.resistance ? { px: f(a.resistance.px, 2), name: a.resistance.name } : null },
+    sentiment: { fear_greed: a.fng ?? null, order_flow_24h_imbalance: f(a.flow24, 4) },
+    positioning: { funding_per_interval: f(a.funding, 6), open_interest: f(a.oi, 0) },
+    news: { risk: a.newsRisk ?? null, reason: a.newsReason ?? null, headlines: (a.headlines ?? []).slice(0, 5).map((h) => String(h).slice(0, 140)) },
+  };
+}
 
 export type ReviewInput = {
   ref: string; sym: string; strategy: string; dir: string; plan: Plan & { tp2: number; tp3: number; riskAmt: number }; why: string[]; regime: string;
-  chart: unknown; checks: Check[]; newsRisk?: string | null;
+  chart: unknown; checks: Check[]; newsRisk?: string | null; analysts?: ReturnType<typeof analystReports>; lessons?: string[];
 };
+export type FlowOpts = { providers: Provider[]; usage: Usage; now: number; deadlineMs?: number; debateRounds?: number; riskRounds?: number; fetchImpl?: FetchLike; sleep?: (ms: number) => Promise<void> };
 /** Runs the staged workflow. Never throws, never mutates its input, every stage and failure is returned as a row. */
-export async function runDeskWorkflow(inp: ReviewInput, o: { providers: Provider[]; usage: Usage; now: number; deadlineMs?: number; fetchImpl?: FetchLike; sleep?: (ms: number) => Promise<void> }): Promise<{ rows: AgentRow[]; verdict: string | null }> {
-  const rows: AgentRow[] = [], t0 = Date.now(), total = o.deadlineMs ?? 24_000, facts = JSON.parse(JSON.stringify({ ref: inp.ref, instrument: inp.sym, strategy: inp.strategy, direction: inp.dir, regime: inp.regime, rules_said: inp.why.slice(0, 8), plan: inp.plan, chart: inp.chart, deterministic_checks: inp.checks, news_risk: inp.newsRisk ?? null }));
+export async function runDeskWorkflow(inp: ReviewInput, o: FlowOpts): Promise<{ rows: AgentRow[]; verdict: string | null; rating: Rating | null; stance: "keep" | "skip" | "abstain" }> {
+  const rows: AgentRow[] = [], t0 = Date.now(), total = o.deadlineMs ?? 75_000;
+  const facts = JSON.parse(JSON.stringify({ ref: inp.ref, instrument: inp.sym, strategy: inp.strategy, direction: inp.dir, regime: inp.regime, rules_said: inp.why.slice(0, 8), plan: inp.plan,
+    analyst_reports: inp.analysts ?? null, chart: inp.chart, deterministic_checks: inp.checks, news_risk: inp.newsRisk ?? null, lessons_from_past_trades: (inp.lessons ?? []).slice(0, 6) }));
   rows.push({ agent: "desk-checks", input_summary: `${inp.ref} ${inp.dir} ${inp.strategy}`, output: { ref: inp.ref, authority: "advisory", checks: inp.checks } });
-  if (!o.providers.length) return { rows, verdict: null };
-  const notes: Record<string, unknown> = {};
-  for (const role of ["analyst", "bear", "bull", "judge"] as const) {
-    const left = total - (Date.now() - t0); if (left < 2500) { rows.push({ agent: `desk-${role}`, input_summary: inp.ref, output: { ref: inp.ref }, error: "workflow deadline reached" }); break; }
-    const r = await decideJSON(ROLES[role].system, JSON.stringify({ facts, notes }), (x) => ROLES[role].validate(x) as unknown, { providers: o.providers, usage: o.usage, now: o.now, deadlineMs: Math.min(left, 9000), timeoutMs: 7000, maxTokens: 380, fetchImpl: o.fetchImpl, sleep: o.sleep });
-    if ("errors" in r) { rows.push({ agent: `desk-${role}`, input_summary: inp.ref, output: { ref: inp.ref }, error: r.errors.join("; ").slice(0, 200) }); break; }
-    notes[role] = r.value; rows.push({ agent: `desk-${role}`, input_summary: inp.ref, output: { ref: inp.ref, authority: "advisory", ...(r.value as object) }, provider: `${r.provider}/${r.model}`, ms: r.ms });
-  }
-  const j = notes.judge as { verdict: string } | undefined;
-  return { rows, verdict: j?.verdict ?? null };
+  if (inp.analysts) rows.push({ agent: "desk-analysts", input_summary: `${inp.ref} market/sentiment/positioning/news`, output: { ref: inp.ref, authority: "advisory", ...inp.analysts } });
+  if (!o.providers.length) return { rows, verdict: null, rating: null, stance: "abstain" };
+  const notes: { role: string; out: unknown }[] = [];
+  const stage = async (role: RoleId, agent: string): Promise<any | null> => {
+    const left = total - (Date.now() - t0);
+    if (left < 2500) { rows.push({ agent, input_summary: inp.ref, output: { ref: inp.ref }, error: "workflow deadline reached" }); return null; }
+    const r = await decideJSON(ROLES[role].system, JSON.stringify({ facts, debate_so_far: notes }), (x) => ROLES[role].validate(x) as unknown,
+      { providers: o.providers, usage: o.usage, now: o.now, deadlineMs: Math.min(left, 9000), timeoutMs: 7000, maxTokens: 420, fetchImpl: o.fetchImpl, sleep: o.sleep });
+    if ("errors" in r) { rows.push({ agent, input_summary: inp.ref, output: { ref: inp.ref }, error: r.errors.join("; ").slice(0, 200) }); return null; }
+    notes.push({ role: agent.replace("desk-", ""), out: r.value });
+    rows.push({ agent, input_summary: inp.ref, output: { ref: inp.ref, authority: "advisory", ...(r.value as object) }, provider: `${r.provider}/${r.model}`, ms: r.ms });
+    return r.value;
+  };
+  const done = (pm: any | null) => {
+    const rt = pm ? (pm.rating as Rating) : null, stance = ratingStance(rt, inp.dir);
+    const last = rows[rows.length - 1];
+    if (pm && last?.agent === "desk-pm") last.output = { ...last.output, direction: inp.dir, stance };   // the mapping FILTER-1 scores, stored with the rating
+    return { rows, verdict: rt, rating: rt, stance };
+  };
+  for (let i = 0; i < Math.max(1, o.debateRounds ?? 1); i++) { if (!(await stage("bull", "desk-bull"))) return done(null); if (!(await stage("bear", "desk-bear"))) return done(null); }
+  if (!(await stage("research", "desk-research"))) return done(null);
+  if (!(await stage("trader", "desk-trader"))) return done(null);
+  for (let i = 0; i < Math.max(1, o.riskRounds ?? 1); i++) for (const [role, agent] of [["aggressive", "desk-risk-aggressive"], ["conservative", "desk-risk-conservative"], ["neutral", "desk-risk-neutral"]] as const) if (!(await stage(role, agent))) return done(null);
+  return done(await stage("pm", "desk-pm"));
+}
+
+/** Deterministic lessons from recent closed trades of the same strategy (newest first). Facts only, no interpretation. */
+export function lessonsFrom(trades: { strategy?: string; dir?: string; r?: number | null; reason?: string | null; close_t?: string }[]): string[] {
+  const ts = (Array.isArray(trades) ? trades : []).filter((t) => typeof t.r === "number" && Number.isFinite(t.r)).slice(0, 8);
+  if (!ts.length) return [];
+  const sum = ts.reduce((a, t) => a + (t.r as number), 0), wins = ts.filter((t) => (t.r as number) > 0).length;
+  return [`last ${ts.length} closed ${ts[0].strategy ?? ""} trades: ${wins} won, total ${sum.toFixed(2)}R`,
+    ...ts.slice(0, 5).map((t) => `${String(t.close_t ?? "").slice(0, 10)} ${t.dir ?? "?"}: ${(t.r as number).toFixed(2)}R (${String(t.reason ?? "closed").slice(0, 30)})`)];
 }

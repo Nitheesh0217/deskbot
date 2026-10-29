@@ -14,19 +14,20 @@ export const FILTER_EXPERIMENT = {
 export type VerdictRow = { ref: string; arm: "rules" | "ai"; sym: string; strategy: string; take: boolean | null; verdict: string; detail: Record<string, unknown>; provider: string | null; ms: number | null };
 type Row = { agent: string; output?: Record<string, unknown> | null; provider?: string | null; ms?: number | null; error?: string | null };
 
-/** The two shadow decisions for one entry. rules: skip if any pre-trade check is a warning. ai: keep on "agree", skip on "disagree", abstain otherwise. */
+/** The two shadow decisions for one entry. rules: skip if any pre-trade check is a warning.
+ *  ai: the portfolio manager's 5-tier rating mapped onto the trade's direction (desk.ratingStance): keep, skip, or abstain on Hold/missing. */
 export function verdictsFor(ref: string, sym: string, strategy: string, checks: Check[], workflowRows: Row[]): VerdictRow[] {
   const warns = checks.filter((c) => c.level === "warn").map((c) => c.id);
   const rules: VerdictRow = { ref, arm: "rules", sym, strategy, take: warns.length === 0, verdict: warns.length ? "skip" : "keep", detail: { warns }, provider: null, ms: null };
-  const judge = workflowRows.find((r) => r.agent === "desk-judge");
-  const llm = workflowRows.filter((r) => r.agent.startsWith("desk-") && r.agent !== "desk-checks" && r.agent !== "desk-postmortem");
-  const v = judge && !judge.error ? String((judge.output ?? {}).verdict ?? "") : "";
+  const pm = workflowRows.find((r) => r.agent === "desk-pm" && !r.error);
+  const llm = workflowRows.filter((r) => r.agent.startsWith("desk-") && !["desk-checks", "desk-analysts", "desk-postmortem"].includes(r.agent));
+  const stance = pm ? String((pm.output ?? {}).stance ?? "") : "";
   const ms = llm.reduce((a, r) => a + (r.ms ?? 0), 0);
   const ai: VerdictRow = {
-    ref, arm: "ai", sym, strategy, take: v === "agree" ? true : v === "disagree" ? false : null,
-    verdict: v || (llm.length ? "error" : "no_provider"),
-    detail: { calls: llm.filter((r) => r.provider).length, errors: llm.filter((r) => r.error).map((r) => String(r.error).slice(0, 120)), reason: judge?.output?.reason ?? null },
-    provider: judge?.provider ?? null, ms: ms || null,
+    ref, arm: "ai", sym, strategy, take: stance === "keep" ? true : stance === "skip" ? false : null,
+    verdict: pm ? (stance || "abstain") : llm.length ? "error" : "no_provider",
+    detail: { calls: llm.filter((r) => r.provider).length, errors: llm.filter((r) => r.error).map((r) => String(r.error).slice(0, 120)), rating: pm?.output?.rating ?? null, summary: pm?.output?.executive_summary ?? null },
+    provider: pm?.provider ?? null, ms: ms || null,
   };
   return [rules, ai];
 }
