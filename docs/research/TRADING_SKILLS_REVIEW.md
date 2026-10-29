@@ -52,3 +52,11 @@ The README positions agents/skills/connectors around investment banking, equity 
 4. Consider a selected skill/SDK only if it measurably reduces review effort and passes tool-permission, auxiliary-code, license and cost checks.
 
 Not reviewed in depth in this increment: Qlib/RD-Agent, the remaining large skill catalogs, every referenced script, hosted connector behavior or the alleged professional profitability of any author. Existing engine/framework research should not be treated as a completed integration. No source inspected establishes a repeatable $300→20× outcome or an income guarantee.
+
+
+## Installed 28-29 Oct 2026 (owner request), selectively
+- Installed into `.claude/skills/` unmodified from marian2js/trading-skills `f1ae7d4` (MIT): `post-trade-review` and `execution-plan-check`. Each is a SKILL.md plus one text reference file; no scripts, no allowed-tools, no tool or network instructions (grep and file-type checked). Provenance and license are beside each skill (`UPSTREAM.txt`, `LICENSE`).
+- Not installed: tradermonty `signal-postmortem` (ships scripts, feeds results into automatic aggregator weights and uses fixed 5/20-day conventions, which conflicts with the no-automatic-weight-update rule); Jakeschincariol trader-skill (broker execution workflow); AGIPro skills (numerical examples need independent correction); whole collections. Revisit any of them only after reviewing the exact files and a stated use.
+- Skills guide reviews; they cannot change configuration, risk, orders or tool permissions.
+## 29 Oct 2026 follow-up
+A second, run-based evaluation of the most-starred trading-skill repositories (what was installed, what each tool found on DeskBot data, and what was rejected and why) is in [SKILL_EVALUATION.md](SKILL_EVALUATION.md).

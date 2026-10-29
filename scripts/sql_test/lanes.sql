@@ -1,0 +1,27 @@
+create schema t; create function t.must(name text, cond boolean) returns void language plpgsql as $$ begin if cond is not true then raise exception 'FAIL  %', name; end if; raise notice 'PASS  %', name; end $$;
+create function t.raises(name text, as_role text, stmt text, pat text) returns void language plpgsql as $$
+begin begin if as_role is not null then execute format('set local role %I', as_role); end if; execute stmt; reset role; raise exception 'FAIL  % (statement succeeded)', name;
+exception when others then reset role; if sqlerrm like 'FAIL  %' then raise; end if; if sqlerrm !~* pat then raise exception 'FAIL  % (wrong error: %)', name, sqlerrm; end if; raise notice 'PASS  % [%]', name, left(sqlerrm, 60); end; end $$;
+grant usage on schema t to anon, authenticated, service_role;
+set role service_role;
+insert into public.dbv5_lane_state(lane_id,sym,strategy,spec,cfg_sha256,state) values ('BTC:SWEEP_REV','BTC','SWEEP_REV','{}',repeat('a',64),'{}');
+select t.must('service_role can create lane state', (select count(*) from public.dbv5_lane_state) = 1);
+update public.dbv5_lane_state set state='{"equity":1}' where lane_id='BTC:SWEEP_REV';
+select t.must('lane state is updatable', (select state->>'equity' from public.dbv5_lane_state) = '1');
+reset role;
+select t.raises('outcome before any decision is rejected', 'service_role', $$insert into public.dbv5_lane_events(lane_id,seq,kind,decision_id,record) values ('BTC:SWEEP_REV',1,'outcome','LD-1','{}')$$, 'no earlier decision');
+set role service_role;
+insert into public.dbv5_lane_events(lane_id,seq,kind,decision_id,record) values ('BTC:SWEEP_REV',1,'decision','LD-1','{}');
+insert into public.dbv5_lane_events(lane_id,seq,kind,decision_id,record) values ('BTC:SWEEP_REV',2,'outcome','LD-1','{}');
+reset role;
+select t.must('decision then outcome accepted', (select count(*) from public.dbv5_lane_events) = 2);
+select t.raises('duplicate decision rejected', 'service_role', $$insert into public.dbv5_lane_events(lane_id,seq,kind,decision_id,record) values ('BTC:SWEEP_REV',3,'decision','LD-1','{}')$$, 'already recorded');
+select t.raises('outcome with a lower seq than its decision rejected', 'service_role', $$insert into public.dbv5_lane_events(lane_id,seq,kind,decision_id,record) values ('BTC:SWEEP_REV',1000,'outcome','LD-nope','{}')$$, 'no earlier decision');
+select t.raises('events cannot be updated', 'service_role', $$update public.dbv5_lane_events set record='{"x":1}'$$, 'permission denied');
+select t.raises('events cannot be deleted by service_role', 'service_role', $$delete from public.dbv5_lane_events$$, 'permission denied');
+select t.raises('events cannot be updated by the owner', null, $$update public.dbv5_lane_events set record='{"x":1}'$$, 'append-only');
+select t.raises('events cannot be deleted by the owner', null, $$delete from public.dbv5_lane_events$$, 'append-only');
+select t.raises('events cannot be truncated by the owner', null, $$truncate public.dbv5_lane_events$$, 'append-only');
+select t.raises('anon cannot read lane events', 'anon', $$select * from public.dbv5_lane_events$$, 'permission denied');
+select t.raises('anon cannot write lane state', 'anon', $$insert into public.dbv5_lane_state(lane_id,sym,strategy,spec,cfg_sha256,state) values ('x','x','x','{}',repeat('a',64),'{}')$$, 'permission denied');
+select t.must('RLS enabled on both lane tables', (select bool_and(relrowsecurity) from pg_class where relname in ('dbv5_lane_state','dbv5_lane_events')));

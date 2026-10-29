@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased — strategy coverage (evidence only; entries, sizing, exits and risk unchanged)
+- Per-strategy evaluation trace and reason codes (`coverage.ts`), counters in `state.cov`, `lastRun.coverage`; zero closed trades no longer looks like "not evaluated". Silent code paths now give reasons; a throwing strategy is isolated; VWAP sigma undefined until 4 bars of the UTC day. Audit: [STRATEGY_COVERAGE.md](STRATEGY_COVERAGE.md). Independent shadow lanes: [SHADOW_LANES.md](SHADOW_LANES.md).
+- Dashboard Strategies tab: all 11 strategies with an operational state (RUNNING, WAITING FOR FIRST BAR, DISABLED, DATA BLOCKED, ERROR) separate from sizing, counters, latest rejection reason, positions and closed trades separately, PAPER label, dated research references with a note when they disagree with the effective configuration.
+
+## Unreleased — setup view and chart zones (no change to trading logic)
+- Dashboard: trade setup card (red stop block, green TP blocks, structure checks), chart layers for FVG, IFVG, order blocks, value area, premium/discount, BOS/CHoCH and liquidity, focus-on-trade view. See [ZONES.md](ZONES.md).
+- Chart agent now also logs per-timeframe zones (`lastRun.desk.chart.zones`). Zone reads never affect entries, stops, targets, sizing or risk, and a failure in them cannot break a run.
+- Selective skill install: `post-trade-review` and `execution-plan-check` (marian2js, pinned, text-only) under `.claude/skills/`.
+## Unreleased — third-party skill evaluation (no change to the bot)
+- Installed five audited, pinned skills (backtest-expert, backtest-review, data-scrub, strategy-critique, risk-report); added `scripts/data_scrub.py` and `scripts/backtest_expert_gate.py`; evaluation and findings in [research/SKILL_EVALUATION.md](research/SKILL_EVALUATION.md). Finding: the PAXG research dataset has stale bars concentrated in 2023-2024.
+## Unreleased — desk review layer (advisory; entries, sizing, exits and risk unchanged)
+- After a trade is opened: deterministic pre-trade checks and optional analyst, bear, bull, judge roles (free providers, shadow); after a trade closes: deterministic post-trade review. All rows go to `dbv5_agent_log`, joined to the trade by position id. Runs after state is saved; the old pre-save single-call ai-review is replaced. See [AGENT_WORKFLOWS.md](AGENT_WORKFLOWS.md).
+
 ## v5.8.0 — desk agents (2026-10-24)
 - New `agents.ts` + engine functions: chart agent (levels across 1m–4H), signal validator, risk agent (candle-body stop), re-entry agent, optional shadow-only AI review. All logged to `dbv5_agent_log`; dashboard gets an **Agent desk** card and `agent:` level lines on the Chart tab. See [AGENTS.md](AGENTS.md).
 - Chart agent is on. **Body-stop, re-entry and validator ship OFF**: in 1-year backtests (BTC two years, gold one year) every combination was worse than the live config. Numbers in AGENTS.md.
@@ -69,3 +82,6 @@ TradingView injection + Vercel `deskbot-v3` + Google Sheet / Supabase `bot_state
   | all four | 852 | 846 |
 - Live: BTC `be`, Gold `stall`. Backtest used the 5m trend as the reversal signal (no 1m history); live uses real 1m, so it may fire more often.
 - Dashboard: 1M chip, "Trade manager" log on the open-position card.
+
+## Trading Tower release candidate
+- Website: spatial-glass skin merged with the trade-setup/zone chart and the coverage Strategies tab; new Trading Tower tab (floors, staff, hand-off animation, portfolio growth). Web only; no backend, risk or config change. See docs/TOWER.md.

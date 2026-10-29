@@ -15,6 +15,7 @@ import {
   CFG, chartRead, validateSignal, type Snap, type Series, type Signal, type Reject, type State, type M1View, type ChartRead,
 } from "./engine.ts";
 import { decideJSON, type Provider, type Usage } from "./ai.ts";
+import { zonesOf, type Bar as ZBar } from "./zones.ts";
 
 export type AgentRow = { agent: string; input_summary: string; output: Record<string, unknown>; provider?: string | null; ms?: number; error?: string | null };
 
@@ -28,6 +29,19 @@ export function deskChart(c: ChartRead) {
     resistance: c.resistance ? { px: px(c.resistance.px), name: c.resistance.name, atr: +c.resistance.distAtr.toFixed(2) } : null,
     levels: c.levels.slice(0, 10).map((l) => ({ px: px(l.px), name: l.name, side: l.side, blocks: l.blocks })),
   };
+}
+
+/** Price-structure zones (FVG, IFVG, order blocks, value, premium/discount, structure) per timeframe. Reaction areas by fixed rules, not forecasts. Never throws. */
+export function deskZones(S: Series) {
+  const one = (b: ZBar[]) => {
+    try {
+      const r = zonesOf(b.slice(-400));
+      return { atr: px(r.atr), trend: r.trend, range: r.range ? { hi: px(r.range.hi), lo: px(r.range.lo), eq: px(r.range.eq), zone: r.range.zone } : null, value: r.value ? { poc: px(r.value.poc), vah: px(r.value.vah), val: px(r.value.val) } : null,
+        zones: r.zones.slice(0, 8).map((z) => ({ kind: z.kind, side: z.side, top: px(z.top), bot: px(z.bot), t0: z.t0, touched: z.touched, filled: z.filled })),
+        structure: r.structure.map((e) => ({ kind: e.kind, side: e.side, px: px(e.px), t: e.t })), pools: r.pools.map((p) => ({ kind: p.kind, px: px(p.px), swept: p.swept })) };
+    } catch { return null; }
+  };
+  return { m15: one(S.f.m15), h1: one(S.f.h1), h4: one(S.f.h4) };
 }
 
 export type DeskInput = {
@@ -50,7 +64,7 @@ export function runDesk(a: DeskInput): { rows: AgentRow[]; chart: ChartRead; sum
   if (st.reentry || a.opened?.reentry) rows.push({ agent: "reentry", input_summary: CFG.REENTRY.on ? "armed after a stop-out" : "inactive (REENTRY off)", output: { enabled: CFG.REENTRY.on, armed: st.reentry ?? null, openedReentry: !!a.opened?.reentry } });
   if (a.traderActs.length) rows.push({ agent: "manager", input_summary: `${a.traderActs.length} adjustment(s)`, output: { acts: a.traderActs, plan: st.pos?.plan ?? [] } });
   if (a.opened) rows.push({ agent: "decision", input_summary: `OPEN ${a.opened.dir.toUpperCase()} ${a.opened.strategy}${a.opened.reentry ? " (re-entry)" : ""}`, output: a.opened });
-  const summary = { chart: deskChart(chart), body: CFG.BODY_SL.on, reentry: CFG.REENTRY.on ? { armed: st.reentry ?? null } : null, validator: CFG.VALIDATOR.on, meaningful };
+  const summary = { chart: { ...deskChart(chart), zones: deskZones(S) }, body: CFG.BODY_SL.on, reentry: CFG.REENTRY.on ? { armed: st.reentry ?? null } : null, validator: CFG.VALIDATOR.on, meaningful };
   return { rows: meaningful || snap.new15 ? rows : [], chart, summary };
 }
 
