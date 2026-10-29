@@ -58,15 +58,18 @@ async function macro() {
 
 // Crypto board: CoinGecko markets (7-day sparkline) + global dominance. Binance 24h tickers as the fallback for prices.
 async function crypto() {
-  const [m, g] = await Promise.allSettled([
+  const [m, g, px] = await Promise.allSettled([
     get("https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=15&page=1&sparkline=true&price_change_percentage=24h", "application/json").then((r) => r.json()),
     get("https://api.coingecko.com/api/v3/global", "application/json").then((r) => r.json()),
+    // the gold book's instrument is rarely in the top 15, so it is always fetched by id
+    get("https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=pax-gold&sparkline=true&price_change_percentage=24h", "application/json").then((r) => r.json()),
   ]);
+  if (m.status === "fulfilled" && Array.isArray(m.value) && px.status === "fulfilled" && Array.isArray(px.value) && !m.value.some((r) => r.id === "pax-gold")) m.value.push(...px.value.slice(0, 1));
   let rows = m.status === "fulfilled" && Array.isArray(m.value) ? m.value.map((r) => ({ symbol: String(r.symbol || "").toUpperCase().slice(0, 12), name: String(r.name || "").slice(0, 40), price: num(r.current_price), change24h: num(r.price_change_percentage_24h), marketCap: num(r.market_cap), volume24h: num(r.total_volume), rank: num(r.market_cap_rank),
     spark: Array.isArray(r.sparkline_in_7d && r.sparkline_in_7d.price) ? r.sparkline_in_7d.price.filter((x) => Number.isFinite(x)).filter((_, i, a) => i % Math.max(1, Math.floor(a.length / 56)) === 0) : [] })) : [];
   let source = "coingecko";
   if (!rows.length) {
-    const syms = ["BTCUSDT", "ETHUSDT", "PAXGUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"];
+    const syms = ["BTCUSDT", "PAXGUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"];
     const t = await (await get(`https://data-api.binance.vision/api/v3/ticker/24hr?symbols=${encodeURIComponent(JSON.stringify(syms))}`, "application/json")).json();
     rows = (Array.isArray(t) ? t : []).map((r) => ({ symbol: String(r.symbol).replace(/USDT$/, ""), name: String(r.symbol), price: num(r.lastPrice), change24h: num(r.priceChangePercent), marketCap: null, volume24h: num(r.quoteVolume), rank: null, spark: [] }));
     source = "binance";

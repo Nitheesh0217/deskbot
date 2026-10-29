@@ -41,7 +41,7 @@ test("macro: FRED CSV latest, change, and missing points ('.') skipped", async (
 test("crypto: CoinGecko rows with sparkline; Binance fallback when CoinGecko fails; upstream error is a 502, not a crash", async () => {
   const g = await call({ k: "crypto" }, (u) => u.includes("/global") ? ok({ data: { total_market_cap: { usd: 3e12 }, market_cap_percentage: { btc: 57.1, eth: 11 }, market_cap_change_percentage_24h_usd: 1.2 } })
     : ok([{ symbol: "btc", name: "Bitcoin", current_price: 81000, price_change_percentage_24h: 1.5, market_cap: 1.6e12, total_volume: 3e10, market_cap_rank: 1, sparkline_in_7d: { price: Array.from({ length: 168 }, (_, i) => 80000 + i) } }]));
-  assert.equal(g.json.data.source, "coingecko"); assert.equal(g.json.data.rows[0].symbol, "BTC"); assert.ok(g.json.data.rows[0].spark.length <= 60); assert.equal(g.json.data.global.btcDominance, 57.1);
+  assert.equal(g.json.data.source, "coingecko"); assert.equal(g.json.data.rows[0].symbol, "BTC"); assert.ok(g.json.data.rows.length >= 2, "PAXG appended by id"); assert.ok(g.json.data.rows[0].spark.length <= 60); assert.equal(g.json.data.global.btcDominance, 57.1);
   const fb = await call({ k: "crypto" }, (u) => u.includes("coingecko") ? new Response("rate limited", { status: 429 }) : ok([{ symbol: "BTCUSDT", lastPrice: "81000.5", priceChangePercent: "-0.4", quoteVolume: "123" }]));
   assert.equal(fb.json.data.source, "binance"); assert.equal(fb.json.data.rows[0].symbol, "BTC"); assert.equal(fb.json.data.rows[0].price, 81000.5);
   const down = await call({ k: "calendar" }, () => new Response("x", { status: 503 })); assert.equal(down.status, 502); assert.match(down.headers["cache-control"], /s-maxage=30/);
