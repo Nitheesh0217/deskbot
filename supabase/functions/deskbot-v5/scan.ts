@@ -25,8 +25,8 @@ export function scanMarket(sym: string, f: Frames, ctx: MarketCtx, now: number) 
   if (Number.isFinite(s.rsi15) && s.rsi15 <= 25) why.push(`RSI15 ${s.rsi15.toFixed(0)} (stretched down)`);
   if (Math.abs(s.vwapDev) >= 2) why.push(`${s.vwapDev.toFixed(1)}σ from VWAP`);
   if (ctx && Math.abs(ctx.funding) >= 0.0001) why.push(`funding ${(ctx.funding * 100).toFixed(4)}%/h (${ctx.funding > 0 ? "longs" : "shorts"} paying)`);
-  // switched-off strategies are configuration, not market information, so they are left out of the "blocked by" summary
-  const reasons = new Map<string, number>(); for (const x of rejects) if (!/switched off/i.test(x.reason)) reasons.set(x.reason, (reasons.get(x.reason) ?? 0) + 1);
+  // switched-off strategies (configuration) and "waits for a later close" (timing) are not market information: left out of the summary
+  const reasons = new Map<string, number>(); for (const x of rejects) if (!/switched off|^waits for/i.test(x.reason)) reasons.set(x.reason, (reasons.get(x.reason) ?? 0) + 1);
   return {
     sym, ok: true as const, barT: s.T, price: r(s.price, s.price > 100 ? 2 : 5), chg24h: r(((last - d1) / d1) * 100, 2), regime: s.regime, trend: align,
     rsi15: r(s.rsi15, 1), rsi1h: r(s.rsi1h, 1), chop15: r(s.chop15, 1), atr15Pct: r((s.atr15 / s.price) * 100, 3), vwapDev: r(s.vwapDev, 2),

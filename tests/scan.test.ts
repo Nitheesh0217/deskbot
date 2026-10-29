@@ -30,7 +30,7 @@ test("scanMarket reports measured context and the rules' own setups, with no pro
     assert.ok(found > 0, "the engine's rules fire somewhere on a long synthetic series");
     applyCfg({ MIN_SCORE: 0, RISK_SCALE: { EMA_PB: 0 } } as never);
     const cutT = f.m5[7999].ct, off = scanMarket("ETH", { m5: f.m5.slice(0, 8000), m15: f.m15.filter((b) => b.ct <= cutT), h1: f.h1.filter((b) => b.ct <= cutT), h4: f.h4.filter((b) => b.ct <= cutT) }, null, now);
-    assert.ok(off.ok && off.blocked.every((b) => !/switched off/i.test(b.reason)), "switched-off strategies are not reported as market blocks");
+    assert.ok(off.ok && off.blocked.every((b) => !/switched off|^waits for/i.test(b.reason)), "configuration and timing are not reported as market blocks");
     assert.deepEqual(scanMarket("X", { m5: [], m15: [], h1: [], h4: [] }, null, 0), { sym: "X", ok: false, error: "not enough history" });
   } finally { applyCfg(); }
 });
