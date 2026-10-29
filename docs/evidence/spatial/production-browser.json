@@ -1,0 +1,85 @@
+{
+  "verifiedAssets": [
+    {
+      "name": "app.js",
+      "status": 200,
+      "md5": "dce9a882c0fb4384d602cf9e8632cf1e"
+    },
+    {
+      "name": "desk-layout.css",
+      "status": 200,
+      "md5": "9d479392c696720b2bbc450cccb26596"
+    },
+    {
+      "name": "desk-model.js",
+      "status": 200,
+      "md5": "303359a6bf3860924e7fea07e72d3dbd"
+    },
+    {
+      "name": "desk-motion.js",
+      "status": 200,
+      "md5": "3804d0e5bf59cbb158deef7b7a76a789"
+    },
+    {
+      "name": "evidence.js",
+      "status": 200,
+      "md5": "3708d331d413c28fdc6b5a2f9aeffed2"
+    },
+    {
+      "name": "favicon.svg",
+      "status": 200,
+      "md5": "423274d8ca11b5c6654d0c80bad6e4b1"
+    },
+    {
+      "name": "index.html",
+      "status": 200,
+      "md5": "ec884d1ea0b0b2cc2b665193f01f5afe"
+    },
+    {
+      "name": "terminal.css",
+      "status": 200,
+      "md5": "3f7b38b26424f632937c8bcc3604b110"
+    },
+    {
+      "name": "vendor/LICENSE.lightweight-charts",
+      "status": 200,
+      "md5": "6ea2c1e51e97404c7a5b5b2dc768a45e"
+    },
+    {
+      "name": "vendor/LICENSE.motion.md",
+      "status": 200,
+      "md5": "f67d6e0b9cdcc7b31a7ff058e664e133"
+    },
+    {
+      "name": "vendor/NOTICE.lightweight-charts",
+      "status": 200,
+      "md5": "78a25eecff4d297a557e94809f1f8f03"
+    },
+    {
+      "name": "vendor/lightweight-charts-4.2.0.js",
+      "status": 200,
+      "md5": "bb318371ce8811435f42f4a6ba8d64a7"
+    },
+    {
+      "name": "vendor/motion-14.7.1.js",
+      "status": 200,
+      "md5": "a6db99b103781cc673832e725b76beab"
+    }
+  ],
+  "title": "DeskBot — Spatial Research Desk",
+  "btcEquity": "$340.60",
+  "btcConfigured": "7",
+  "agentTiles": 8,
+  "setupTiles": 11,
+  "theme": "light",
+  "filteredSetups": 1,
+  "strategies": 11,
+  "goldEquity": "$322.27",
+  "goldConfigured": "8",
+  "chart": "Reference indicators use the displayed feed; reported positions use the runner feed. These can differ. Candles: Hyperliquid PAXG (gold) · refreshed 08:01 PM.",
+  "chartError": null,
+  "returnedTradeRows": 12,
+  "mobileOverflow": false,
+  "errors": [],
+  "urlHost": "deskbot-azure.vercel.app"
+}

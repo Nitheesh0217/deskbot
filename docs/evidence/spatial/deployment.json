@@ -1,0 +1,20 @@
+{
+  "production_url": "https://deskbot-azure.vercel.app",
+  "project_id": "prj_d86L2qLplfP4U44p9mpJIYy9M8CI",
+  "team_id": "team_jB1ghJBqclkgtBynRKZS5TlV",
+  "deployment_id": "dpl_2Ppa7PfD4BRFW6ryYq9UWx4Mhti4",
+  "verified_preview": "dpl_7uJZtFiNcKEnXwz4x7c7DFUnF1dH",
+  "previous_production": "dpl_D68SKgC5vHp5j8Yyae1npqxyPAwP",
+  "source_commit_local": "158de66fbef37a28c2ca11b039ba07bccf097274",
+  "source_pushed_to_github": false,
+  "ready_at_utc": "2026-10-29T00:00:50.554000+00:00",
+  "ready_at_new_york": "2026-10-28T20:00:50.554000-04:00",
+  "delivery": "direct upload of reviewed static files",
+  "browser_errors": 0,
+  "public_assets_verified_by_source_md5_etag": 13,
+  "unit_tests_passed": 89,
+  "synthetic_browser_checks_passed": 37,
+  "typecheck": "exit 0",
+  "runtime_error_query": "5-minute query succeeded; no matching error/fatal logs",
+  "drains": 0
+}

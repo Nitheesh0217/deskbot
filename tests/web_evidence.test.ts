@@ -38,9 +38,11 @@ test('old validation and missing deployment identity remain visible', () => {
   assert.ok(r.issues.some((s: string) => s.includes('validation')));
   assert.ok(r.issues.some((s: string) => s.includes('artifact SHA')));
 });
-test('website loads helper before usage and its inline scripts parse', () => {
+test('website loads presentation helpers before controller and external scripts parse', () => {
   const html = readFileSync(new URL('../web/index.html', import.meta.url), 'utf8');
-  assert.ok(html.indexOf('src="./evidence.js"') < html.indexOf('const SNAP'));
+  assert.ok(html.indexOf('src="./evidence.js"') < html.indexOf('src="./app.js"'));
+  assert.ok(html.indexOf('src="./desk-model.js"') < html.indexOf('src="./app.js"'));
+  for (const file of ['evidence.js', 'desk-model.js', 'app.js']) new vm.Script(readFileSync(new URL('../web/' + file, import.meta.url), 'utf8'));
   for (const match of html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)) {
     if (match[1].trim()) new vm.Script(match[1]);
   }
@@ -49,10 +51,11 @@ test('website loads helper before usage and its inline scripts parse', () => {
 });
 test('a failed refresh clears live evidence and exposes the disconnected banner', async () => {
   const html = readFileSync(new URL('../web/index.html', import.meta.url), 'utf8');
-  const functionBody = html.slice(html.indexOf('async function pullDirect()'), html.indexOf('async function pull()'));
+  const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+  const functionBody = app.slice(app.indexOf('async function pullDirect()'), app.indexOf('async function pull()'));
   const banner = { hidden: true, textContent: '' };
   const ctx: any = { AbortSignal, API: 'https://example.test/status', LIVE: true, fetch: async () => ({ ok: false }),
-    $: () => banner, renderSystem: () => {}, fromApi: () => { throw new Error('not called'); } };
+    $: () => banner, renderAll: () => {}, fromApi: () => { throw new Error('not called'); } };
   vm.createContext(ctx); vm.runInContext(functionBody, ctx);
   assert.equal(await ctx.pullDirect(), false);
   assert.equal(ctx.LIVE, false); assert.equal(banner.hidden, false);

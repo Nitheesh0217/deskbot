@@ -82,3 +82,6 @@ TradingView injection + Vercel `deskbot-v3` + Google Sheet / Supabase `bot_state
   | all four | 852 | 846 |
 - Live: BTC `be`, Gold `stall`. Backtest used the 5m trend as the reversal signal (no 1m history); live uses real 1m, so it may fire more often.
 - Dashboard: 1M chip, "Trade manager" log on the open-position card.
+
+## Trading Tower release candidate
+- Website: spatial-glass skin merged with the trade-setup/zone chart and the coverage Strategies tab; new Trading Tower tab (floors, staff, hand-off animation, portfolio growth). Web only; no backend, risk or config change. See docs/TOWER.md.
