@@ -183,13 +183,15 @@ export function rsiSeries(b: Bar[], p = 14): number[] {
 // VWAP anchored at 00:00 UTC each day (fixes v4's rolling-100h proxy)
 export function vwapDaySeries(b: Bar[]): { vwap: number[]; sd: number[] } {
   const n = b.length, vwap = NaNs(n), sd = NaNs(n);
-  let day = -1, pv = 0, pv2 = 0, vv = 0;
+  let day = -1, pv = 0, pv2 = 0, vv = 0, k = 0;
   for (let i = 0; i < n; i++) {
     const d = Math.floor(b[i].t / 86400_000);
-    if (d !== day) { day = d; pv = 0; pv2 = 0; vv = 0; }
+    if (d !== day) { day = d; pv = 0; pv2 = 0; vv = 0; k = 0; }
     const tp = (b[i].h + b[i].l + b[i].c) / 3, v = Math.max(b[i].v, 1e-9);
-    pv += tp * v; pv2 += tp * tp * v; vv += v;
-    const w = pv / vv; vwap[i] = w; sd[i] = Math.sqrt(Math.max(0, pv2 / vv - w * w));
+    pv += tp * v; pv2 += tp * tp * v; vv += v; k++;
+    const w = pv / vv; vwap[i] = w;
+    // sigma from 1-3 bars is a small-sample artifact (a 2-bar "sd" produced deviations of 20 to 350,000 sigma): undefined until 4 bars of the UTC day
+    sd[i] = k < 4 ? NaN : Math.sqrt(Math.max(0, pv2 / vv - w * w));
   }
   return { vwap, sd };
 }
@@ -341,6 +343,8 @@ export type Signal = {
   reentry?: boolean;    // re-entry after a stop-out
 };
 export type Reject = { strategy: StrategyId; reason: string };
+/** What happened to each strategy in one evaluate() call. Raw facts only; reason codes are assigned by coverage.ts. */
+export type StrategyTrace = { id: StrategyId; kind: "OFF" | "WARMUP" | "ERROR" | "REJECT" | "SILENT" | "GATED" | "ADMITTED"; reason: string; offWhy?: "flag" | "scale" | "opt-in" };
 
 const sgn = (d: Dir) => (d === "long" ? 1 : -1);
 
@@ -400,7 +404,7 @@ function sTrend(s: Snap, rej: Reject[]): Signal | null {
 function sSweep(s: Snap, rej: Reject[]): Signal | null {
   const id: StrategyId = "SWEEP_REV";
   if (!s.new15 || !s.b15) { rej.push({ strategy: id, reason: "Waits for 15m close" }); return null; }
-  const b = s.b15, rng = b.h - b.l; if (!(rng > 0)) return null;
+  const b = s.b15, rng = b.h - b.l; if (!(rng > 0)) { rej.push({ strategy: id, reason: "Zero-range 15m bar (no data to read)" }); return null; }
   const levelsHi: [number, string][] = [[s.hi20_15, "20-bar high"]], levelsLo: [number, string][] = [[s.lo20_15, "20-bar low"]];
   if (s.asian) { levelsHi.push([s.asian.hi, "Asian high"]); levelsLo.push([s.asian.lo, "Asian low"]); }
   let dir: Dir | null = null, lvlName = "", sweepExt = 0;
@@ -425,7 +429,7 @@ function sVwap(s: Snap, rej: Reject[]): Signal | null {
   const id: StrategyId = "VWAP_REVERT";
   if (!s.new15 || !s.b15) { rej.push({ strategy: id, reason: "Waits for 15m close" }); return null; }
   if (s.regime !== "RANGE") { rej.push({ strategy: id, reason: `Regime ${s.regime} (needs RANGE)` }); return null; }
-  if (!(s.vwapSd > 0)) return null;
+  if (!(s.vwapSd > 0)) { rej.push({ strategy: id, reason: "VWAP deviation not defined yet (day just opened, no spread)" }); return null; }
   const b = s.b15; let dir: Dir | null = null;
   if (s.vwapDev >= 2 && s.rsi15 >= 68 && b.c < b.o) dir = "short";
   else if (s.vwapDev <= -2 && s.rsi15 <= 32 && b.c > b.o) dir = "long";
@@ -443,7 +447,7 @@ function sSession(s: Snap, rej: Reject[]): Signal | null {
   const ldn = s.hour >= 7 && s.hour < 10, ny = (s.hour === 13 && s.minute >= 30) || (s.hour >= 14 && s.hour < 16);
   if (!ldn && !ny) { rej.push({ strategy: id, reason: "Outside London/NY open window" }); return null; }
   if (s.regime === "RANGE") { rej.push({ strategy: id, reason: "Range regime" }); return null; }
-  const R = ldn ? s.asian : s.london; if (!R) return null;
+  const R = ldn ? s.asian : s.london; if (!R) { rej.push({ strategy: id, reason: `${ldn ? "Asian" : "London"} range not available yet` }); return null; }
   const b = s.b15; let dir: Dir | null = null;
   if (b.c > R.hi && b.o <= R.hi + 0.25 * s.atr15) dir = "long"; else if (b.c < R.lo && b.o >= R.lo - 0.25 * s.atr15) dir = "short";
   if (!dir) { rej.push({ strategy: id, reason: "No range break on 15m close" }); return null; }
@@ -529,7 +533,7 @@ function sHtfSweep(s: Snap, S: Series, rej: Reject[]): Signal | null {
   const b = tf === "4h" ? s.b4h : (s.i1h >= 0 ? S.f.h1[s.i1h] : null);
   if (!b || !isFinite(s.hi4h) || !isFinite(s.atr4h)) { rej.push({ strategy: id, reason: "4H warming up" }); return null; }
   // for 1h triggers use the 55-bar range of 4H bars closed BEFORE this 1h bar's 4H bucket (no look-ahead: snapshot already uses closed 4H only)
-  const hi = s.hi4h, lo = s.lo4h, rng = b.h - b.l; if (!(rng > 0)) return null;
+  const hi = s.hi4h, lo = s.lo4h, rng = b.h - b.l; if (!(rng > 0)) { rej.push({ strategy: id, reason: "Zero-range trigger bar (no data to read)" }); return null; }
   let dir: Dir | null = null, ext = 0;
   if (b.h > hi && b.c < hi && (b.h - Math.max(b.o, b.c)) >= CFG.HSW_WICK * rng) { dir = "short"; ext = b.h; }
   else if (b.l < lo && b.c > lo && (Math.min(b.o, b.c) - b.l) >= CFG.HSW_WICK * rng) { dir = "long"; ext = b.l; }
@@ -749,9 +753,14 @@ function sReentry(s: Snap, S: Series, st: State, rej: Reject[]): Signal | null {
   return { strategy: id, dir: r.dir, entryRef: s.price, stop, score, why, regime: s.regime, barT: s.T, reentry: true };
 }
 
-export function evaluate(s: Snap, enabled: Record<string, boolean> = {}, S?: Series, st?: State): { signals: Signal[]; rejects: Reject[] } {
+export function evaluate(s: Snap, enabled: Record<string, boolean> = {}, S?: Series, st?: State, trace?: StrategyTrace[]): { signals: Signal[]; rejects: Reject[] } {
   const signals: Signal[] = [], rejects: Reject[] = [];
-  if (!isFinite(s.atr5) || !isFinite(s.atr15) || !isFinite(s.chop15) || !isFinite(s.price)) { rejects.push({ strategy: "TREND_MTF", reason: "Indicators warming up" }); return { signals, rejects }; }
+  const offWhy = (id: StrategyId): "flag" | "scale" | "opt-in" | null => enabled[id] === false ? "flag" : CFG.RISK_SCALE[id] === 0 ? "scale" : (OPT_IN.includes(id) && !(CFG.RISK_SCALE[id] > 0)) ? "opt-in" : null;
+  if (!isFinite(s.atr5) || !isFinite(s.atr15) || !isFinite(s.chop15) || !isFinite(s.price)) {
+    rejects.push({ strategy: "TREND_MTF", reason: "Indicators warming up" });
+    if (trace) for (const id of STRATEGIES) { const w = offWhy(id); trace.push(w ? { id, kind: "OFF", reason: "Strategy switched off", offWhy: w } : { id, kind: "WARMUP", reason: "Indicators warming up (shared 5m/15m indicators not ready)" }); }
+    return { signals, rejects };
+  }
   const off = (id: StrategyId) => enabled[id] === false || CFG.RISK_SCALE[id] === 0 || (OPT_IN.includes(id) && !(CFG.RISK_SCALE[id] > 0));
   // shared pipeline for every candidate: regime gate → AI filter → risk agent (body stop) → validator agent
   const admit = (id: StrategyId, sig: Signal) => {
@@ -780,10 +789,20 @@ export function evaluate(s: Snap, enabled: Record<string, boolean> = {}, S?: Ser
     signals.push(sig);
   };
   for (const id of STRATEGIES) {
-    if (off(id)) { rejects.push({ strategy: id, reason: "Strategy switched off" }); continue; }
-    if (!S && (id === "D_BEARTRAP" || id === "D_THRUST" || id === "HTF_SWEEP" || id === "EMA_CROSS" || id === "SSR" || id === "EMA_PB")) continue;
-    const sig = RUNNERS[id](s, S as Series, rejects);
+    if (off(id)) { rejects.push({ strategy: id, reason: "Strategy switched off" }); trace?.push({ id, kind: "OFF", reason: "Strategy switched off", offWhy: offWhy(id) ?? "flag" }); continue; }
+    if (!S && (id === "D_BEARTRAP" || id === "D_THRUST" || id === "HTF_SWEEP" || id === "EMA_CROSS" || id === "SSR" || id === "EMA_PB")) { trace?.push({ id, kind: "WARMUP", reason: "No series supplied (daily/higher-timeframe strategies need history)" }); continue; }
+    const mark = rejects.length, sigMark = signals.length;
+    let sig: Signal | null = null;
+    // A strategy that throws must not blind the other ten: isolate it, say so, keep evaluating.
+    try { sig = RUNNERS[id](s, S as Series, rejects); }
+    catch (e) { const reason = `Strategy error: ${(e as Error)?.message ?? e}`.slice(0, 160); rejects.push({ strategy: id, reason }); trace?.push({ id, kind: "ERROR", reason }); continue; }
     if (sig) admit(id, sig);
+    if (trace) {
+      const mine = rejects.slice(mark).filter((r) => r.strategy === id);
+      if (sig && signals.length > sigMark) trace.push({ id, kind: "ADMITTED", reason: "Setup passed every gate" });
+      else if (mine.length) trace.push({ id, kind: sig ? "GATED" : "REJECT", reason: mine[mine.length - 1].reason });
+      else trace.push({ id, kind: "SILENT", reason: "No reason recorded" });
+    }
   }
   if (CFG.REENTRY.on && st?.reentry && S && !st.pos && !off(st.reentry.strategy)) {
     const sig = sReentry(s, S, st, rejects);
@@ -820,6 +839,7 @@ export type State = {
   enabled: Record<string, boolean>; created: number;
   reentry?: { strategy: StrategyId; dir: Dir; level: number; t: number; n: number } | null; // armed by a losing stop-out (REENTRY)
   cfg?: Partial<typeof CFG>; // live overrides chosen from backtests (applied each run)
+  cov?: Record<string, import("./coverage.ts").Cov>; covMeta?: import("./coverage.ts").CovMeta;   // observability counters (coverage.ts); never read by trading logic
 };
 
 const emptyStat = (): Stat => ({ n: 0, wins: 0, losses: 0, sumR: 0, grossWin: 0, grossLoss: 0, net: 0 });

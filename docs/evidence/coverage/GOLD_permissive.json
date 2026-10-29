@@ -1,0 +1,186 @@
+{
+ "book": "GOLD",
+ "mode": "permissive",
+ "window": {
+  "from": "2023-10-23T00:00:00.000Z",
+  "to": "2026-10-21T23:59:59.999Z",
+  "days": 1095,
+  "evaluatedBars": 315360
+ },
+ "strategies": {
+  "D_BEARTRAP": {
+   "cadence": "1d",
+   "bars": 315360,
+   "notDue": 314265,
+   "disabled": 0,
+   "insufficientData": 0,
+   "noSetup": 1070,
+   "gateRejected": 0,
+   "errors": 0,
+   "setups": 25,
+   "firstSetupAt": "2023-12-09T23:59:59.999Z",
+   "gateReasons": {}
+  },
+  "D_THRUST": {
+   "cadence": "1h",
+   "bars": 315360,
+   "notDue": 289080,
+   "disabled": 0,
+   "insufficientData": 0,
+   "noSetup": 26187,
+   "gateRejected": 84,
+   "errors": 0,
+   "setups": 9,
+   "firstSetupAt": "2024-04-14T00:59:59.999Z",
+   "gateReasons": {
+    "Thrust stop above price": 1,
+    "Thrust pullback already taken": 83
+   }
+  },
+  "HTF_TREND": {
+   "cadence": "4h",
+   "bars": 315360,
+   "notDue": 308790,
+   "disabled": 0,
+   "insufficientData": 0,
+   "noSetup": 6196,
+   "gateRejected": 0,
+   "errors": 0,
+   "setups": 374,
+   "firstSetupAt": "2023-10-27T19:59:59.999Z",
+   "gateReasons": {}
+  },
+  "TREND_MTF": {
+   "cadence": "5m",
+   "bars": 315360,
+   "notDue": 0,
+   "disabled": 0,
+   "insufficientData": 0,
+   "noSetup": 305426,
+   "gateRejected": 9632,
+   "errors": 0,
+   "setups": 302,
+   "firstSetupAt": "2023-10-26T20:24:59.999Z",
+   "gateReasons": {
+    "#m/#h not aligned (#/#)": 7695,
+    "Against #H bias": 754,
+    "Chop # ≥ #": 342,
+    "EMA#/# against": 325,
+    "Asian session block": 226,
+    "Swing stop out of bounds": 290
+   }
+  },
+  "SWEEP_REV": {
+   "cadence": "15m",
+   "bars": 315360,
+   "notDue": 210240,
+   "disabled": 0,
+   "insufficientData": 76,
+   "noSetup": 99992,
+   "gateRejected": 303,
+   "errors": 0,
+   "setups": 4749,
+   "firstSetupAt": "2023-10-23T00:14:59.999Z",
+   "gateReasons": {
+    "Sweep stop out of bounds": 303
+   }
+  },
+  "VWAP_REVERT": {
+   "cadence": "15m",
+   "bars": 315360,
+   "notDue": 210240,
+   "disabled": 0,
+   "insufficientData": 274,
+   "noSetup": 21036,
+   "gateRejected": 83810,
+   "errors": 0,
+   "setups": 0,
+   "firstSetupAt": null,
+   "gateReasons": {
+    "Regime TREND (needs RANGE)": 43290,
+    "Regime MIXED (needs RANGE)": 40520
+   }
+  },
+  "SESSION_BO": {
+   "cadence": "15m",
+   "bars": 315360,
+   "notDue": 291270,
+   "disabled": 0,
+   "insufficientData": 0,
+   "noSetup": 17799,
+   "gateRejected": 5872,
+   "errors": 0,
+   "setups": 419,
+   "firstSetupAt": "2023-10-25T13:59:59.999Z",
+   "gateReasons": {
+    "Range regime": 4775,
+    "Breakout against #H bias": 712,
+    "Breakout volume < #× avg": 351,
+    "Breakout stop too wide": 34
+   }
+  },
+  "HTF_SWEEP": {
+   "cadence": "4h",
+   "bars": 315360,
+   "notDue": 308790,
+   "disabled": 0,
+   "insufficientData": 0,
+   "noSetup": 6322,
+   "gateRejected": 9,
+   "errors": 0,
+   "setups": 239,
+   "firstSetupAt": "2023-10-27T23:59:59.999Z",
+   "gateReasons": {
+    "Sweep stop too wide": 9
+   }
+  },
+  "EMA_CROSS": {
+   "cadence": "15m",
+   "bars": 315360,
+   "notDue": 210240,
+   "disabled": 0,
+   "insufficientData": 0,
+   "noSetup": 102823,
+   "gateRejected": 0,
+   "errors": 0,
+   "setups": 2297,
+   "firstSetupAt": "2023-10-23T01:14:59.999Z",
+   "gateReasons": {}
+  },
+  "SSR": {
+   "cadence": "15m",
+   "bars": 315360,
+   "notDue": 293460,
+   "disabled": 0,
+   "insufficientData": 0,
+   "noSetup": 17424,
+   "gateRejected": 4468,
+   "errors": 0,
+   "setups": 8,
+   "firstSetupAt": "2024-07-23T13:59:59.999Z",
+   "gateReasons": {
+    "#H bias neutral (EMA# and last BOS disagree)": 4430,
+    "Trigger already fired this window": 37,
+    "Stop too wide (> #×ATR#h)": 1
+   }
+  },
+  "EMA_PB": {
+   "cadence": "5m",
+   "bars": 315360,
+   "notDue": 282474,
+   "disabled": 0,
+   "insufficientData": 0,
+   "noSetup": 29839,
+   "gateRejected": 1437,
+   "errors": 0,
+   "setups": 1610,
+   "firstSetupAt": "2023-10-23T12:39:59.999Z",
+   "gateReasons": {
+    "Bar > #×ATR (chase)": 1437
+   }
+  }
+ },
+ "backtestEntriesByStrategy": null,
+ "backtestNetRByStrategy": null,
+ "note": "descriptive counts; setups = valid after strategy rules and shared gates (before portfolio selection)"
+}
