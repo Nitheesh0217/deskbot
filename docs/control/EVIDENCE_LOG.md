@@ -120,3 +120,19 @@ Findings reproduced by the reviewer and fixed: (1) a failed replacement-entry ev
   - Pre-flight against the live book snapshots: same positions and equity as the v19 bundle; a scan writes only dbv5_scans.
   - Vercel preview dpl_xcmgiZ9oco2GAsB1siziLgo4Wwou READY from 0326916.
 - Not verified: Supabase's hosted gateway / PostgREST version and the production RLS configuration (local PostgREST is stock 12.2.3, schema reconstructed). Step 2–6 production checks in RELEASE_W2_W3.md cover this after approval.
+
+## 30 Oct 2026 - release readiness round 2 (candidate 5662f80dee237c6e30513ce0e3e681c5382b7473; sandbox, NOT deployed)
+- Reconciled first: main 3e25392, PR #19 85a5f1b, PR #20 cb7c553, release head 45d37d9 (source = 0326916), edge v24 → 3e25392. Nothing changed since the previous report except market data (gold EMA_CROSS TP1 filled 01:24 UTC).
+- Ack versus a stale writer, real PostgREST 12.2.3 + PostgreSQL 16.15, unmodified 0326916 code:
+  - B read revision N with pending X, A inserted and acknowledged X, B saved its copy with guard N. Result: stored outbox `[X,Y]`, so X reappeared.
+  - Fix: trigger `dbv5_state_outbox_guard` removes already-logged keys in the same write. After: `[Y]`; B's equity, stop and Y kept; X logged once.
+  - Retried insert/ack changes nothing; an older revision still gets StateConflict; 30 concurrent interleavings: resurrected=0, lost=0 (`RACE=1 scripts/sql_test/postgrest.sh`, 6/6).
+- Bounded recovery: 1,200 pending records with 1.5 s writes drained over 4 runs (≤3 batches / ≤4 s each); fast writes stop at 5 batches (500); failing writes resume next run; nothing lost (`tests/outbox_durability.test.ts`).
+- Rollback compatibility (`ROLLBACK=1 scripts/sql_test/postgrest.sh`, 4/4):
+  - Plain v24's setup insert fails after the lane migration (42P10).
+  - Artifact afdf44a writes a book row beside an existing shadow row, reads book rows only, and discards no shadow record.
+  - Artifact trading pre-flight against the live snapshots equals v19/v24 (BTC 339.26977461902817, GOLD 319.01317097612525 at that time).
+- Candidate 5662f80, all run here:
+  - typecheck pass; npm test 256/256; diff check clean; build:web:check and build-info:check current
+  - postgrest.sh 11/11; race 6/6; rollback 4/4; work_key.sh and shadow_lane.sh pass
+  - smokes tower/markets/scanner/workers/strategies: 0 errors (strategies: 11 matrix rows, no horizontal scroll on mobile).
