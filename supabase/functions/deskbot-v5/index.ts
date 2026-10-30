@@ -20,7 +20,7 @@ import { preTradeChecks, postTradeReview, runDeskWorkflow, analystReports, lesso
 import { verdictsFor, filterReport } from "./experiment.ts";
 import { catchUp } from "./catchup.ts";
 import { scanMarket, rankScan, derivatives, SCAN_NOTE, CALL_HORIZON_H } from "./scan.ts";
-import { signalsOverBars, resolve, trackRecord, shadowRecord, scoreCall, callRecord, PRIORITY, PROMOTION, type NewSignal, type OpenSignal, type Resolution, type OpenCall, type CallScore } from "./track.ts";
+import { signalsOverBars, signalInsertRequest, resolve, trackRecord, shadowRecord, offInBook, withConfig, shadowCfg, shadowCfgId, bookCfgId, SHADOW_VERSION, type LaneTrace, scoreCall, callRecord, PRIORITY, PROMOTION, type NewSignal, type OpenSignal, type Resolution, type OpenCall, type CallScore } from "./track.ts";
 import { captureDecision, pickEntry, decisionIdFor } from "./provenance.ts";
 import { recordCoverage, dispositions, boundaryFlags } from "./coverage.ts";
 import type { StrategyTrace } from "./engine.ts";
@@ -360,8 +360,11 @@ async function experimentStatus() {
 // ─── multi-market scan (read-only; every 15 min by pg_cron). Runs the bot's own rules on each market with a fresh state. ──
 async function runScan() {
   const now = Date.now(), t0 = now;
-  const cfgOf = async (sym: Sym) => (await select(`dbv5_state?id=eq.${rowId(sym)}&select=state->cfg`).catch(() => []))?.[0]?.cfg ?? undefined;
-  const [btcCfg, goldCfg] = await Promise.all([cfgOf("BTC"), cfgOf("GOLD")]);
+  // each book's config AND its per-strategy switches: both decide what the book evaluates (engine.offReason)
+  const bookOf = async (sym: Sym) => { const r = (await select(`dbv5_state?id=eq.${rowId(sym)}&select=cfg:state->cfg,enabled:state->enabled`).catch(() => []))?.[0]; return { cfg: r?.cfg ?? undefined, enabled: (r?.enabled ?? {}) as Record<string, boolean> }; };
+  const [btcBook, goldBook] = await Promise.all([bookOf("BTC"), bookOf("GOLD")]);
+  const btcCfg = btcBook.cfg, goldCfg = goldBook.cfg;
+  const laneTrace: Record<string, { book: LaneTrace; shadow: LaneTrace; bookCfgId: string; shadowCfgId: string | null; shadowIds: string[] }> = {};
   const syms = (Object.keys(SYMBOLS) as Sym[]).sort((a, b) => (PRIORITY[a] ?? 3) - (PRIORITY[b] ?? 3)), markets: unknown[] = [];
   // forward tracking (track.ts): best-effort; a failure here is reported and never stops the scan
   const trackErrors: string[] = [];
@@ -383,12 +386,16 @@ async function runScan() {
             if (c && c.lean !== "NONE" && mine.every((x) => scored.some((y) => y.id === x.id))) newCalls.push({ sym, t: c.t, horizon_h: CALL_HORIZON_H, lean: c.lean, votes: c.votes, source: c.source, cautions: c.cautions, px: c.px, atr: c.atr });
           } catch (e) { trackErrors.push(`${sym} call: ${(e as Error).message}`.slice(0, 120)); }
           try {
-            fresh.push(...signalsOverBars(sym, frames));
-            // isolated shadow lane (P1 books only): evaluators switched off in this book's config, run with an all-on test
-            // config and recorded as lane "shadow". The book config is restored by the finally below / the next applyCfg.
-            if (PRIORITY[sym] === 1) {
-              const bookCfg = sym === "GOLD" ? goldCfg : btcCfg, offIds = new Set(STRATEGIES.filter((id) => !(resolvedCfg(bookCfg).RISK_SCALE[id] > 0)));
-              if (offIds.size) { applyCfg({ ...(bookCfg ?? {}), RISK_SCALE: Object.fromEntries(STRATEGIES.map((id) => [id, 1])) } as never); try { fresh.push(...signalsOverBars(sym, frames, 3, { only: offIds, lane: "shadow" })); } finally { applyCfg(bookCfg); } }
+            // book lane: the book's config and its own switches (P1 books); other markets use the BTC config, untested there
+            const book = sym === "GOLD" ? goldBook : btcBook, isBook = PRIORITY[sym] === 1;
+            laneTrace[sym] = { book: {}, shadow: {}, bookCfgId: bookCfgId(book.cfg), shadowCfgId: null, shadowIds: [] }; const lt = laneTrace[sym];
+            fresh.push(...signalsOverBars(sym, frames, 3, { enabled: isBook ? book.enabled : undefined, cfgId: lt.bookCfgId, trace: lt.book }));
+            // shadow lane (P1 books only): every evaluator the book does not evaluate, by any mechanism, under SHADOW-1; book config
+            // restored by withConfig even if evaluation throws. Never traded, no book state, no promotion credit.
+            if (isBook) {
+              const off = offInBook(book.enabled);
+              if (off.size) { lt.shadowCfgId = shadowCfgId(book.cfg); lt.shadowIds = [...off];
+                fresh.push(...withConfig(shadowCfg(book.cfg), book.cfg, () => signalsOverBars(sym, frames, 3, { only: off, lane: "shadow", cfgId: lt.shadowCfgId!, trace: lt.shadow }))); }
             } for (const o of open.filter((x) => x.sym === sym)) { const u = resolve(o, m5.bars); if (u.status !== "open" || u.checked_t !== o.checked_t) updates.push(u); } }
           catch (e) { trackErrors.push(`${sym}: ${(e as Error).message}`.slice(0, 120)); }
           return { ...row, name: SYMBOLS[sym].name, book: PRIORITY[sym] === 1, priority: PRIORITY[sym] ?? 3, source: m5.source };
@@ -397,11 +404,13 @@ async function runScan() {
     }
   } finally { applyCfg(); setMlAsset(false); }
   // older schema without the lane column: keep the book rows, drop the shadow rows, and say so
-  const sigInsert = (rows: NewSignal[]) => rest("dbv5_scan_signals?on_conflict=sym,strategy,bar_t", { method: "POST", headers: { Prefer: "resolution=ignore-duplicates,return=minimal" }, body: JSON.stringify(rows.map((x) => ({ ...x, checked_t: x.bar_t }))) });
-  if (fresh.length) await sigInsert(fresh).catch(async (e) => {
-    if (!/lane/.test(String((e as Error).message))) throw e;
-    trackErrors.push("shadow lane skipped: dbv5_scan_signals.lane not migrated");
-    const book = fresh.filter((x) => x.lane !== "shadow").map(({ lane: _l, ...x }) => x); if (book.length) await sigInsert(book as NewSignal[]);
+  // identity is (sym, strategy, bar_t, lane): the same strategy and bar can exist once per lane, so a config transition can
+  // never let one lane suppress the other. Before the migration (no lane / old 3-column key) only book rows are written.
+  const sigInsert = (laneAware: boolean) => { const q = signalInsertRequest(fresh, laneAware); return rest(q.path, q.init); };
+  if (fresh.length) await sigInsert(true).catch(async (e) => {
+    if (!/lane|cfg_id|ON CONFLICT|unique or exclusion constraint/i.test(String((e as Error).message))) throw e;
+    trackErrors.push("shadow lane skipped: lane identity not migrated (book rows written with the old key)");
+    if (fresh.some((x) => x.lane !== "shadow")) await sigInsert(false);
   }).catch((e) => trackErrors.push(`insert: ${(e as Error).message}`.slice(0, 120)));
   for (const u of updates) {
     const body = u.status === "open" ? { checked_t: u.checked_t } : { status: u.status, checked_t: u.checked_t, exit_t: u.exit_t, exit_px: u.exit_px, r_gross: u.r_gross, r_net: u.r_net, resolved_at: new Date().toISOString() };
@@ -411,14 +420,16 @@ async function runScan() {
   if (newCalls.length) await rest("dbv5_calls?on_conflict=sym,t", { method: "POST", headers: { Prefer: "resolution=ignore-duplicates,return=minimal" }, body: JSON.stringify(newCalls) }).catch((e) => trackErrors.push(`calls insert: ${(e as Error).message}`.slice(0, 120)));
   const deriv = await Promise.all((["BTC", "ETH"] as const).map((c) => derivatives(c, now).catch((e) => ({ currency: c, errors: [(e as Error).message.slice(0, 80)] }))));
   const row = { markets: rankScan(markets as never), deriv, note: SCAN_NOTE, ms: Date.now() - t0 };
-  await insert("dbv5_scans", [row]);
+  // lane telemetry: which evaluators each lane invoked, with which config id, and whether their inputs were present
+  const work = { lanes: laneTrace, shadowVersion: SHADOW_VERSION, trackErrors };
+  await insert("dbv5_scans", [{ ...row, work }]).catch(async (e) => { if (!/work/.test(String((e as Error).message))) throw e; await insert("dbv5_scans", [row]); });
   return { ok: true, markets: markets.length, setups: (row.markets as { setups?: unknown[] }[]).reduce((a, m) => a + (m.setups?.length ?? 0), 0), calls: { new: newCalls.length, scored: scored.length }, tracked: { new: fresh.length, resolved: updates.filter((u) => u.status !== "open").length, open: open.length, errors: trackErrors }, ms: row.ms };
 }
 
 // forward record per market for the status payload (null until the table exists)
 async function trackStatus() {
   try {
-    const rows = await select("dbv5_scan_signals?select=sym,strategy,dir,bar_t,entry,stop,tp1,status,r_net,exit_t,score,lane&order=id.desc&limit=5000").catch(() => select("dbv5_scan_signals?select=sym,strategy,dir,bar_t,entry,stop,tp1,status,r_net,exit_t,score&order=id.desc&limit=5000"));
+    const rows = await select("dbv5_scan_signals?select=sym,strategy,dir,bar_t,entry,stop,tp1,status,r_net,exit_t,score,lane,cfg_id&order=id.desc&limit=5000").catch(() => select("dbv5_scan_signals?select=sym,strategy,dir,bar_t,entry,stop,tp1,status,r_net,exit_t,score&order=id.desc&limit=5000"));
     const calls = await select("dbv5_calls?select=sym,t,lean,votes,source,cautions,px,status,hit,move_pct,move_atr&order=id.desc&limit=5000").catch(() => []);
     return { markets: trackRecord(rows ?? []), shadow: shadowRecord(rows ?? []), recent: (rows ?? []).slice(0, 25), promotion: PROMOTION.rule, calls: callRecord(calls ?? []), recentCalls: (calls ?? []).slice(0, 40) };
   } catch { return null; }
