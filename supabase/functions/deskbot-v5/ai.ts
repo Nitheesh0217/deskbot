@@ -2,6 +2,8 @@
 // Providers are OpenAI-compatible chat endpoints on free tiers (see PROVIDERS), tried in order as fallbacks. Keys come from Supabase
 // secrets. Missing keys / quota / errors ⇒ returns null and the caller degrades to rules.
 // AI output can never open a trade, size a trade or touch exits — see news.ts.
+// Outbound payloads are allowlisted in egress.ts; decideJSON refuses any request text that still carries an account key.
+import { egressViolations } from "./egress.ts";
 
 export type Provider = { name: string; url: string; model: string; key: string; dailyCap: number };
 export type Usage = Record<string, { day: string; calls: number; fails: number; coolUntil: number }>;
@@ -17,7 +19,9 @@ const dailyCap = (key: string, fallback: number) => {
 // Free-tier, OpenAI-compatible chat endpoints (researched 29 Oct 2026 from github.com/mnfst/awesome-free-llm-apis and provider docs).
 // Each is used only when its key secret exists; the model can be overridden with <NAME>_MODEL (free tiers rename models often:
 // a 404 cools that provider for 30 min and the next one answers). Order = AI_PROVIDER_ORDER (comma list) or the default below.
-// Free tiers may log prompts; nothing sent here contains keys, balances beyond the paper book, or personal data.
+// Free tiers may log prompts and may use them for training. Requests carry only egress.ts payloads (no account data); a provider is
+// used only when its data-use terms have been checked from an official source (TERMS_VERIFIED below, or the owner's own record in
+// AI_TERMS_VERIFIED). A key alone never activates an unverified provider.
 export const PROVIDERS = [
   { name: "groq", keyVar: "GROQ_API_KEY", url: "https://api.groq.com/openai/v1/chat/completions", model: "llama-3.3-70b-versatile", cap: 300 },          // ~30 RPM, ~1,000 RPD
   { name: "gemini", keyVar: "GEMINI_API_KEY", url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", model: "gemini-2.5-flash", cap: 200 },
@@ -28,10 +32,21 @@ export const PROVIDERS = [
   { name: "openrouter", keyVar: "OPENROUTER_API_KEY", url: "https://openrouter.ai/api/v1/chat/completions", model: "openrouter/free", cap: 45 },        // ~20 RPM, 50 RPD without credits
 ] as const;
 
+/** Providers whose official data-use terms were read and recorded. Others stay unavailable even with a key. */
+export const TERMS_VERIFIED: Record<string, { checked: string; source: string; dataUse: string }> = {
+  gemini: { checked: "2026-10-30", source: "ai.google.dev/pricing; ai.google.dev/gemini-api/docs/billing", dataUse: "free tier: prompts may be used to improve Google products; paid (billing on): not used" },
+};
+const ownerVerified = () => String(env("AI_TERMS_VERIFIED") || "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean);
+/** Every known provider: whether a key is configured and whether its terms are verified (status / tower). */
+export function providerAvailability() {
+  const own = ownerVerified();
+  return PROVIDERS.map((p) => ({ name: p.name, configured: !!env(p.keyVar), termsVerified: !!TERMS_VERIFIED[p.name] || own.includes(p.name), verifiedBy: TERMS_VERIFIED[p.name] ? "code" : own.includes(p.name) ? "owner" : null }));
+}
 export function providersFromEnv(): Provider[] {
+  const ok = new Set(providerAvailability().filter((a) => a.termsVerified).map((a) => a.name));
   const order = String(env("AI_PROVIDER_ORDER") || "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean);
   const rank = (n: string) => (order.includes(n) ? order.indexOf(n) : order.length + PROVIDERS.findIndex((p) => p.name === n));
-  return PROVIDERS.filter((p) => env(p.keyVar)).sort((a, b) => rank(a.name) - rank(b.name)).map((p) => {
+  return PROVIDERS.filter((p) => env(p.keyVar) && ok.has(p.name)).sort((a, b) => rank(a.name) - rank(b.name)).map((p) => {
     const up = p.name.toUpperCase();
     return { name: p.name, url: p.url, model: env(`${up}_MODEL`) || p.model, key: env(p.keyVar), dailyCap: dailyCap(`${up}_DAILY_CAP`, p.cap) };
   });
@@ -52,6 +67,8 @@ export async function decideJSON<T>(
   const f = opts.fetchImpl ?? fetch, sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   const t0 = Date.now(), end = t0 + (opts.deadlineMs ?? 20000), day = new Date(opts.now).toISOString().slice(0, 10);
   const errors: string[] = [];
+  const leaked = egressViolations(system + "\n" + user);
+  if (leaked.length) return { value: null, errors: [`egress blocked: request carries account fields (${leaked.join(", ")})`] };
   for (const p of opts.providers) {
     if (!Number.isSafeInteger(p.dailyCap) || p.dailyCap < 0) { errors.push(`${p.name}: invalid daily cap`); continue; }
     const u = (opts.usage[p.name] ??= { day, calls: 0, fails: 0, coolUntil: 0 });

@@ -779,7 +779,7 @@ async function chatSend(text) {
   const wait = chatAdd("a", '<span class="muted">Thinking…</span>');
   try {
     const r = await chatCall({ action: "chat", message: text, history: CHAT.hist.slice(-8) });
-    wait.innerHTML = esc(r.reply || r.error || "No answer.") + (r.by ? `<span class="by">${esc(r.by)}</span>` : "");
+    wait.innerHTML = esc(r.reply || r.error || "No answer.") + (r.by ? `<span class="by">${esc(r.by)}${r.accountData === "withheld" ? " · account data withheld (equity, $ P&L, sizes)" : ""}</span>` : "");
     if (r.ok) { CHAT.hist.push({ role: "user", content: text }, { role: "assistant", content: r.reply }); if (r.proposal) propCard(r.proposal); }
     if (r.proposalErrors) chatAdd("sys", "The AI suggested a change that isn't allowed, so it was dropped: " + esc(r.proposalErrors.join("; ")));
   } catch (e) { wait.className = "msg sys"; wait.textContent = chatErr(e); }
