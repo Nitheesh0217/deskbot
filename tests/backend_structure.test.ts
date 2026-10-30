@@ -100,6 +100,36 @@ test("backtest: the assumptions text reports the overridden costs, not the resto
   assert.ok(over.combined.all.n === 0 || over.combined.all.expR !== base.combined.all.expR || over.combined.endEquity !== base.combined.endEquity, "the override really changed the run");
 });
 
+// ─── fix 6 + 7: status identity and visible errors ──────────────────────────
+const err = (status: number, code: string, message: string) => new Response(JSON.stringify({ code, message }), { status });
+test("status: reports the deployed source identity (build_info.ts)", async () => {
+  const { BUILD } = await import("../supabase/functions/deskbot-v5/build_info.ts");
+  const r = await call({ i5: 34000, method: "GET" });
+  assert.equal(r.status, 200); assert.deepEqual(r.res.build, { sourceSha256: BUILD.sourceSha256 }); assert.match(r.res.build.sourceSha256, /^[0-9a-f]{64}$/);
+});
+
+test("status: a table that is not migrated is null without an error; any other failure is exposed as an error string", async () => {
+  const a = await call({ i5: 34000, method: "GET", db: (p) => p.startsWith("dbv5_filter_verdicts") ? err(500, "XX000", "verdicts exploded") : p.startsWith("dbv5_scan_signals") ? err(404, "42P01", 'relation "public.dbv5_scan_signals" does not exist') : undefined });
+  assert.equal(a.res.experiment, null); assert.match(a.res.experimentError, /verdicts exploded/);
+  assert.equal(a.res.track, null); assert.equal(a.res.trackError, null, "not migrated: expected, no error");
+  const b = await call({ i5: 34000, method: "GET", db: (p) => p.startsWith("dbv5_filter_verdicts") ? err(404, "PGRST205", "Could not find the table 'public.dbv5_filter_verdicts' in the schema cache") : p.startsWith("dbv5_scan_signals") ? err(503, "", "pool exhausted") : undefined });
+  assert.equal(b.res.experiment, null); assert.equal(b.res.experimentError, null);
+  assert.equal(b.res.track, null); assert.match(b.res.trackError, /pool exhausted/, "a transient failure is not retried as an old schema and not hidden");
+  const c = await call({ i5: 34000, method: "GET", db: (p) => p.startsWith("dbv5_calls") ? err(500, "", "calls down") : undefined });
+  assert.ok(c.res.track, "the setup record still renders"); assert.match(c.res.trackError, /^calls: .*calls down/);
+  const d = await call({ i5: 34000, method: "GET" });
+  assert.equal(d.res.experimentError, null); assert.equal(d.res.trackError, null); assert.equal(d.res.experiment.started, false);
+});
+
+test("run: the 1m-candle fallback is kept and leaves a note", async () => {
+  const i = firstEntryBar(), r = await call({ books: "BTC", states: { main: fresh(LOOSE) }, i5: i, hlFail: (_c, iv) => iv === "1m", bnFail: (iv) => iv === "1m" });
+  assert.equal(r.res.books.BTC.ok, true, "the run still completes");
+  assert.ok(r.lastRun.main.notes.some((n: string) => /^Warning: 1m candles unavailable \(Binance 1m HTTP 500\); the 1m trade-manager view is empty this run/.test(n)), r.lastRun.main.notes.join(" | "));
+  const ok = await call({ books: "BTC", states: { main: fresh(LOOSE) }, i5: i });
+  assert.ok(!ok.lastRun.main.notes.some((n: string) => /1m candles/.test(n)));
+  assert.equal(!!r.states.main.pos, !!ok.states.main.pos, "a missing 1m view does not change the entry decision");
+});
+
 // ─── fix 1: one feed per evaluation ─────────────────────────────────────────
 test("run: frames from different feeds are recorded per frame and block NEW entries (same bars from one feed open a position)", async () => {
   const i = firstEntryBar(), states = { main: fresh(LOOSE) };

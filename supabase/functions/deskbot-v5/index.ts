@@ -26,6 +26,7 @@ import { scanMarket, rankScan, derivatives, SCAN_NOTE, CALL_HORIZON_H } from "./
 import { signalsOverBars, signalInsertRequest, resolve, trackRecord, shadowRecord, offInBook, withConfig, shadowCfg, shadowCfgId, bookCfgId, SHADOW_VERSION, type LaneTrace, scoreCall, callRecord, PRIORITY, PROMOTION, type NewSignal, type OpenSignal, type Resolution, type OpenCall, type CallScore } from "./track.ts";
 import { captureDecision, pickEntry, decisionIdFor } from "./provenance.ts";
 import { recordCoverage, dispositions, boundaryFlags } from "./coverage.ts";
+import { BUILD } from "./build_info.ts";
 import type { StrategyTrace } from "./engine.ts";
 
 // Module config belongs to one request at a time. This is isolate-local; the
@@ -144,7 +145,7 @@ async function runOnce(sym: Sym = "BTC", scheduler?: (fn: () => Promise<void>) =
   const rx: { m5?: number; m15?: number; h1?: number; h4?: number; ctx?: number; fng?: number; flow?: number; fngCached?: boolean } = {};
   const stamp = <T,>(k: "m5" | "m15" | "h1" | "h4" | "ctx" | "flow", p: Promise<T>) => p.then((v) => { rx[k] = Date.now(); return v; });
   const [m1v, m5, m15, h1, h4, ctx, fng, flow] = await Promise.all([
-    candles("1m", 240, now, "hyperliquid", sym).catch(() => ({ bars: [] as Bar[], source: "hyperliquid" as const })), stamp("m5", candles("5m", 400, now, "hyperliquid", sym)), stamp("m15", candles("15m", 400, now, "hyperliquid", sym)), stamp("h1", candles("1h", 300, now, "hyperliquid", sym)), stamp("h4", candles("4h", 700, now, "hyperliquid", sym)), stamp("ctx", hlContext(sym)),
+    candles("1m", 240, now, "hyperliquid", sym).catch((e) => { notes.push(`Warning: 1m candles unavailable (${String((e as Error).message).slice(0, 80)}); the 1m trade-manager view is empty this run`); return { bars: [] as Bar[], source: "hyperliquid" as const }; }), stamp("m5", candles("5m", 400, now, "hyperliquid", sym)), stamp("m15", candles("15m", 400, now, "hyperliquid", sym)), stamp("h1", candles("1h", 300, now, "hyperliquid", sym)), stamp("h4", candles("4h", 700, now, "hyperliquid", sym)), stamp("ctx", hlContext(sym)),
     (async () => { if (!isCrypto) return null; const c = (st as State & { _fng?: { v: number; l: string; t: number } })._fng; if (c && now - c.t < 3 * 3600_000) { rx.fng = c.t; rx.fngCached = true; return { value: c.v, label: c.l }; } const r = await fearGreed(); rx.fng = Date.now(); rx.fngCached = false; return r; })(), stamp("flow", orderFlow(now, sym)),
   ]);
   if (fng) (st as State & { _fng?: unknown })._fng = { v: fng.value, l: fng.label, t: now };
@@ -394,14 +395,19 @@ async function runBacktest(o: BtOpts) {
   return res;
 }
 
-// FILTER-1 report from the append-only verdict table and the trades those entries became. null until the table exists.
-async function experimentStatus() {
+// A table / column that is not migrated yet is an expected state (data null, no error). Any other failure is surfaced as an error
+// string in status instead of looking identical to "not migrated".
+const notMigrated = (e: unknown) => /42P01|42703|PGRST20[45]|does not exist|Could not find the/i.test(String((e as Error)?.message ?? e));
+const errText = (e: unknown) => String((e as Error)?.message ?? e).slice(0, 200);
+
+// FILTER-1 report from the append-only verdict table and the trades those entries became. data null until the table exists.
+async function experimentStatus(): Promise<{ data: unknown; error: string | null }> {
   try {
     const vs = await select("dbv5_filter_verdicts?select=ref,arm,sym,strategy,take,verdict,detail,provider,ms,recorded_at&order=recorded_at.asc&limit=5000");
-    if (!vs?.length) return { experiment: "FILTER-1", started: false, baseline: { n: 0 }, arms: [] };
+    if (!vs?.length) return { data: { experiment: "FILTER-1", started: false, baseline: { n: 0 }, arms: [] }, error: null };
     const tr = await select(`dbv5_trades?select=id,symbol,strategy,r,net,close_t&close_t=gte.${encodeURIComponent(vs[0].recorded_at)}&limit=5000`);
-    return { started: vs[0].recorded_at, open: vs.filter((v: { ref: string }) => !(tr ?? []).some((t: { id: string }) => t.id === v.ref)).length / 2, ...filterReport(tr ?? [], vs) };
-  } catch { return null; }
+    return { data: { started: vs[0].recorded_at, open: vs.filter((v: { ref: string }) => !(tr ?? []).some((t: { id: string }) => t.id === v.ref)).length / 2, ...filterReport(tr ?? [], vs) }, error: null };
+  } catch (e) { return { data: null, error: notMigrated(e) ? null : errText(e) }; }
 }
 
 // ─── public status bundle for the dashboard ─────────────────────────────────
@@ -483,13 +489,15 @@ async function runScan() {
   return { ok: true, markets: markets.length, setups: (row.markets as { setups?: unknown[] }[]).reduce((a, m) => a + (m.setups?.length ?? 0), 0), calls: { new: newCalls.length, scored: scored.length }, tracked: { new: fresh.length, resolved: updates.filter((u) => u.status !== "open").length, open: open.length, errors: trackErrors }, ms: row.ms };
 }
 
-// forward record per market for the status payload (null until the table exists)
-async function trackStatus() {
+// forward record per market for the status payload (data null until the table exists)
+async function trackStatus(): Promise<{ data: unknown; error: string | null }> {
   try {
-    const rows = await select("dbv5_scan_signals?select=sym,strategy,dir,bar_t,entry,stop,tp1,status,r_net,exit_t,score,lane,cfg_id&order=id.desc&limit=5000").catch(() => select("dbv5_scan_signals?select=sym,strategy,dir,bar_t,entry,stop,tp1,status,r_net,exit_t,score&order=id.desc&limit=5000"));
-    const calls = await select("dbv5_calls?select=sym,t,lean,votes,source,cautions,px,status,hit,move_pct,move_atr&order=id.desc&limit=5000").catch(() => []);
-    return { markets: trackRecord(rows ?? []), shadow: shadowRecord(rows ?? []), recent: (rows ?? []).slice(0, 25), promotion: PROMOTION.rule, calls: callRecord(calls ?? []), recentCalls: (calls ?? []).slice(0, 40) };
-  } catch { return null; }
+    // older schema without the lane columns: read the old column set; any other failure is reported, not retried silently
+    const rows = await select("dbv5_scan_signals?select=sym,strategy,dir,bar_t,entry,stop,tp1,status,r_net,exit_t,score,lane,cfg_id&order=id.desc&limit=5000").catch((e) => notMigrated(e) ? select("dbv5_scan_signals?select=sym,strategy,dir,bar_t,entry,stop,tp1,status,r_net,exit_t,score&order=id.desc&limit=5000") : Promise.reject(e));
+    let callsError: string | null = null;
+    const calls = await select("dbv5_calls?select=sym,t,lean,votes,source,cautions,px,status,hit,move_pct,move_atr&order=id.desc&limit=5000").catch((e) => { if (!notMigrated(e)) callsError = `calls: ${errText(e)}`; return []; });
+    return { data: { markets: trackRecord(rows ?? []), shadow: shadowRecord(rows ?? []), recent: (rows ?? []).slice(0, 25), promotion: PROMOTION.rule, calls: callRecord(calls ?? []), recentCalls: (calls ?? []).slice(0, 40) }, error: callsError };
+  } catch (e) { return { data: null, error: notMigrated(e) ? null : errText(e) }; }
 }
 
 async function status() {
@@ -501,12 +509,12 @@ async function status() {
     select("dbv5_backtests?select=ran_at,days,results&results->>label=like.LIVE_CONFIG*&order=id.desc&limit=1"),
     select("dbv5_agent_log?select=ts,symbol,agent,input_summary,output,provider,error&order=id.desc&limit=200").catch(() => []),
   ]);
-  const [scanRows, track] = await Promise.all([select("dbv5_scans?select=ts,markets,deriv,note,ms,work&order=id.desc&limit=1").catch(() => select("dbv5_scans?select=ts,markets,deriv,note,ms&order=id.desc&limit=1")).catch(() => []), trackStatus()]);
+  const [scanRows, { data: track, error: trackError }] = await Promise.all([select("dbv5_scans?select=ts,markets,deriv,note,ms,work&order=id.desc&limit=1").catch(() => select("dbv5_scans?select=ts,markets,deriv,note,ms&order=id.desc&limit=1")).catch(() => []), trackStatus()]);
   const scan = scanRows?.[0] ?? null;
   const flushFails = await select(`dbv5_events?select=ts,symbol,msg&kind=eq.ERROR&msg=ilike.*work%20log*&ts=gte.${new Date(Date.now() - 86400_000).toISOString()}&order=id.desc&limit=50`).catch(() => null);
   const lastFlush = await select("dbv5_events?select=ts,symbol,data&kind=eq.WORKLOG&order=id.desc&limit=4").catch(() => null);
   const st = s?.[0]?.state ?? null;
-  const experiment = await experimentStatus();
+  const { data: experiment, error: experimentError } = await experimentStatus();
   const config = resolvedCfg(st?.cfg);
   const integrity = await integrityFor("BTC", config);
   const workBacklog: Record<string, unknown> = { BTC: backlog(st) };
@@ -522,7 +530,8 @@ async function status() {
   }
   for (const [k, b] of Object.entries(books)) if ((b as { work?: unknown }).work) workBacklog[k] = (b as { work?: unknown }).work;
   const curve = (eq ?? []).filter((_: unknown, i: number, a: unknown[]) => a.length < 600 || i % Math.ceil(a.length / 600) === 0 || i === a.length - 1);
-  return { version: VERSION, mode: "PAPER", now: new Date().toISOString(), updated: s?.[0]?.updated_at ?? null, integrity, state: st, lastRun: s?.[0]?.last_run ?? null, events: ev, agents: agents ?? [], trades: tr, curve, books, backtest: bt?.[0] ?? null, experiment, config, registry: { strategies: STRATEGIES, optIn: OPT_IN }, scan, track, work: { backlog: workBacklog, lastFlush: Array.isArray(lastFlush) ? lastFlush : null, flushFailures24h: Array.isArray(flushFails) ? flushFails.length : null, lastFlushFailure: Array.isArray(flushFails) && flushFails[0] ? flushFails[0] : null }, chat: { enabled: !!CHAT_KEY, ai: providersFromEnv("chat").map((p) => p.name) }, ai: { policy: providerPolicy(aiFeaturesOf(), (st as { _aiUsage?: Usage } | null)?._aiUsage ?? {}), providers: providersFromEnv("committee").map((p) => p.name), byFeature: { news: providersFromEnv("news").map((p) => p.name), committee: providersFromEnv("committee").map((p) => p.name), chat: providersFromEnv("chat").map((p) => p.name) }, agentAi: AGENT_AI, deskWorkflow: DESK_WORKFLOW, newsAi: NEWS_AI, newsMode: NEWS_MODE },
+  // build.sourceSha256: identity of the deployed source files (build_info.ts), not only the engine VERSION
+  return { version: VERSION, build: { sourceSha256: BUILD.sourceSha256 }, mode: "PAPER", now: new Date().toISOString(), updated: s?.[0]?.updated_at ?? null, integrity, state: st, lastRun: s?.[0]?.last_run ?? null, events: ev, agents: agents ?? [], trades: tr, curve, books, backtest: bt?.[0] ?? null, experiment, experimentError, config, registry: { strategies: STRATEGIES, optIn: OPT_IN }, scan, track, trackError, work: { backlog: workBacklog, lastFlush: Array.isArray(lastFlush) ? lastFlush : null, flushFailures24h: Array.isArray(flushFails) ? flushFails.length : null, lastFlushFailure: Array.isArray(flushFails) && flushFails[0] ? flushFails[0] : null }, chat: { enabled: !!CHAT_KEY, ai: providersFromEnv("chat").map((p) => p.name) }, ai: { policy: providerPolicy(aiFeaturesOf(), (st as { _aiUsage?: Usage } | null)?._aiUsage ?? {}), providers: providersFromEnv("committee").map((p) => p.name), byFeature: { news: providersFromEnv("news").map((p) => p.name), committee: providersFromEnv("committee").map((p) => p.name), chat: providersFromEnv("chat").map((p) => p.name) }, agentAi: AGENT_AI, deskWorkflow: DESK_WORKFLOW, newsAi: NEWS_AI, newsMode: NEWS_MODE },
     // real-account preparation: the registry/adapter contract (accounts.ts) exists, no broker is connected, funded orders are disabled
     brokers: { connected: [] as string[], contract: "read-only (accounts.ts)", fundedOrders: "disabled" as const } };
 }
