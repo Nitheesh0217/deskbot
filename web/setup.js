@@ -51,12 +51,13 @@
   }
 
   /** The trade as boxes: red from entry to the ORIGINAL stop, green blocks entry->TP1->TP2->TP3. */
-  function tradeBoxes(p, pal, snap) {
+  function tradeBoxes(p, pal, snap, opts) {
+    const caption = !(opts && opts.labels === false);   // the chart's labelled plan lines carry the text; boxes stay as shading
     const R = Math.abs(p.entry - p.stop0), t1 = snap(p.openT), rr = (x) => (Math.abs(x - p.entry) / R).toFixed(2);
-    const out = [{ top: Math.max(p.entry, p.stop0), bot: Math.min(p.entry, p.stop0), t1, t2: null, fill: rgba(pal.sl, 0.22), line: pal.sl, label: `STOP LOSS −1R`, text: pal.slText }];
+    const out = [{ top: Math.max(p.entry, p.stop0), bot: Math.min(p.entry, p.stop0), t1, t2: null, fill: rgba(pal.sl, 0.22), line: pal.sl, label: caption ? `STOP LOSS −1R` : "", text: pal.slText }];
     const levels = [["TP1", p.tp1, p.tp1Done], ["TP2", p.tp2, p.tp2Done], ["TP3", p.tp3, p.tp3Done]]; let prev = p.entry;
     levels.forEach(([n, px, done], i) => {
-      out.push({ top: Math.max(prev, px), bot: Math.min(prev, px), t1, t2: null, fill: rgba(pal.tp, done ? 0.12 : 0.2 + i * 0.04), line: pal.tp, dash: !!done, label: `${n}${done ? " ✓ hit" : ""} +${rr(px)}R`, text: pal.tpText }); prev = px;
+      out.push({ top: Math.max(prev, px), bot: Math.min(prev, px), t1, t2: null, fill: rgba(pal.tp, done ? 0.12 : 0.2 + i * 0.04), line: pal.tp, dash: !!done, label: caption ? `${n}${done ? " ✓ hit" : ""} +${rr(px)}R` : "", text: pal.tpText }); prev = px;
     });
     return out;
   }
