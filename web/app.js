@@ -387,8 +387,10 @@ $("moreBtn").addEventListener("click", () => setMore(!document.querySelector("na
 document.addEventListener("desk:view", (e) => { const t = document.querySelector(`.tab[data-v="${e.detail.view}"]`); document.getElementById("moreBtn").classList.toggle("has-active", !!(t && t.classList.contains("more"))); if (t && t.classList.contains("more") && matchMedia("(min-width: 1100px)").matches) setMore(true); });
 
 // ── Chart: TradingView Lightweight Charts (Apache-2.0) + the bot's real levels ──
-const CH = { lib: null, chart: null, series: {}, tf: "1h", mode: "bot", timer: null, tvLoaded: false, request: 0, prims: [], zlines: [], layers: { focus: true, trade: true, FVG: true, IFVG: true, OB: true, value: true, pd: true, structure: false, liq: false } };
+const CH = { lib: null, chart: null, series: {}, tf: "1h", mode: "bot", timer: null, tvLoaded: false, request: 0, prims: [], zlines: [], view: "price", layers: { refs: false, trade: true, FVG: true, IFVG: true, OB: true, value: true, pd: true, structure: false, liq: false } };
 try { Object.assign(CH.layers, JSON.parse(localStorage.getItem("deskbot.layers") || "{}")); } catch (_) { /* storage optional */ }
+try { CH.view = localStorage.getItem("deskbot.planView") === "plan" ? "plan" : "price"; } catch (_) { /* optional */ }
+document.querySelectorAll("#planView button").forEach((b) => { b.setAttribute("aria-pressed", String(b.dataset.view === CH.view)); b.addEventListener("click", () => { CH.view = b.dataset.view; CH.fit = null; document.querySelectorAll("#planView button").forEach((x) => x.setAttribute("aria-pressed", String(x === b))); try { localStorage.setItem("deskbot.planView", CH.view); } catch (_) { /* optional */ } chartDraw(); }); });
 document.querySelectorAll("#layers input").forEach((i) => { i.checked = !!CH.layers[i.dataset.layer]; i.addEventListener("change", () => { CH.layers[i.dataset.layer] = i.checked; try { localStorage.setItem("deskbot.layers", JSON.stringify(CH.layers)); } catch (_) { /* optional */ } chartDraw(); }); });
 const zonePal = () => ({ bull: "#4fd1c5", bear: "#d46bd6", obBull: "#5aa9e6", obBear: "#f2a93b", sl: cssVar("--down"), tp: cssVar("--up"), slText: cssVar("--down"), tpText: cssVar("--up"), fg: cssVar("--fg"), muted: cssVar("--fg-3") });
 const TFMS = { "15m": 9e5, "1h": 36e5, "4h": 144e5, "1d": 864e5 };
@@ -500,12 +502,23 @@ async function chartDraw() {
     const h4c = h4.bars.filter((x) => x.t + 144e5 <= Date.now()), dc = donchianPrior(h4c.concat([{ h: NaN, l: NaN }]), 55);
     const last = b[b.length - 1].c, eDnow = eD.length ? eD[eD.length - 1].value : m.ema50D;
     const legend = [];
-    if (dc) { PL(dc.hi, "#5aa9e6", "4H 55-bar high", 1); PL(dc.lo, "#5aa9e6", "4H 55-bar low", 1); }
-    if (m.asian && tf !== "1d" && tf !== "4h") { PL(m.asian.hi, cssVar("--fg-3"), "Asian high", 3); PL(m.asian.lo, cssVar("--fg-3"), "Asian low", 3); }
-    const dl = (((S.last_run || {}).desk || {}).chart || {}).levels || [];
-    dl.filter((x) => x.blocks && Math.abs(x.px - b[b.length - 1].c) / b[b.length - 1].c < 0.04).forEach((x) => PL(x.px, x.side === "support" ? cssVar("--up") : cssVar("--down"), "agent: " + x.name, 2));
-    if (p) { PL(p.entry, cssVar("--fg"), `${p.dir.toUpperCase()} entry`, 0, 2); PL(p.stop, cssVar("--down"), "Stop", 0, 2);
-      [["tp1", "TP1"], ["tp2", "TP2"], ["tp3", "TP3"]].forEach(([k, t]) => PL(p[k], cssVar("--up"), t + (p[k + "Done"] ? " ✓" : ""), p[k + "Done"] ? 2 : 0)); }
+    // reference and advisory levels (not orders) only when asked for: they are context, and their labels crowd the plan
+    if (CH.layers.refs) {
+      if (dc) { PL(dc.hi, "#5aa9e6", "Ref · 4H 55-bar high", 1); PL(dc.lo, "#5aa9e6", "Ref · 4H 55-bar low", 1); }
+      if (m.asian && tf !== "1d" && tf !== "4h") { PL(m.asian.hi, cssVar("--fg-3"), "Ref · Asian high", 3); PL(m.asian.lo, cssVar("--fg-3"), "Ref · Asian low", 3); }
+      const dl = (((S.last_run || {}).desk || {}).chart || {}).levels || [];
+      dl.filter((x) => x.blocks && Math.abs(x.px - b[b.length - 1].c) / b[b.length - 1].c < 0.04).forEach((x) => PL(x.px, x.side === "support" ? cssVar("--up") : cssVar("--down"), "Advisory · " + x.name, 2));
+    }
+    // executable plan levels, labelled with distance from entry, R from the ORIGINAL risk and the exit share (plan.js)
+    const plan = p ? planOf(p, last) : null;
+    if (plan) for (const r of plan.rows) {
+      const tag = `${r.pct > 0 ? "+" : ""}${r.pct.toFixed(2)}% · ${r.r > 0 ? "+" : ""}${r.r.toFixed(2)}R`;
+      if (r.key === "entry") PL(r.price, cssVar("--fg"), `Entry · ${p.dir.toUpperCase()}`, 0, 2);
+      else if (r.key === "stop") PL(r.price, cssVar("--down"), `${r.label} · ${tag}`, 0, 2);
+      else if (r.key === "stop0") PL(r.price, cssVar("--down"), `Original stop · −1R (reference)`, 2, 1);
+      else if (/^tp/.test(r.key)) PL(r.price, cssVar("--up"), `${r.label}${r.status === "hit" ? " ✓" : ""} · ${tag} · ${Math.round(r.share * 100)}%`, r.status === "hit" ? 2 : 0);
+    }
+    renderPlanPanel(plan, last);
     // markers: closed trades + open entry
     const times = b.map((x) => sec(x.t));
     const snapT = (ts) => { let lo = 0, hi = times.length - 1, a = -1; while (lo <= hi) { const md = (lo + hi) >> 1; if (times[md] <= ts) { a = md; lo = md + 1; } else hi = md - 1; } return a < 0 ? null : times[a]; };
@@ -520,15 +533,18 @@ async function chartDraw() {
     CH.zlines.forEach((l) => CH.series.c.removePriceLine(l)); CH.zlines = [];
     const ZL = (price, color, title, style = 2) => { if (isFinite(price)) CH.zlines.push(CH.series.c.createPriceLine({ price, color, lineWidth: 1, lineStyle: style, axisLabelVisible: false, title })); };
     const boxes = DeskSetup.zoneBoxes(read, CH.layers, pal, (t) => snapT(t), t0s);
-    if (CH.layers.trade && p) boxes.push(...DeskSetup.tradeBoxes(p, pal, (ms) => snapT(sec(ms))));
+    if (CH.layers.trade && p) boxes.push(...DeskSetup.tradeBoxes(p, pal, (ms) => snapT(sec(ms)), { labels: false }));
     boxes.forEach((bx) => { const q = new DeskSetup.Box(bx); CH.series.c.attachPrimitive(q); CH.prims.push(q); });
     if (CH.layers.value && read.value) { ZL(read.value.poc, "#e3c14d", "POC", 0); ZL(read.value.vah, "#e3c14d", "VAH", 3); ZL(read.value.val, "#e3c14d", "VAL", 3); }
     if (CH.layers.pd && read.range) { ZL(read.range.eq, cssVar("--fg-3"), `mid · ${read.range.zone}`, 1); }
     if (CH.layers.liq) read.pools.forEach((q) => ZL(q.px, "#b48ef0", q.kind + (q.swept ? " swept" : ""), 3));
     if (CH.layers.structure) read.structure.forEach((e) => mk.push({ time: snapT(e.t), position: e.side === "bull" ? "belowBar" : "aboveBar", color: e.side === "bull" ? "#4fd1c5" : "#d46bd6", shape: "square", text: e.kind + (e.side === "bull" ? "↑" : "↓") }));
     window.__zoneRead = read;
-    const focusOn = !!(CH.layers.focus && p), fitKey = tf + (focusOn ? "+f" : "");
-    if (focusOn) { const rec = b.slice(-80), R0 = Math.abs(p.entry - p.stop0), lo = Math.min(p.stop0 - 0.5 * R0, ...rec.map((x) => x.l)), hi = Math.max(p.tp3 + 0.5 * R0, ...rec.map((x) => x.h)); CH.series.c.applyOptions({ autoscaleInfoProvider: () => ({ priceRange: { minValue: lo, maxValue: hi } }) }); }
+    // Price action: scale to recent candles + entry + stops (far targets stay listed in the plan table, never moved).
+    // Full plan: scale to every executable level, including TP3.
+    const focusOn = !!p, fitKey = tf + "+" + CH.view + (p ? "+p" : "");
+    if (p) { const rec = b.slice(-80), lv = CH.view === "plan" ? [p.entry, p.stop, p.stop0, p.tp1, p.tp2, p.tp3] : [p.entry, p.stop, p.stop0], lo = Math.min(...lv, ...rec.map((x) => x.l)), hi = Math.max(...lv, ...rec.map((x) => x.h)), pad = (hi - lo) * 0.04;
+      CH.series.c.applyOptions({ autoscaleInfoProvider: () => ({ priceRange: { minValue: lo - pad, maxValue: hi + pad } }) }); }
     else CH.series.c.applyOptions({ autoscaleInfoProvider: undefined });
     if (CH.fit !== fitKey) { CH.fit = fitKey; CH.chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, b.length - (focusOn ? 80 : 150)), to: b.length + 12 }); }
     const t0 = sec(b[0].t); CH.series.c.setMarkers(mk.filter((x) => x.time != null && x.time >= t0).sort((a, z) => a.time - z.time));
@@ -550,6 +566,22 @@ async function chartDraw() {
   } catch (e) { if (request !== CH.request || book !== BOOK || tf !== CH.tf) return; renderSetupCard(((DATA.state || {}).state || {}).pos, DATA.state); $("lwMsg").hidden = false; $("lwMsg").textContent = "Couldn't load candles here (" + (e && e.message || "network") + "). Retry when the candle source is reachable."; }
 }
 
+/** The plan table for the open position (plan.js), with this book's exit rules and the strategy's trigger timeframe. */
+function planOf(p, price) {
+  if (!globalThis.DeskPlan) return null;
+  const st = ((DATA.state || {}).state) || {}, cfg = Object.assign({}, BOOK === "BTC" && RAW ? RAW.config || {} : {}, st.cfg || {});
+  const cadence = globalThis.DeskCoverage ? DeskCoverage.cadenceFor(p.strategy, cfg) : null;
+  return DeskPlan.planRows(p, { price, cadence, exitMode: cfg.EXIT_MODE, traderParts: cfg.TRADER_PARTS, now: Date.now() });
+}
+function renderPlanPanel(plan, price) {
+  const el = $("planPanel"); if (!el) return;
+  if (!plan) { el.innerHTML = '<p class="note faint">No open paper position: the chart shows price action and, if switched on, reference levels only.</p>'; return; }
+  const m = plan.meta, q = (x) => (x == null ? "—" : (+x).toFixed(5));
+  const row = (r) => `<tr class="pk-${r.kind} ${r.status === "hit" ? "hit" : ""}"><td>${esc(r.label)}${r.kind === "reference" ? ' <small class="faint">not an order</small>' : ""}</td><td class="r">${fmtPx(r.price)}</td><td class="r">${r.pct == null ? "—" : (r.pct > 0 ? "+" : "") + r.pct.toFixed(2) + "%"}</td><td class="r">${r.r == null ? "—" : (r.r > 0 ? "+" : "") + r.r.toFixed(2) + "R"}</td><td class="r">${r.share ? Math.round(r.share * 100) + "% · " : ""}${q(r.qty)}</td><td>${esc(r.status)}</td></tr>`;
+  el.innerHTML = `<div class="plan-meta"><b>${esc(nameOf(m.strategy))}</b> · ${esc(m.dir)} · signal on ${esc(m.signalTimeframe || "—")} · max hold ${esc(m.maxHoldText || "—")}${m.expiresAt ? ` (time exit ${new Date(m.expiresAt).toISOString().slice(0, 16).replace("T", " ")} UTC)` : ""} · 1R = ${fmtPx(m.riskPts)} pts (${m.riskPct.toFixed(2)}%) = ${fmt$(m.riskAmt)}</div>
+    <div class="plan-wrap"><table class="plan-t"><thead><tr><th>Level</th><th class="r">Price</th><th class="r">From entry</th><th class="r">R (original risk)</th><th class="r">Exit size</th><th>Status</th></tr></thead><tbody>${plan.rows.map(row).join("")}</tbody></table></div>
+    <p class="note faint">Executable levels are the paper engine's orders. Exit rules: ${esc(m.exitRules.join("; ") || "—")}. The chart timeframe you view is not the trade's deadline. Zones, Donchian, Asian range and agent levels are reference or advisory only.</p>`;
+}
 async function renderSetupCard(p, S) {
   const el = $("setupCard"), pal = zonePal(), nm = (BOOK === "GOLD" ? "Gold (PAXG)" : "BTC");
   if (!p) { el.innerHTML = `<div class="setup-head"><h2>Trade setup</h2></div><p class="note" style="margin-top:6px">No open ${nm} trade. When the bot enters, the setup appears here: entry, red stop-loss block, green take-profit blocks and the structure checks that agree with the trade. Reaction areas on the chart below show where the rules would care.</p>`; return; }
