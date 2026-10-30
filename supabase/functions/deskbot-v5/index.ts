@@ -12,7 +12,8 @@ import {
 } from "./engine.ts";
 import { candles, candlesRange, candlesRangeBinance, hlContext, fearGreed, orderFlow, SYMBOLS, isSym, type Sym } from "./data.ts";
 import { readNews, newsBlocks, type NewsRead } from "./news.ts";
-import { providersFromEnv, type Usage } from "./ai.ts";
+import { providersFromEnv, providerAvailability, type Usage } from "./ai.ts";
+import { chatFacts, pushClose, pushOpen } from "./egress.ts";
 import { chat, validatePatch, mergeCfg, EDITABLE, type ChatTurn } from "./chat.ts";
 import { configIntegrity, serialExecutor } from "./runtime.ts";
 import { runDesk, deskChart, type AgentRow } from "./agents.ts";
@@ -151,7 +152,7 @@ async function runOnce(sym: Sym = "BTC") {
     for (const t of closed) {
       const msg = `${t.strategy} ${t.dir.toUpperCase()} closed ${t.reason} · net $${t.net.toFixed(2)} (${t.r >= 0 ? "+" : ""}${t.r.toFixed(2)}R)`;
       evs.push({ kind: t.net > 0 ? "WIN" : "LOSS", strategy: t.strategy, msg: tag + msg, data: { r: t.r, net: t.net, decisionId: decisionIdFor(t.id), work: workKey(t.id, "close", "final") }, symbol: sym });
-      await push(`DeskBot ${tag}${t.net > 0 ? "WIN" : "LOSS"}`, `${msg} · Eq $${st.equity.toFixed(2)}`);
+      await push(`DeskBot ${tag}${t.net > 0 ? "WIN" : "LOSS"}`, pushClose("", t));   // public relay: R only (egress.ts)
     }
     if (st.pos) for (const e of st.pos.exits) if (e.t > since && e.kind !== "stop") evs.push({ kind: e.kind.toUpperCase(), strategy: st.pos.strategy, symbol: sym, msg: `${tag}${e.kind.toUpperCase()} filled @ ${e.px.toFixed(1)} · stop → ${st.pos.stop.toFixed(1)}`, data: { decisionId: decisionIdFor(st.pos.id), px: e.px, qty: e.qty, stop: st.pos.stop, work: workKey(st.pos.id, e.kind.startsWith("tp") ? "target_fill" : "exit", `${e.kind}:${e.t}`) } });
   } catch (e) {
@@ -245,7 +246,7 @@ async function runOnce(sym: Sym = "BTC") {
         opened = { strategy: sig.strategy, dir: sig.dir, entry: p.entry, stop: p.stop, reentry: !!sig.reentry, why: sig.why }; action = `OPEN_${sig.dir.toUpperCase()}`;
         const msg = `${sig.strategy} ${sig.dir.toUpperCase()} @ ${p.entry.toFixed(1)} · stop ${p.stop.toFixed(1)} · TP ${p.tp1.toFixed(0)}/${p.tp2.toFixed(0)}/${p.tp3.toFixed(0)} · risk $${p.riskAmt.toFixed(2)} · score ${sig.score}`;
         evs.push({ kind: "OPEN", strategy: sig.strategy, msg: tag + msg, data: { why: sig.why, regime: sig.regime, qty: p.originalQty, flow, decisionId: decisionIdFor(p.id) }, symbol: sym });
-        await push(`DeskBot ${tag}${action}`, msg);
+        await push(`DeskBot ${tag}${action}`, pushOpen("", sig, p));   // public relay: no risk dollars (egress.ts)
       }
       if (!opened) {
         const top = rejects.filter(r => !/Waits for 15m close/.test(r.reason)).slice(0, 4).map(r => `${r.strategy}: ${r.reason}`);
@@ -280,7 +281,7 @@ async function runOnce(sym: Sym = "BTC") {
   const wx = st as State & { _workOutbox?: WorkRow[] };
   wx._workOutbox = mergeOutbox(wx._workOutbox, managerRows(sym, posBefore, snapshotPos(st.pos), closed, decisionIdFor, { snapT: posBefore ? snap.T : null, acts: traderActs }));
   if (!wx._workOutbox.length) delete wx._workOutbox;
-  const ai = { providers: providersFromEnv().map((p) => p.name), usage: sx._aiUsage ?? {} };
+  const ai = { providers: providersFromEnv().map((p) => p.name), availability: providerAvailability(), usage: sx._aiUsage ?? {} };
   const lastRun = { ts: new Date(now).toISOString(), sym, action, trader: { acts: traderActs, plan: st.pos?.plan ?? [] }, source, integrity, news, ai, upnl: +upnl.toFixed(2), market, decision, risk: dynamicRisk(st.equity), desk: desk.summary, coverage: covNow, catchup, provenanceError, ms: Date.now() - now };
   st.version = VERSION;
   await saveState(st, lastRun, sym);
@@ -316,7 +317,7 @@ async function runOnce(sym: Sym = "BTC") {
         let lessons: string[] = [];
         try { lessons = lessonsFrom(await select(`dbv5_trades?select=strategy,dir,r,reason,close_t&symbol=eq.${sym}&strategy=eq.${encodeURIComponent(p.strategy)}&order=close_t.desc&limit=8`)); } catch { /* memory is optional */ }
         const wf = await runDeskWorkflow({ ref: p.id, sym, strategy: p.strategy, dir: p.dir, regime: p.regime, why: p.why, newsRisk: sx._news?.risk ?? null, chart: deskChart(desk.chart), checks, analysts, lessons,
-          plan: { dir: p.dir, entry: p.entry, stop0: p.stop0, tp1: p.tp1, tp2: p.tp2, tp3: p.tp3, maxHoldH: p.maxHoldH, strategy: p.strategy, riskAmt: p.riskAmt } },
+          plan: { dir: p.dir, entry: p.entry, stop0: p.stop0, tp1: p.tp1, tp2: p.tp2, tp3: p.tp3, maxHoldH: p.maxHoldH, strategy: p.strategy } },
           { providers: AGENT_AI ? providersFromEnv() : [], usage: (sx._aiUsage ??= {}), now, debateRounds: DEBATE_ROUNDS, riskRounds: RISK_ROUNDS });
         rows.push(...wf.rows);
         // FILTER-1 shadow verdicts: recorded now, before this trade has an outcome. Append-only; a failure here is visible and changes nothing else.
@@ -495,23 +496,15 @@ async function status() {
 // ─── AI assistant (owner only; password = DESKBOT_CHAT_KEY secret) ─────────
 const chatUsage: Usage = {};
 async function chatContext() {
+  // raw rows are read locally; only the allowlisted view (egress.ts chatFacts: R, counts, prices, %, config, market data) leaves the system
   const [s, tr, bt, nw] = await Promise.all([
     select("dbv5_state?id=eq.main&select=state,last_run,updated_at"),
-    select("dbv5_trades?select=symbol,strategy,dir,entry,exit_avg,net,r,reason,open_t,close_t&order=close_t.desc&limit=20"),
-    select("dbv5_backtests?select=ran_at,results->label,results->combined->all,results->combined->maxDD,results->combined->endEquity,results->from,results->to&order=id.desc&limit=4"),
+    select("dbv5_trades?select=symbol,strategy,dir,entry,exit_avg,r,reason,open_t,close_t&order=close_t.desc&limit=20"),
+    select("dbv5_backtests?select=ran_at,label:results->label,all:results->combined->all,maxDD:results->combined->maxDD,from:results->from,to:results->to&order=id.desc&limit=4"),
     select("dbv5_news?select=ts,risk,bias,reason,by&order=id.desc&limit=3"),
   ]);
-  const others = await select("dbv5_state?id=neq.main&select=id,state->equity,state->startEquity,state->pos,state->stats->all,state->cfg,last_run->action,last_run->market->price");
-  const st = s?.[0]?.state ?? {}, lr = s?.[0]?.last_run ?? {};
-  return {
-    version: VERSION, mode: "PAPER", updated: s?.[0]?.updated_at,
-    equity: st.equity, startEquity: st.startEquity, maxDD: st.maxDD, openPosition: st.pos ? { strategy: st.pos.strategy, dir: st.pos.dir, entry: st.pos.entry, stop: st.pos.stop, tp1: st.pos.tp1, tp2: st.pos.tp2, tp3: st.pos.tp3, tp1Done: st.pos.tp1Done } : null,
-    stats: st.stats, enabled: st.enabled, circuitBreaker: st.cb, liveConfig: st.cfg ?? {},
-    market: lr.market, lastAction: lr.action, lastDecision: lr.decision, news: lr.news,
-    recentTrades: tr, recentBacktests: bt, newsHistory: nw, editableKeys: Object.keys(EDITABLE),
-    note: "All fields above describe the BTC book. Other paper books (gold via PAXG) are in otherBooks. Chat proposals only change the BTC book.",
-    otherBooks: others,
-  };
+  const others = await select("dbv5_state?id=neq.main&select=id,pos:state->pos,all:state->stats->all,cfg:state->cfg,action:last_run->action,price:last_run->market->price");
+  return chatFacts({ version: VERSION, updated: s?.[0]?.updated_at, state: s?.[0]?.state ?? {}, lastRun: s?.[0]?.last_run ?? {}, trades: tr ?? [], backtests: bt ?? [], news: nw ?? [], others: others ?? [], editableKeys: Object.keys(EDITABLE) });
 }
 async function chatRoute(body: Record<string, unknown>) {
   const now = Date.now();

@@ -15,6 +15,7 @@ import {
   CFG, chartRead, validateSignal, type Snap, type Series, type Signal, type Reject, type State, type M1View, type ChartRead,
 } from "./engine.ts";
 import { decideJSON, type Provider, type Usage } from "./ai.ts";
+import { reviewFacts } from "./egress.ts";
 import { zonesOf, type Bar as ZBar } from "./zones.ts";
 
 export type AgentRow = { agent: string; input_summary: string; output: Record<string, unknown>; provider?: string | null; ms?: number; error?: string | null };
@@ -76,7 +77,7 @@ export async function aiReview(
 ): Promise<AgentRow | null> {
   if (!opts.providers.length) return null;
   const system = "You are a skeptical trading-desk reviewer for a PAPER trading bot. You get a structured chart read and a trade the rules just took. Judge only from the data given. Reply with JSON {\"verdict\":\"agree|disagree|unsure\",\"reason\":\"<=160 chars\"}. Never give financial advice.";
-  const user = JSON.stringify({ trade: opened, rulesSaid: why.slice(0, 8), chart: deskChart(chart) });
+  const user = JSON.stringify(reviewFacts(opened, why, deskChart(chart)));   // allowlisted (egress.ts)
   const r = await decideJSON(system, user, (x) => {
     const o = x as { verdict?: string; reason?: string } | null;
     return o && VERDICTS.includes(o.verdict as typeof VERDICTS[number]) && typeof o.reason === "string" ? { verdict: o.verdict as string, reason: o.reason.slice(0, 200) } : null;

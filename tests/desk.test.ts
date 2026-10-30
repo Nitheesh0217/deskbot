@@ -108,7 +108,8 @@ test("workflow: respects the total deadline and the provider daily cap", async (
 
 test("authority: the desk module imports nothing that can trade, and the run loop uses its output only as log rows", () => {
   const src = readFileSync(new URL("../supabase/functions/deskbot-v5/desk.ts", import.meta.url), "utf8");
-  const imports = [...src.matchAll(/^import .* from "(.+)";/gm)].map((m) => m[1]); assert.deepEqual(imports, ["./ai.ts", "./agents.ts"]);
+  const imports = [...src.matchAll(/^import .* from "(.+)";/gm)].map((m) => m[1]); assert.deepEqual(imports, ["./ai.ts", "./egress.ts", "./agents.ts"]);
+  const eg = readFileSync(new URL("../supabase/functions/deskbot-v5/egress.ts", import.meta.url), "utf8"); assert.ok(!/^import /m.test(eg), "egress.ts (payload allowlist) imports nothing");
   assert.ok(!/engine\.ts/.test(src), "no engine import: it cannot call openPosition, entryGates, managePosition or change CFG");
   const idx = readFileSync(new URL("../supabase/functions/deskbot-v5/index.ts", import.meta.url), "utf8");
   // the only use of a verdict is one append-only shadow record (FILTER-1); remove that exact line and nothing else may mention it
