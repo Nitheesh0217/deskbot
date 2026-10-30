@@ -76,7 +76,7 @@ test("owner chat: the context is the allowlisted view; equity, $ P&L and quantit
   const ctx = chatFacts(raw);
   assert.deepEqual(egressViolations(JSON.stringify(ctx)), []); assert.equal(ctx.stats.byStrategy.SWEEP_REV!.expR, -0.056); assert.equal(ctx.drawdownFromPeakPct, 5.77);
   const { bodies, f } = capture(() => ({ reply: "In R terms the book is at -1.32R over 20 trades.", proposal: null }));
-  const keep = { ...process.env }, g = globalThis.fetch; process.env.GEMINI_API_KEY = "gsk_test_key"; (globalThis as any).fetch = f;
+  const keep = { ...process.env }, g = globalThis.fetch; process.env.GEMINI_API_KEY = "gsk_test_key"; process.env.AI_DATA_USE_ACCEPTED = "gemini:chat"; (globalThis as any).fetch = f;
   try {
     const r = await chat("How is the book doing?", [{ role: "assistant", content: "Hello" }], ctx, {}, Date.now());
     assert.equal((r as any).accountData, "withheld");
@@ -88,7 +88,7 @@ test("news classification sends headlines only", async () => {
   const RSS = `<rss><channel><item><title>Bitcoin slides as exchange hack rattles markets</title><pubDate>${new Date().toUTCString()}</pubDate></item></channel></rss>`;
   const bodies: string[] = [];
   const f = async (u: string, init: RequestInit) => { if (u.includes("llm.test") || init?.method === "POST") { bodies.push(String(init.body)); return new Response(JSON.stringify({ choices: [{ message: { content: '{"risk":"ELEVATED","btc_bias":"bear","event_type":"other","reason":"hack"}' } }] })); } return new Response(RSS, { status: 200 }); };
-  const keep = { ...process.env }; process.env.GEMINI_API_KEY = "gsk_test_key";
+  const keep = { ...process.env }; process.env.GEMINI_API_KEY = "gsk_test_key"; process.env.AI_DATA_USE_ACCEPTED = "gemini:news";
   try { await readNews(Date.now(), {}, { useAi: true, fetchImpl: f as never }); } finally { for (const k of Object.keys(process.env)) delete process.env[k]; Object.assign(process.env, keep); }
   assertClean(bodies, "news");
 });
@@ -99,4 +99,16 @@ test("provider errors and fallbacks carry no prompt text; push notifications car
   const close = pushClose("GOLD ", { strategy: "EMA_CROSS", dir: "long", reason: "STOP", r: -1.02 }), open = pushOpen("", { strategy: "HTF_TREND", dir: "short", score: 81 }, pos);
   for (const m of [close, open]) { assert.ok(!/\$|Eq |equity|risk \$/i.test(m), m); for (const v of secretValues) assert.ok(!m.includes(v), m); }
   assert.match(close, /-1\.02R/);
+});
+
+test("coverage: every outbound AI call site is one of the allowlisted paths; push text only comes from the R-only builders", async () => {
+  const { readdirSync, readFileSync } = await import("node:fs");
+  const dir = new URL("../supabase/functions/deskbot-v5/", import.meta.url), sites: string[] = [];
+  for (const f of readdirSync(dir).filter((x: string) => x.endsWith(".ts"))) { const src = readFileSync(new URL(f, dir), "utf8"); const n = (src.match(/await decideJSON\(/g) ?? []).length; if (n) sites.push(`${f}:${n}`); }
+  assert.deepEqual(sites.sort(), ["agents.ts:1", "chat.ts:1", "desk.ts:1", "news.ts:1"], "a new AI call site must be added to egress.ts and this list");
+  const src = (f: string) => readFileSync(new URL(f, dir), "utf8");
+  assert.match(src("agents.ts"), /JSON\.stringify\(reviewFacts\(/); assert.match(src("desk.ts"), /committeeFacts\(\{/);
+  assert.match(src("index.ts"), /return chatFacts\(\{/); assert.ok(!/state->equity|startEquity,|,net,r,/.test(src("index.ts").slice(src("index.ts").indexOf("async function chatContext"), src("index.ts").indexOf("async function chatRoute"))), "chat context reads no account columns");
+  const pushes = [...src("index.ts").matchAll(/await push\(([^;]*)\);/g)].map((m) => m[1]);
+  assert.ok(pushes.length >= 3 && pushes.every((x) => /pushClose\(|pushOpen\(|nr\.event/.test(x)), pushes.join(" | "));
 });

@@ -15,11 +15,14 @@ Account data stays in deterministic local code. Third parties get allowlisted pa
 
 ## Enforcement
 - `decideJSON` refuses any request whose system or user text carries an account key (`ACCOUNT_KEYS`: equity, balances, riskAmt, quantities, net/pnl/fees, account/wallet/user identifiers, keys and tokens). It returns `egress blocked`, and no provider is called.
-- **Provider availability.** A provider is used only when both of these hold:
-  - it has a key, **and**
-  - its data-use terms are recorded, either in code (`TERMS_VERIFIED`: currently Gemini) or in the owner's `AI_TERMS_VERIFIED` secret.
-  
-  A key alone does not enable an unverified provider (Groq, NVIDIA, Cerebras, Mistral, GitHub Models, OpenRouter). Status `ai.availability` lists every provider with `configured` / `termsVerified`.
+- **Provider policy: five separate facts per provider** (`ai.ts providerPolicy`, status `ai.policy`):
+  1. credentials present (the key secret exists);
+  2. terms reviewed (`TERMS_VERIFIED` in code, currently Gemini only, or the owner's `AI_TERMS_VERIFIED`);
+  3. data use accepted **per feature** (news, committee, chat), only by the owner's `AI_DATA_USE_ACCEPTED`, e.g. `gemini:news`;
+  4. reachable: unknown ("not tested") until a call succeeds; from the day's usage counters;
+  5. feature enabled (NEWS_AI/NEWS_MODE, AGENT_AI + DESK_WORKFLOW, chat key).
+
+  A provider serves a feature only when 1, 2, 3 and 5 hold. Gemini's terms entry is a review record: it accepts nothing and enables nothing. The tower names the first missing fact.
 - The chat reply carries `accountData: "withheld"`, and the UI shows "account data withheld (equity, $ P&L, sizes)".
 
 ## What this does not guarantee

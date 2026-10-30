@@ -25,7 +25,7 @@ const reply = (sys: string, dir: string) => /Bull/.test(sys) || /Bear/.test(sys)
 type Opt = { books: string; states: Record<string, State>; llmDelayMs?: number; logDelayMs?: number; logFailFor?: string; failCandlesFor?: string; i5: number };
 async function run(o: Opt) {
   const nowMs = m5[o.i5].ct + 4000, t0 = performance.now();
-  const env: Record<string, string> = { SUPABASE_URL: "https://deskbot.test", SUPABASE_SERVICE_ROLE_KEY: "test-only", DESKBOT_CRON_SECRET: "test-only", NEWS_MODE: "off", DESKBOT_BOOKS: o.books, GROQ_API_KEY: "gsk_test_key_not_real", AI_TERMS_VERIFIED: "groq" };
+  const env: Record<string, string> = { SUPABASE_URL: "https://deskbot.test", SUPABASE_SERVICE_ROLE_KEY: "test-only", DESKBOT_CRON_SECRET: "test-only", NEWS_MODE: "off", DESKBOT_BOOKS: o.books, GROQ_API_KEY: "gsk_test_key_not_real", AI_TERMS_VERIFIED: "groq", AI_DATA_USE_ACCEPTED: "groq:committee" };
   const states = structuredClone(o.states), order: { what: string; ms: number }[] = [], agentRows: any[] = [], evRows: any[] = [];
   const mark = (what: string) => order.push({ what, ms: performance.now() - t0 }), sleep = (ms = 0) => new Promise((r) => setTimeout(r, ms));
   let handler!: (req: Request) => Promise<Response>; const pD = (globalThis as any).Deno, pF = globalThis.fetch, pN = Date.now;

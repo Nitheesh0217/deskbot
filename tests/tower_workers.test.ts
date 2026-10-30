@@ -56,3 +56,12 @@ test("next run helper: minute lists in UTC", () => {
   assert.equal(new Date(nextAt([7, 22, 37, 52], Date.UTC(2026, 0, 1, 10, 7, 30))).toISOString(), "2026-01-01T10:22:00.000Z");
   assert.equal(new Date(nextAt([7, 22, 37, 52], Date.UTC(2026, 0, 1, 10, 53))).toISOString(), "2026-01-01T11:07:00.000Z");
 });
+
+test("AI seats name the exact missing provider fact: credentials, reviewed terms, or accepted data use (status.ai.policy)", () => {
+  const pol = (o: Record<string, unknown>) => ({ name: "gemini", credentialsPresent: false, termsReviewed: "code", dataUseAccepted: [], reachable: "not tested", featuresEnabled: ["news", "committee", "chat"], usableFor: [], ...o });
+  const seat = (p: unknown[]) => staffOf({ aiProviders: [], ai: { providers: [], policy: p, agentAi: true, deskWorkflow: true } }).bull;
+  assert.match(seat([pol({})]).facts.blocker, /missing credentials/);
+  assert.match(seat([pol({ name: "groq", credentialsPresent: true, termsReviewed: null })]).facts.blocker, /groq\) but terms not reviewed/);
+  assert.match(seat([pol({ credentialsPresent: true })]).facts.blocker, /terms reviewed \(gemini\) but the owner has not accepted their data use for the committee/);
+  assert.equal(seat([pol({ credentialsPresent: true })]).state, "BLOCKED", "a terms record and a key do not make the seat usable");
+});

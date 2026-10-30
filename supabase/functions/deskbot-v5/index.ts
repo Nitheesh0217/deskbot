@@ -12,7 +12,7 @@ import {
 } from "./engine.ts";
 import { candles, candlesRange, candlesRangeBinance, hlContext, fearGreed, orderFlow, SYMBOLS, isSym, type Sym } from "./data.ts";
 import { readNews, newsBlocks, type NewsRead } from "./news.ts";
-import { providersFromEnv, providerAvailability, type Usage } from "./ai.ts";
+import { providersFromEnv, providerPolicy, type Usage, type AiFeature } from "./ai.ts";
 import { chatFacts, pushClose, pushOpen } from "./egress.ts";
 import { chat, validatePatch, mergeCfg, EDITABLE, type ChatTurn } from "./chat.ts";
 import { configIntegrity, serialExecutor } from "./runtime.ts";
@@ -48,6 +48,8 @@ const RISK_ROUNDS = Math.min(2, Math.max(1, +(Deno.env.get("RISK_ROUNDS") ?? 1) 
 const EXPERIMENT_ID = Deno.env.get("DESKBOT_EXPERIMENT_ID") ?? "baseline-paper";
 const CHAT_KEY = Deno.env.get("DESKBOT_CHAT_KEY") ?? "";
 const CHAT_DAILY_CAP = +(Deno.env.get("CHAT_DAILY_CAP") ?? 150);
+// which advisory features are switched on (a provider still needs credentials, reviewed terms and accepted data use per feature)
+const aiFeaturesOf = (): Record<AiFeature, boolean> => ({ news: NEWS_AI && NEWS_MODE !== "off", committee: AGENT_AI && DESK_WORKFLOW, chat: !!CHAT_KEY && CHAT_DAILY_CAP > 0 });
 // Each book is a separate paper account (own equity, position, stats, cfg) in its own dbv5_state row.
 // A non-BTC book only runs once its row exists (created deliberately, with a researched cfg).
 const BOOKS: Sym[] = (Deno.env.get("DESKBOT_BOOKS") ?? "BTC,GOLD").split(",").map((x) => x.trim()).filter(isSym);
@@ -289,7 +291,8 @@ async function runOnce(sym: Sym = "BTC", scheduler?: (fn: () => Promise<void>) =
   const wx = st as State & { _workOutbox?: WorkRow[] };
   wx._workOutbox = mergeOutbox(wx._workOutbox, managerRows(sym, posBefore, snapshotPos(st.pos), closed, decisionIdFor, { snapT: posBefore ? snap.T : null, acts: traderActs }));
   if (!wx._workOutbox.length) delete wx._workOutbox;
-  const ai = { providers: providersFromEnv().map((p) => p.name), availability: providerAvailability(), usage: sx._aiUsage ?? {} };
+  // providers = names usable for the desk committee (the tower seats); policy = the five separate facts per provider and feature
+  const ai = { providers: providersFromEnv("committee").map((p) => p.name), policy: providerPolicy(aiFeaturesOf(), sx._aiUsage ?? {}, now), usage: sx._aiUsage ?? {} };
   const lastRun = { ts: new Date(now).toISOString(), sym, action, trader: { acts: traderActs, plan: st.pos?.plan ?? [] }, source, integrity, news, ai, upnl: +upnl.toFixed(2), market, decision, risk: dynamicRisk(st.equity), desk: desk.summary, coverage: covNow, catchup, provenanceError, ms: Date.now() - now };
   st.version = VERSION;
   await saveState(st, lastRun, sym);
@@ -330,7 +333,7 @@ async function runOnce(sym: Sym = "BTC", scheduler?: (fn: () => Promise<void>) =
           try { lessons = lessonsFrom(await select(`dbv5_trades?select=strategy,dir,r,reason,close_t&symbol=eq.${sym}&strategy=eq.${encodeURIComponent(p.strategy)}&order=close_t.desc&limit=8`)); } catch { /* memory is optional */ }
           const wf = await runDeskWorkflow({ ref: p.id, sym, strategy: p.strategy, dir: p.dir, regime: p.regime, why: p.why, newsRisk: sx._news?.risk ?? null, chart: deskChart(desk.chart), checks, analysts, lessons,
             plan: { dir: p.dir, entry: p.entry, stop0: p.stop0, tp1: p.tp1, tp2: p.tp2, tp3: p.tp3, maxHoldH: p.maxHoldH, strategy: p.strategy } },
-            { providers: AGENT_AI ? providersFromEnv() : [], usage: (sx._aiUsage ??= {}), now, debateRounds: DEBATE_ROUNDS, riskRounds: RISK_ROUNDS });
+            { providers: AGENT_AI ? providersFromEnv("committee") : [], usage: (sx._aiUsage ??= {}), now, debateRounds: DEBATE_ROUNDS, riskRounds: RISK_ROUNDS });
           rows.push(...wf.rows);
           // FILTER-1 shadow verdicts: recorded now, before this trade has an outcome. Append-only; a failure here is visible and changes nothing else.
           try { await insert("dbv5_filter_verdicts", verdictsFor(p.id, sym, p.strategy, checks, wf.rows)); } catch (e) { notes.push(`filter verdicts: ${(e as Error).message}`.slice(0, 120)); }
@@ -504,7 +507,7 @@ async function status() {
   }
   for (const [k, b] of Object.entries(books)) if ((b as { work?: unknown }).work) workBacklog[k] = (b as { work?: unknown }).work;
   const curve = (eq ?? []).filter((_: unknown, i: number, a: unknown[]) => a.length < 600 || i % Math.ceil(a.length / 600) === 0 || i === a.length - 1);
-  return { version: VERSION, mode: "PAPER", now: new Date().toISOString(), updated: s?.[0]?.updated_at ?? null, integrity, state: st, lastRun: s?.[0]?.last_run ?? null, events: ev, agents: agents ?? [], trades: tr, curve, books, backtest: bt?.[0] ?? null, experiment, config, registry: { strategies: STRATEGIES, optIn: OPT_IN }, scan, track, work: { backlog: workBacklog, lastFlush: Array.isArray(lastFlush) ? lastFlush : null, flushFailures24h: Array.isArray(flushFails) ? flushFails.length : null, lastFlushFailure: Array.isArray(flushFails) && flushFails[0] ? flushFails[0] : null }, chat: { enabled: !!CHAT_KEY, ai: providersFromEnv().map((p) => p.name) }, ai: { providers: providersFromEnv().map((p) => p.name), agentAi: AGENT_AI, deskWorkflow: DESK_WORKFLOW, newsAi: NEWS_AI, newsMode: NEWS_MODE } };
+  return { version: VERSION, mode: "PAPER", now: new Date().toISOString(), updated: s?.[0]?.updated_at ?? null, integrity, state: st, lastRun: s?.[0]?.last_run ?? null, events: ev, agents: agents ?? [], trades: tr, curve, books, backtest: bt?.[0] ?? null, experiment, config, registry: { strategies: STRATEGIES, optIn: OPT_IN }, scan, track, work: { backlog: workBacklog, lastFlush: Array.isArray(lastFlush) ? lastFlush : null, flushFailures24h: Array.isArray(flushFails) ? flushFails.length : null, lastFlushFailure: Array.isArray(flushFails) && flushFails[0] ? flushFails[0] : null }, chat: { enabled: !!CHAT_KEY, ai: providersFromEnv("chat").map((p) => p.name) }, ai: { policy: providerPolicy(aiFeaturesOf(), (st as { _aiUsage?: Usage } | null)?._aiUsage ?? {}), providers: providersFromEnv("committee").map((p) => p.name), byFeature: { news: providersFromEnv("news").map((p) => p.name), committee: providersFromEnv("committee").map((p) => p.name), chat: providersFromEnv("chat").map((p) => p.name) }, agentAi: AGENT_AI, deskWorkflow: DESK_WORKFLOW, newsAi: NEWS_AI, newsMode: NEWS_MODE } };
 }
 
 // ─── AI assistant (owner only; password = DESKBOT_CHAT_KEY secret) ─────────

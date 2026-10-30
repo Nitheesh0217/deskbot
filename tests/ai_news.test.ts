@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { decideJSON, providersFromEnv, type Provider, type Usage } from "../supabase/functions/deskbot-v5/ai.ts";
+import { decideJSON, providersFromEnv, providerPolicy, type Provider, type Usage } from "../supabase/functions/deskbot-v5/ai.ts";
 import { parseRss, ruleRead, validateAi, newsBlocks, readNews, type NewsRead } from "../supabase/functions/deskbot-v5/news.ts";
 
 const P = (name: string, cap = 100): Provider => ({ name, url: `https://${name}.test/v1/chat/completions`, model: `${name}-model`, key: "k", dailyCap: cap });
@@ -72,17 +72,17 @@ test("invalid provider budgets disable calls rather than removing the cap", asyn
 test("environment budgets fail closed and preserve explicit zero", () => {
   const key = process.env.GROQ_API_KEY, cap = process.env.GROQ_DAILY_CAP;
   try {
-    process.env.GROQ_API_KEY = "test"; process.env.AI_TERMS_VERIFIED = "groq";   // owner's record of a terms check
+    process.env.GROQ_API_KEY = "test"; process.env.AI_TERMS_VERIFIED = "groq"; process.env.AI_DATA_USE_ACCEPTED = "groq:news";   // owner's terms review + acceptance
     for (const value of ["invalid", "Infinity", "-1", "0.5", "0"]) {
       process.env.GROQ_DAILY_CAP = value;
-      assert.equal(providersFromEnv().find(p => p.name === "groq")?.dailyCap, 0);
+      assert.equal(providersFromEnv("news").find(p => p.name === "groq")?.dailyCap, 0);
     }
     delete process.env.GROQ_DAILY_CAP;
-    assert.equal(providersFromEnv().find(p => p.name === "groq")?.dailyCap, 300);
+    assert.equal(providersFromEnv("news").find(p => p.name === "groq")?.dailyCap, 300);
   } finally {
     if (key === undefined) delete process.env.GROQ_API_KEY; else process.env.GROQ_API_KEY = key;
     if (cap === undefined) delete process.env.GROQ_DAILY_CAP; else process.env.GROQ_DAILY_CAP = cap;
-    delete process.env.AI_TERMS_VERIFIED;
+    delete process.env.AI_TERMS_VERIFIED; delete process.env.AI_DATA_USE_ACCEPTED;
   }
 });
 test("all providers unavailable → null with reasons, never throws", async () => {
@@ -110,10 +110,10 @@ test("news gate: only 'gate' mode blocks, only HIGH, only fresh", () => {
   assert.equal(newsBlocks(null, "gate", now), null);
 });
 test("AI cannot downgrade rule HIGH to LOW (prompt-injection guard)", async () => {
-  process.env.GROQ_API_KEY = "test"; process.env.AI_TERMS_VERIFIED = "groq";
+  process.env.GROQ_API_KEY = "test"; process.env.AI_TERMS_VERIFIED = "groq"; process.env.AI_DATA_USE_ACCEPTED = "groq:news";
   const f = async (u: string) => u.includes("groq") ? ok({ risk: "LOW", btc_bias: "bull", event_type: "none", reason: "all fine" }) : new Response(RSS, { status: 200 });
   const r = await readNews(now, {}, { useAi: true, fetchImpl: f as any });
-  delete process.env.GROQ_API_KEY; delete process.env.AI_TERMS_VERIFIED;
+  delete process.env.GROQ_API_KEY; delete process.env.AI_TERMS_VERIFIED; delete process.env.AI_DATA_USE_ACCEPTED;
   assert.equal(r.ruleRisk, "HIGH"); assert.equal(r.risk, "ELEVATED"); assert.match(r.by, /^ai:groq/);
 });
 test("feeds down + no AI → rules-only LOW, no throw", async () => {
@@ -122,18 +122,25 @@ test("feeds down + no AI → rules-only LOW, no throw", async () => {
 });
 
 test("free providers: only those with a key, default order or AI_PROVIDER_ORDER, per-provider model override", () => {
-  const keep = { ...process.env }, set = (o: Record<string, string>) => { for (const k of Object.keys(process.env)) if (/_API_KEY$|_MODELS_TOKEN$|_MODEL$|AI_PROVIDER_ORDER|AI_TERMS_VERIFIED/.test(k)) delete process.env[k]; Object.assign(process.env, o); };
+  const keep = { ...process.env }, set = (o: Record<string, string>) => { for (const k of Object.keys(process.env)) if (/_API_KEY$|_MODELS_TOKEN$|_MODEL$|AI_PROVIDER_ORDER|AI_TERMS_VERIFIED|AI_DATA_USE_ACCEPTED/.test(k)) delete process.env[k]; Object.assign(process.env, o); };
   try {
-    // a key alone never activates a provider whose data-use terms are unverified
+    // five separate facts: a key, reviewed terms, accepted data use PER FEATURE (and the feature on); none implies another
     set({ NVIDIA_API_KEY: "x", GROQ_API_KEY: "y", OPENROUTER_API_KEY: "z" });
-    assert.deepEqual(providersFromEnv().map((p) => p.name), []);
-    set({ NVIDIA_API_KEY: "x", GROQ_API_KEY: "y", OPENROUTER_API_KEY: "z", GEMINI_API_KEY: "g" });
-    assert.deepEqual(providersFromEnv().map((p) => p.name), ["gemini"], "gemini's terms are recorded in code (TERMS_VERIFIED)");
-    set({ NVIDIA_API_KEY: "x", GROQ_API_KEY: "y", OPENROUTER_API_KEY: "z", AI_TERMS_VERIFIED: "groq,nvidia,openrouter" });
-    assert.deepEqual(providersFromEnv().map((p) => p.name), ["groq", "nvidia", "openrouter"]);
-    set({ NVIDIA_API_KEY: "x", GROQ_API_KEY: "y", AI_PROVIDER_ORDER: "nvidia", NVIDIA_MODEL: "custom/model", AI_TERMS_VERIFIED: "groq,nvidia" });
-    const ps = providersFromEnv(); assert.deepEqual(ps.map((p) => p.name), ["nvidia", "groq"]); assert.equal(ps[0].model, "custom/model"); assert.match(ps[0].url, /^https:\/\/integrate\.api\.nvidia\.com\//);
-    set({}); assert.deepEqual(providersFromEnv(), []);
+    assert.deepEqual(providersFromEnv("news").map((p) => p.name), [], "keys alone: nothing");
+    set({ GEMINI_API_KEY: "g" });
+    assert.deepEqual(providersFromEnv("news").map((p) => p.name), [], "gemini's reviewed terms in code do not accept its data use");
+    set({ GEMINI_API_KEY: "g", AI_DATA_USE_ACCEPTED: "gemini:news" });
+    assert.deepEqual(providersFromEnv("news").map((p) => p.name), ["gemini"]); assert.deepEqual(providersFromEnv("chat"), [], "accepted for news only, not chat");
+    set({ AI_DATA_USE_ACCEPTED: "gemini:*" }); assert.deepEqual(providersFromEnv("news"), [], "acceptance without a key: nothing");
+    set({ GROQ_API_KEY: "y", AI_DATA_USE_ACCEPTED: "groq:*" }); assert.deepEqual(providersFromEnv("committee"), [], "accepted but terms not reviewed: nothing");
+    const pol = providerPolicy({ news: true, committee: false, chat: true }, { groq: { day: "d", calls: 3, fails: 3, coolUntil: Date.now() + 6e5 } });
+    const g = pol.find((x) => x.name === "groq")!; assert.equal(g.credentialsPresent, true); assert.equal(g.termsReviewed, null); assert.deepEqual(g.dataUseAccepted, ["news", "committee", "chat"]); assert.equal(g.reachable, "failing (cooling down)"); assert.deepEqual(g.usableFor, []);
+    set({ NVIDIA_API_KEY: "x", GROQ_API_KEY: "y", OPENROUTER_API_KEY: "z", AI_TERMS_VERIFIED: "groq,nvidia,openrouter", AI_DATA_USE_ACCEPTED: "groq:*,nvidia:*,openrouter:*" });
+    assert.deepEqual(providersFromEnv("committee").map((p) => p.name), ["groq", "nvidia", "openrouter"]);
+    assert.deepEqual(providerPolicy({ committee: false }).find((x) => x.name === "groq")!.usableFor, ["news", "chat"], "a switched-off feature is never usable");
+    set({ NVIDIA_API_KEY: "x", GROQ_API_KEY: "y", AI_PROVIDER_ORDER: "nvidia", NVIDIA_MODEL: "custom/model", AI_TERMS_VERIFIED: "groq,nvidia", AI_DATA_USE_ACCEPTED: "groq:*,nvidia:*" });
+    const ps = providersFromEnv("committee"); assert.deepEqual(ps.map((p) => p.name), ["nvidia", "groq"]); assert.equal(ps[0].model, "custom/model"); assert.match(ps[0].url, /^https:\/\/integrate\.api\.nvidia\.com\//);
+    set({}); assert.deepEqual(providersFromEnv("chat"), []);
   } finally { for (const k of Object.keys(process.env)) delete process.env[k]; Object.assign(process.env, keep); }
 });
 

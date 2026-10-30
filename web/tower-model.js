@@ -161,6 +161,15 @@
     const prov = (name) => rowsOf(agents, name)[0];
     const say = (o) => o.rating ? `${o.rating}${o.stance ? ' → ' + o.stance : ''}: ${o.rationale || o.executive_summary || ''}` : o.action ? `${String(o.action).toUpperCase()}: ${o.reason || ''}` : o.argument ? o.argument : o.verdict ? `${o.verdict}: ${o.reason || ''}` : (o.summary || o.case || NR);
     const aiFlags = input.ai || null;   // status.ai: provider names and feature switches (no secrets)
+    // which of the separate provider facts is missing (status.ai.policy): credentials, reviewed terms, accepted data use, feature switch
+    const aiBlocker = (f) => {
+      const pol = f && Array.isArray(f.policy) ? f.policy : null; if (!pol) return null;
+      const keyed = pol.filter((x) => x.credentialsPresent), reviewed = keyed.filter((x) => x.termsReviewed), accepted = reviewed.filter((x) => (x.dataUseAccepted || []).includes('committee'));
+      if (!keyed.length) return `missing credentials: no AI provider secret set (${AI_KEYS})`;
+      if (!reviewed.length) return `credentials present (${keyed.map((x) => x.name).join(', ')}) but terms not reviewed; unverified providers stay unavailable`;
+      if (!accepted.length) return `terms reviewed (${reviewed.map((x) => x.name).join(', ')}) but the owner has not accepted their data use for the committee (AI_DATA_USE_ACCEPTED)`;
+      return `committee feature switched off`;
+    };
     const role = (id, agents_, label) => {
       const rs = [].concat(agents_).map(prov).filter(Boolean), r = rs[0], o = r && r.output;
       const noProvider = providers ? providers.length === 0 : !(lr.ai && Array.isArray(lr.ai.providers) && lr.ai.providers.length);
@@ -170,7 +179,7 @@
       const detail = rs.length > 1 ? rs.map((x) => `${x.agent.replace('desk-risk-', '')}: ${x.error ? 'error' : say(x.output || {})}`.slice(0, 160)) : [];
       const okEver = rs.some((x) => !x.error);   // a logged successful call is the only evidence of connectivity
       const state = r && r.error && fresh(ts(r), now) ? 'ERROR' : noProvider ? 'BLOCKED' : off ? 'DISABLED' : r && !r.error && fresh(ts(r), now) ? 'RUNNING' : okEver ? 'WAITING' : 'UNKNOWN';
-      const w = worker(id, state, String(line).slice(0, 220), { lastSuccess: r && !r.error ? ts(r) : null, lastOutput: o ? say(o).slice(0, 120) : null, blocker: noProvider ? `missing credentials: no AI provider secret set (${AI_KEYS}); see docs/AI_PROVIDERS.md` : off ? 'disabled by configuration' : !okEver ? 'provider configured; connectivity unverified (no successful call logged yet)' : null, trigger: 'a new paper entry (event-driven)', evidence: SRC + 'desk.ts', durationMs: r && r.ms != null ? r.ms : null, usage: r && r.provider ? r.provider : null, calls: id === 'riskdebate' ? '3 calls per round (aggressive, conservative, neutral)' : id === 'bull' || id === 'bear' ? '1 call per debate round' : '1 call' },
+      const w = worker(id, state, String(line).slice(0, 220), { lastSuccess: r && !r.error ? ts(r) : null, lastOutput: o ? say(o).slice(0, 120) : null, blocker: noProvider ? aiBlocker(aiFlags) || `missing credentials: no AI provider secret set (${AI_KEYS}); see docs/AI_PROVIDERS.md` : off ? 'disabled by configuration' : !okEver ? 'provider configured; connectivity unverified (no successful call logged yet)' : null, trigger: 'a new paper entry (event-driven)', evidence: SRC + 'desk.ts', durationMs: r && r.ms != null ? r.ms : null, usage: r && r.provider ? r.provider : null, calls: id === 'riskdebate' ? '3 calls per round (aggressive, conservative, neutral)' : id === 'bull' || id === 'bear' ? '1 call per debate round' : '1 call' },
         r && r.error ? [String(r.error)] : [...detail, `Advisory only (${label}); cannot place, size or block a trade`]);
       w.status = status; return w;
     };
