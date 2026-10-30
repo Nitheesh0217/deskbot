@@ -92,7 +92,7 @@ async function recordDecision(c: Awaited<ReturnType<typeof captureDecision>>) {
   if (ok !== true && ok !== false) throw new Error("decision record not acknowledged");
 }
 async function push(title: string, body: string) {
-  if (!NTFY) return; try { await fetch(`https://ntfy.sh/${NTFY}`, { method: "POST", headers: { Title: title }, body }); } catch { /* optional */ }
+  if (!NTFY) return; try { await fetch(`https://ntfy.sh/${NTFY}`, { method: "POST", headers: { Title: title }, body, signal: AbortSignal.timeout(3000) }); } catch { /* optional, bounded to 3 s */ }
 }
 
 // v3 carry-over: start v5 from the cloud v3 equity so the run is continuous
@@ -112,16 +112,24 @@ async function runLocked() {
   const got = await rest("rpc/dbv5_lease", { method: "POST", headers: { Prefer: "" }, body: JSON.stringify({ owner, seconds: 120 }) });
   if (got !== true) return { ok: true, skipped: "another run holds the lease" };
   try {
-    const out: Record<string, unknown> = {};
+    const out: Record<string, unknown> = {}, later: { sym: Sym; fn: () => Promise<void> }[] = [];
+    // phase 1, per book: data, position management, entries, durable state save, equity and events. Phase 2 (below) holds only the
+    // advisory and recoverable work (work-log flush, desk / LLM review, agent rows), so one book's advisory work never delays another
+    // book's management, and a failure in one book's phase 1 does not stop the next book.
     for (const sym of BOOKS) {
-      try { out[sym] = await runOnce(sym); }
+      try { out[sym] = await runOnce(sym, (fn) => later.push({ sym, fn })); }
       catch (e) { const msg = `${sym} book: ${(e as Error).message}`.slice(0, 300); out[sym] = { ok: false, error: msg }; try { await events([{ kind: "ERROR", msg, symbol: sym }]); } catch { /* ignore */ } }
+    }
+    for (const { sym, fn } of later) {
+      try { await fn(); }
+      catch (e) { try { await events([{ kind: "ERROR", msg: `${sym} advisory phase: ${(e as Error).message}`.slice(0, 300), symbol: sym }]); } catch { /* the work stays pending in the book state */ } }
     }
     return { ok: true, version: VERSION, books: out };
   } finally { try { await rest("rpc/dbv5_release", { method: "POST", body: JSON.stringify({ owner }) }); } catch { /* lease expires anyway */ } }
 }
 
-async function runOnce(sym: Sym = "BTC") {
+async function runOnce(sym: Sym = "BTC", scheduler?: (fn: () => Promise<void>) => void) {
+  const pending: (() => Promise<void>)[] = [], defer = scheduler ?? ((fn: () => Promise<void>) => { pending.push(fn); });
   const now = Date.now(); const evs: Ev[] = []; const notes: string[] = [];
   const isCrypto = sym !== "GOLD", tag = sym === "BTC" ? "" : `${sym} `;
   let st = await loadState(sym);
@@ -287,47 +295,53 @@ async function runOnce(sym: Sym = "BTC") {
   await saveState(st, lastRun, sym);
   await upsert("dbv5_equity", [{ symbol: sym, ts: new Date(now).toISOString(), equity: +st.equity.toFixed(4), upnl: +upnl.toFixed(4), price: snap.price }]);
   await events(evs);
-  // flush Theo's outbox (persist.ts flushOutbox): batches of conflict-safe inserts, each acknowledged by a scoped RPC that removes
-  // exactly its keys. Pending records are never dropped; a failure is an ERROR event and the rest stays for the next run.
-  if (wx._workOutbox?.length) {
-    try {
-      const f = await flushOutbox(wx, { insert: (rs) => writeAgentRows(sym, rs), ack: (keys) => ackWork(db, rowId(sym), keys) });
-      if (f.error) await events([{ kind: "ERROR", msg: `${tag}work log write failed; ${f.pending} record(s) pending (${f.delivered} delivered this run): ${f.error}`.slice(0, 280), symbol: sym }]);
-      // last flush result for status / Theo's desk (an event, so it is recorded even when the work log itself is unavailable)
-      await events([{ kind: "WORKLOG", symbol: sym, msg: `${tag}work log flush: ${f.delivered} delivered, ${f.pending} pending${f.budgetExhausted ? " (per-run budget reached; continues next run)" : ""}${f.error ? " · failed" : ""}`.slice(0, 280), data: { delivered: f.delivered, pending: f.pending, batches: f.batches, ms: f.ms, budgetExhausted: f.budgetExhausted, error: f.error } }]).catch(() => {});
-      if (f.needsStateSave) await saveState(st, lastRun, sym);   // RPC not migrated: persist the trimmed outbox by compare-and-set
-      if (f.mode === "check-then-insert") notes.push("work log: work_key column missing; deduplicated by check-then-insert");
-    } catch (e) {
-      try { await events([{ kind: "ERROR", msg: `${tag}work log flush: ${(e as Error).message}`.slice(0, 280), symbol: sym }]); } catch { /* the outbox is still saved */ }
-    }
-  }
-  // Desk review layer (advisory). Runs AFTER state and ledger are saved so slow or failing providers can never cost a persisted trade.
-  // Post-trade reviews are deterministic and free; the LLM roles run only for a trade opened this run and only when a provider is configured.
-  if (DESK_WORKFLOW) {
-    try {
-      for (const t of closed) rows.push({ agent: "desk-postmortem", input_summary: `${t.id} ${t.strategy} ${t.dir}`, output: { ref: t.id, authority: "advisory", ...postTradeReview({ ...t, why: t.why }) } });
-      const p = opened ? st.pos : null;
-      if (p) {
-        const checks = preTradeChecks({ plan: { dir: p.dir, entry: p.entry, stop0: p.stop0, tp1: p.tp1, maxHoldH: p.maxHoldH, strategy: p.strategy }, atr15: snap.atr15, hour: snap.hour, funding: ctx?.funding ?? null, costs: { taker: CFG.TAKER_FEE, slippage: CFG.SLIPPAGE }, newsRisk: sx._news?.risk ?? null, levels: desk.chart.levels });
-        const usageBefore = JSON.stringify(sx._aiUsage ?? {});
-        const analysts = analystReports({ price: snap.price, regime: snap.regime, bias: desk.chart.bias ?? null, trend: { "5m": snap.st5, "15m": snap.st15, "1h": snap.st1h, "4h": snap.st4h }, rsi15: snap.rsi15, rsi1h: snap.rsi1h, chop15: snap.chop15, vwapDev: snap.vwapDev, atr15: snap.atr15,
-          support: desk.chart.support ?? null, resistance: desk.chart.resistance ?? null, funding: ctx?.funding ?? null, oi: ctx?.oi ?? null, fng: fng?.value ?? null, flow24: flow?.imb24 ?? null,
-          newsRisk: sx._news?.risk ?? null, newsReason: sx._news?.reason ?? null, headlines: (sx._news?.headlines ?? []).map((h) => h.title) });
-        // memory: the last closed trades of this strategy on this book (TradingAgents' reflection memory, kept deterministic)
-        let lessons: string[] = [];
-        try { lessons = lessonsFrom(await select(`dbv5_trades?select=strategy,dir,r,reason,close_t&symbol=eq.${sym}&strategy=eq.${encodeURIComponent(p.strategy)}&order=close_t.desc&limit=8`)); } catch { /* memory is optional */ }
-        const wf = await runDeskWorkflow({ ref: p.id, sym, strategy: p.strategy, dir: p.dir, regime: p.regime, why: p.why, newsRisk: sx._news?.risk ?? null, chart: deskChart(desk.chart), checks, analysts, lessons,
-          plan: { dir: p.dir, entry: p.entry, stop0: p.stop0, tp1: p.tp1, tp2: p.tp2, tp3: p.tp3, maxHoldH: p.maxHoldH, strategy: p.strategy } },
-          { providers: AGENT_AI ? providersFromEnv() : [], usage: (sx._aiUsage ??= {}), now, debateRounds: DEBATE_ROUNDS, riskRounds: RISK_ROUNDS });
-        rows.push(...wf.rows);
-        // FILTER-1 shadow verdicts: recorded now, before this trade has an outcome. Append-only; a failure here is visible and changes nothing else.
-        try { await insert("dbv5_filter_verdicts", verdictsFor(p.id, sym, p.strategy, checks, wf.rows)); } catch (e) { notes.push(`filter verdicts: ${(e as Error).message}`.slice(0, 120)); }
-        // persist the provider call counters (daily caps) after the LLM stages; compare-and-set like every other write
-        if (JSON.stringify(sx._aiUsage ?? {}) !== usageBefore) await saveState(st, lastRun, sym).catch(async (e) => { await events([{ kind: "ERROR", msg: `${tag}provider counters not saved: ${(e as Error).message}`.slice(0, 280), symbol: sym }]).catch(() => {}); });
+  // phase 2 (advisory, recoverable): runs after EVERY book's phase 1 (runLocked). The global CFG belongs to whichever book ran last, so
+  // this book's own configuration is applied again first.
+  defer(async () => {
+    applyCfg(st.cfg); setMlAsset(sym === "GOLD");
+    // flush Theo's outbox (persist.ts flushOutbox): batches of conflict-safe inserts, each acknowledged by a scoped RPC that removes
+    // exactly its keys. Pending records are never dropped; a failure is an ERROR event and the rest stays for the next run.
+    if (wx._workOutbox?.length) {
+      try {
+        const f = await flushOutbox(wx, { insert: (rs) => writeAgentRows(sym, rs), ack: (keys) => ackWork(db, rowId(sym), keys) });
+        if (f.error) await events([{ kind: "ERROR", msg: `${tag}work log write failed; ${f.pending} record(s) pending (${f.delivered} delivered this run): ${f.error}`.slice(0, 280), symbol: sym }]);
+        // last flush result for status / Theo's desk (an event, so it is recorded even when the work log itself is unavailable)
+        await events([{ kind: "WORKLOG", symbol: sym, msg: `${tag}work log flush: ${f.delivered} delivered, ${f.pending} pending${f.budgetExhausted ? " (per-run budget reached; continues next run)" : ""}${f.error ? " · failed" : ""}`.slice(0, 280), data: { delivered: f.delivered, pending: f.pending, batches: f.batches, ms: f.ms, budgetExhausted: f.budgetExhausted, error: f.error } }]).catch(() => {});
+        if (f.needsStateSave) await saveState(st, lastRun, sym);   // RPC not migrated: persist the trimmed outbox by compare-and-set
+        if (f.mode === "check-then-insert") notes.push("work log: work_key column missing; deduplicated by check-then-insert");
+      } catch (e) {
+        try { await events([{ kind: "ERROR", msg: `${tag}work log flush: ${(e as Error).message}`.slice(0, 280), symbol: sym }]); } catch { /* the outbox is still saved */ }
       }
-    } catch (e) { notes.push(`desk review: ${(e as Error).message}`.slice(0, 120)); }
-  }
-  if (rows.length) { try { await writeAgentRows(sym, rows); } catch (e) { try { await events([{ kind: "ERROR", msg: `${tag}agent log write failed: ${(e as Error).message}`.slice(0, 280), symbol: sym }]); } catch { /* ignore */ } } }
+    }
+    // Desk review layer (advisory). Runs AFTER state and ledger are saved so slow or failing providers can never cost a persisted trade.
+    // Post-trade reviews are deterministic and free; the LLM roles run only for a trade opened this run and only when a provider is configured.
+    if (DESK_WORKFLOW) {
+      try {
+        for (const t of closed) rows.push({ agent: "desk-postmortem", input_summary: `${t.id} ${t.strategy} ${t.dir}`, output: { ref: t.id, authority: "advisory", ...postTradeReview({ ...t, why: t.why }) } });
+        const p = opened ? st.pos : null;
+        if (p) {
+          const checks = preTradeChecks({ plan: { dir: p.dir, entry: p.entry, stop0: p.stop0, tp1: p.tp1, maxHoldH: p.maxHoldH, strategy: p.strategy }, atr15: snap.atr15, hour: snap.hour, funding: ctx?.funding ?? null, costs: { taker: CFG.TAKER_FEE, slippage: CFG.SLIPPAGE }, newsRisk: sx._news?.risk ?? null, levels: desk.chart.levels });
+          const usageBefore = JSON.stringify(sx._aiUsage ?? {});
+          const analysts = analystReports({ price: snap.price, regime: snap.regime, bias: desk.chart.bias ?? null, trend: { "5m": snap.st5, "15m": snap.st15, "1h": snap.st1h, "4h": snap.st4h }, rsi15: snap.rsi15, rsi1h: snap.rsi1h, chop15: snap.chop15, vwapDev: snap.vwapDev, atr15: snap.atr15,
+            support: desk.chart.support ?? null, resistance: desk.chart.resistance ?? null, funding: ctx?.funding ?? null, oi: ctx?.oi ?? null, fng: fng?.value ?? null, flow24: flow?.imb24 ?? null,
+            newsRisk: sx._news?.risk ?? null, newsReason: sx._news?.reason ?? null, headlines: (sx._news?.headlines ?? []).map((h) => h.title) });
+          // memory: the last closed trades of this strategy on this book (TradingAgents' reflection memory, kept deterministic)
+          let lessons: string[] = [];
+          try { lessons = lessonsFrom(await select(`dbv5_trades?select=strategy,dir,r,reason,close_t&symbol=eq.${sym}&strategy=eq.${encodeURIComponent(p.strategy)}&order=close_t.desc&limit=8`)); } catch { /* memory is optional */ }
+          const wf = await runDeskWorkflow({ ref: p.id, sym, strategy: p.strategy, dir: p.dir, regime: p.regime, why: p.why, newsRisk: sx._news?.risk ?? null, chart: deskChart(desk.chart), checks, analysts, lessons,
+            plan: { dir: p.dir, entry: p.entry, stop0: p.stop0, tp1: p.tp1, tp2: p.tp2, tp3: p.tp3, maxHoldH: p.maxHoldH, strategy: p.strategy } },
+            { providers: AGENT_AI ? providersFromEnv() : [], usage: (sx._aiUsage ??= {}), now, debateRounds: DEBATE_ROUNDS, riskRounds: RISK_ROUNDS });
+          rows.push(...wf.rows);
+          // FILTER-1 shadow verdicts: recorded now, before this trade has an outcome. Append-only; a failure here is visible and changes nothing else.
+          try { await insert("dbv5_filter_verdicts", verdictsFor(p.id, sym, p.strategy, checks, wf.rows)); } catch (e) { notes.push(`filter verdicts: ${(e as Error).message}`.slice(0, 120)); }
+          // persist the provider call counters (daily caps) after the LLM stages; compare-and-set like every other write
+          if (JSON.stringify(sx._aiUsage ?? {}) !== usageBefore) await saveState(st, lastRun, sym).catch(async (e) => { await events([{ kind: "ERROR", msg: `${tag}provider counters not saved: ${(e as Error).message}`.slice(0, 280), symbol: sym }]).catch(() => {}); });
+        }
+      } catch (e) { notes.push(`desk review: ${(e as Error).message}`.slice(0, 120)); }
+    }
+    if (rows.length) { try { await writeAgentRows(sym, rows); } catch (e) { try { await events([{ kind: "ERROR", msg: `${tag}agent log write failed: ${(e as Error).message}`.slice(0, 280), symbol: sym }]); } catch { /* ignore */ } } }
+  });
+  for (const fn of pending) await fn();   // direct callers without a scheduler keep the old inline order
   return { ok: true, sym, version: VERSION, integrity, action, equity: +st.equity.toFixed(2), upnl: +upnl.toFixed(2), pos: st.pos ? { strategy: st.pos.strategy, dir: st.pos.dir, entry: st.pos.entry, stop: st.pos.stop, tp1: st.pos.tp1 } : null, trader: traderActs, closed: closed.length, source, news: news ? { risk: news.risk, by: news.by } : null, provenanceError, ms: Date.now() - now };
 }
 
