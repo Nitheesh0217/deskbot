@@ -26,13 +26,30 @@
     ['decision','Decision recorder','Rules','Records entries selected by the engine.'],
     ['ai-review','AI second opinion','Optional AI','Shadow review; cannot place or size trades.']
   ].map(([id,name,kind,description])=>({id,name,kind,description}));
-  const optIn = new Set(['HTF_SWEEP','EMA_CROSS','SSR','EMA_PB']);
+  const OPT_IN = Object.freeze(['HTF_SWEEP','EMA_CROSS','SSR','EMA_PB']);
+  // engine.ts CFG_DEFAULTS.RISK_SCALE: opt-in strategies default to 0, every other strategy to 1
+  const DEFAULT_RISK_SCALE = Object.freeze(Object.fromEntries(strategies.map(s => [s.id, OPT_IN.includes(s.id) ? 0 : 1])));
   const finite = n => typeof n === 'number' && Number.isFinite(n);
+  /** Effective RISK_SCALE map for a book: its cfg.RISK_SCALE merged over the defaults. Returns a new object; inputs are never mutated. */
+  function riskScaleMap(cfg) {
+    const over = cfg && cfg.RISK_SCALE && typeof cfg.RISK_SCALE === 'object' ? cfg.RISK_SCALE : {};
+    return Object.assign({}, DEFAULT_RISK_SCALE, over);
+  }
+  /**
+   * The ONE enabled / risk-scale rule for the dashboard, same as engine.ts: a strategy is OFF when enabled[id] === false,
+   * or RISK_SCALE[id] === 0, or it is opt-in without a positive scale. `cfg` is the book config (or its stored overrides),
+   * `enabled` the state's enabled-flag map. off: 'flag' | 'scale' | 'opt-in' | null.
+   */
+  function resolveStrategy(id, cfg, enabled) {
+    const raw = riskScaleMap(cfg)[id], riskScale = typeof raw === 'number' ? raw : undefined, optIn = OPT_IN.includes(id);
+    const enabledFlag = enabled && typeof enabled === 'object' ? enabled[id] : undefined;
+    const off = enabledFlag === false ? 'flag' : riskScale === 0 ? 'scale' : optIn && !(riskScale > 0) ? 'opt-in' : null;
+    return { id, riskScale, optIn, enabledFlag, enabled: off === null, off };
+  }
   function strategyStatus(id, state, lastRun, available) {
     if (!available) return { state:'NO DATA',reason:'Account status has not loaded.',scale:null,enabled:null,reportedAt:null };
-    const map = state.cfg && state.cfg.RISK_SCALE || {};
-    const scale = finite(map[id]) ? map[id] : optIn.has(id) ? 0 : 1;
-    const enabled = !(state.enabled && state.enabled[id] === false) && scale > 0;
+    const r = resolveStrategy(id, state.cfg, state.enabled);
+    const scale = finite(r.riskScale) ? r.riskScale : r.optIn ? 0 : 1, enabled = r.enabled;
     if (!enabled) return {state:'DISABLED',reason:'Disabled flag or zero effective configured scale.',scale,enabled,reportedAt:null};
     const decision = lastRun.decision || {};
     const signal = (Array.isArray(decision.signals) ? decision.signals : []).find(s => s.strategy === id);
@@ -82,5 +99,5 @@
       observedRoles:available?roles.filter(r=>r.record).length:null,providerCount:available&&providers?providers.length:null,
       traded:available?traded.length:null,positive:available?traded.filter(r=>r.stats.net>0).length:null};
   }
-  root.DeskBotModel=Object.freeze({strategies,agentRoles,strategyStatus,account,operations,finite});
+  root.DeskBotModel=Object.freeze({strategies,agentRoles,OPT_IN,DEFAULT_RISK_SCALE,riskScaleMap,resolveStrategy,strategyStatus,account,operations,finite});
 })(globalThis);

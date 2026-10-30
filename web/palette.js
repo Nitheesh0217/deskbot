@@ -4,8 +4,7 @@
 // Every command clicks an existing control, so the palette can do nothing the page itself cannot.
 (function (root) {
   'use strict';
-  const $ = (id) => document.getElementById(id);
-  const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const { $, esc } = root.DeskUtil;
   let sel = 0, items = [], shown = [];
   const click = (q) => () => { const el = typeof q === 'string' ? document.querySelector(q) : q; el && el.click(); };
   const view = (v) => () => document.querySelector(`.tab[data-v="${v}"]`)?.click();
@@ -60,5 +59,5 @@
     $('cmd').addEventListener('click', (e) => { if (e.target === $('cmd')) close(); });
     $('cmdBtn') && $('cmdBtn').addEventListener('click', open);
   });
-  root.DeskPalette = { open, close, _build: build, _score: score };
+  root.DeskPalette = { open, close };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

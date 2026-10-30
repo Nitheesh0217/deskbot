@@ -6,12 +6,15 @@
 <meta name="description" content="DeskBot paper trading research desk. Account observations, strategy status, charts and operational evidence.">
 <title>DeskBot — Spatial Research Desk</title>
 <link rel="icon" type="image/svg+xml" href="./favicon.svg">
+<link rel="stylesheet" href="./tokens.css">
 <link rel="stylesheet" href="./terminal.css">
 <link rel="stylesheet" href="./desk-layout.css">
 <link rel="stylesheet" href="./features.css">
 <link rel="stylesheet" href="./tower.css">
+<link rel="stylesheet" href="./tower3d.css">
 <link rel="stylesheet" href="./markets.css">
 <link rel="stylesheet" href="./scanner.css">
+<script src="./util.js" defer></script>
 <script src="./evidence.js" defer></script>
 <script src="./desk-model.js" defer></script>
 <script src="./vendor/motion-14.7.1.js" defer></script>
@@ -22,6 +25,7 @@
 <script src="./plan.js" defer></script>
 <script src="./tower-model.js" defer></script>
 <script src="./tower.js" defer></script>
+<script src="./tower3d.js" defer></script>
 <script src="./indicators.js" defer></script>
 <script src="./markets.js" defer></script>
 <script src="./scanner.js" defer></script>
@@ -126,15 +130,15 @@
           <div class="eq-v" id="eq">—</div>
           <div class="eq-d" id="eqd">—</div>
         </div>
-        <span class="regime" id="runAction">SKIP</span>
+        <span class="regime" id="runAction">—</span>
       </div>
       <div class="curve-label"><span>Paper balance history</span><span id="curveCoverage">No series loaded</span></div>
       <svg class="spark" id="spark" viewBox="0 0 300 64" preserveAspectRatio="none" aria-label="Sampled paper equity history"></svg>
       <div class="kv-row">
-        <div class="kv"><div class="k">Closed trades</div><div class="v" id="kTrades">0</div></div>
+        <div class="kv"><div class="k">Closed trades</div><div class="v" id="kTrades">—</div></div>
         <div class="kv"><div class="k">Win rate</div><div class="v" id="kWr">—</div></div>
         <div class="kv"><div class="k">Avg R</div><div class="v" id="kR">—</div></div>
-        <div class="kv"><div class="k">Reported max DD</div><div class="v" id="kDd">0.0%</div></div>
+        <div class="kv"><div class="k">Reported max DD</div><div class="v" id="kDd">—</div></div>
       </div>
     </div>
 
@@ -147,7 +151,7 @@
     </section>
 
     <details class="engine-more"><summary>Engine details: setup radar, market context, decisions, crew</summary><div class="engine-grid">
-    <section class="card setup-radar" id="setupRadar" aria-label="Setup radar">
+    <section class="card setup-radar" aria-label="Setup radar">
       <div class="section-top"><div><div class="eyebrow">OPPORTUNITY DISCOVERY</div><h2>Setup radar</h2></div><span class="chip" id="radarCoverage">Waiting for evidence</span></div>
       <p class="note">Explore the current strategy families. Reported setups still face selection and risk checks.</p>
       <div class="toolbar"><label class="search-field"><span aria-hidden="true">⌕</span><input id="setupSearch" type="search" aria-label="Search setup radar" placeholder="Search setups, timeframe or reason"></label><label class="family-select">Family <select id="setupFamily" aria-label="Setup family"><option value="all">All families</option><option>Trend</option><option>Breakout</option><option>Reversal</option><option>Mean reversion</option></select></label></div>
@@ -196,11 +200,11 @@
     <div class="card">
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
         <h2><span class="bookName">BTC</span> chart</h2>
-        <div class="seg" id="chartMode" style="margin-left:auto"><button type="button" data-m="bot" aria-pressed="true">Bot levels</button><button type="button" data-m="tv" aria-pressed="false">TradingView</button></div>
+        <div class="seg" id="chartMode" role="group" aria-label="Chart source" style="margin-left:auto"><button type="button" data-m="bot" aria-pressed="true">Bot levels</button><button type="button" data-m="tv" aria-pressed="false">TradingView</button></div>
       </div>
-      <div class="seg" id="tfSeg" style="margin-top:10px"><button type="button" data-tf="15m" aria-pressed="false">15m</button><button type="button" data-tf="1h" aria-pressed="true">1H</button><button type="button" data-tf="4h" aria-pressed="false">4H</button><button type="button" data-tf="1d" aria-pressed="false">1D</button></div>
+      <div class="seg" id="tfSeg" role="group" aria-label="Chart timeframe" style="margin-top:10px"><button type="button" data-tf="15m" aria-pressed="false">15m</button><button type="button" data-tf="1h" aria-pressed="true">1H</button><button type="button" data-tf="4h" aria-pressed="false">4H</button><button type="button" data-tf="1d" aria-pressed="false">1D</button></div>
       <div class="seg ind" id="indSeg" role="group" aria-label="Indicators"><button type="button" data-ind="VOL">VOL</button><button type="button" data-ind="SMA20">SMA20</button><button type="button" data-ind="SMA50">SMA50</button><button type="button" data-ind="SMA200">SMA200</button><button type="button" data-ind="VWAP">VWAP</button><button type="button" data-ind="BOLL">BOLL</button><button type="button" data-ind="RSI">RSI</button><button type="button" data-ind="MACD">MACD</button></div>
-      <div class="plan-bar"><div class="seg" id="planView" role="group" aria-label="Chart view"><button type="button" data-view="price" aria-pressed="true">Price action</button><button type="button" data-view="plan" aria-pressed="false">Full plan</button></div><span class="note faint" id="planViewNote">Price action scales to recent candles, entry and stop; Full plan scales to every executable level.</span></div>
+      <div class="plan-bar"><div class="seg" id="planView" role="group" aria-label="Chart view"><button type="button" data-view="price" aria-pressed="true">Price action</button><button type="button" data-view="plan" aria-pressed="false">Full plan</button></div><span class="note faint">Price action scales to recent candles, entry and stop; Full plan scales to every executable level.</span></div>
       <div id="planPanel" class="plan-panel" aria-label="Open position plan"><p class="note faint">Loading the position plan…</p></div>
       <div class="layers" id="layers" role="group" aria-label="Chart layers">
         <label><input type="checkbox" data-layer="refs"> Reference &amp; advisory levels</label>
@@ -218,6 +222,7 @@
       <div class="legend" id="legend"></div>
       <p class="note faint" style="margin-top:8px">TradingView Lightweight Charts™ · Copyright (с) 2023 TradingView, Inc. <a href="https://www.tradingview.com/" target="_blank" rel="noopener">TradingView</a></p>
       <p class="note faint" style="margin-top:8px" id="chartNote">Reference indicators are calculated from the displayed candle feed. Reported position levels are separate. Waiting for candle source.</p>
+      <p class="note zone-msg" id="zoneMsg" role="status" hidden></p>
     </div>
     <div class="card">
       <h2>Reference levels &amp; reported position</h2>
@@ -304,8 +309,8 @@
       <button type="button">Suggest one change to test</button>
       <button type="button">How did the last trade go?</button>
     </div>
-    <div class="in" id="pwRow"><input id="chatPw" type="password" autocomplete="current-password" placeholder="Owner chat password (this page only)"><button class="btn" id="pwSave" type="button">Unlock</button></div>
-    <div class="in"><textarea id="chatIn" rows="2" placeholder="Ask anything about the bot…"></textarea><button class="btn primary" id="chatSend" type="button">Send</button></div>
+    <div class="in" id="pwRow"><input id="chatPw" type="password" aria-label="Owner chat password" autocomplete="current-password" placeholder="Owner chat password (this page only)"><button class="btn" id="pwSave" type="button">Unlock</button></div>
+    <div class="in"><textarea id="chatIn" rows="2" aria-label="Message to the desk assistant" placeholder="Ask anything about the bot…"></textarea><button class="btn primary" id="chatSend" type="button">Send</button></div>
   </div>
 </section>
 
@@ -313,18 +318,18 @@
 <nav class="tabs" aria-label="Workspace sections">
   <a class="sidebar-brand" href="#desk" aria-label="DeskBot overview"><span class="brand-symbol">D<span>·</span></span><span>DESKBOT<small>Spatial research desk</small></span></a>
   <div class="tabs-in" role="tablist" aria-label="Workspace views">
-    <button class="tab" role="tab" id="tab-desk" aria-controls="v-desk" data-v="desk" aria-selected="true"><svg viewBox="0 0 24 24"><path d="M3 17l5-5 4 4 8-8"/><path d="M15 8h5v5"/></svg><span>Overview</span></button>
-    <button class="tab" role="tab" id="tab-scanner" aria-controls="v-scanner" data-v="scanner" aria-selected="false"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5M8 11h6M11 8v6"/></svg><span>Board</span></button>
-    <button class="tab" role="tab" id="tab-tower" aria-controls="v-tower" data-v="tower" aria-selected="false"><svg viewBox="0 0 24 24"><path d="M6 21V8l6-5 6 5v13"/><path d="M10 21v-4h4v4M9 11h1M14 11h1M9 14h1M14 14h1"/></svg><span>Tower</span></button>
-    <button class="tab" role="tab" id="tab-committee" aria-controls="v-committee" data-v="committee" aria-selected="false"><svg viewBox="0 0 24 24"><circle cx="7" cy="8" r="2.5"/><circle cx="17" cy="8" r="2.5"/><circle cx="12" cy="15" r="2.5"/><path d="M8.8 9.8l1.8 3.4M15.2 9.8l-1.8 3.4"/></svg><span>Committee</span></button>
-    <button class="tab" role="tab" id="tab-trades" aria-controls="v-trades" data-v="trades" aria-selected="false"><svg viewBox="0 0 24 24"><path d="M5 4h14v16H5z"/><path d="M9 9h6M9 13h6M9 17h3"/></svg><span>Journal</span></button>
-    <button class="tab more-btn" type="button" id="moreBtn" aria-expanded="false" aria-controls="moreGroup"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg><span>More</span></button>
+    <button class="tab" type="button" role="tab" id="tab-desk" aria-controls="v-desk" data-v="desk" aria-selected="true"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 17l5-5 4 4 8-8"/><path d="M15 8h5v5"/></svg><span>Overview</span></button>
+    <button class="tab" type="button" role="tab" id="tab-scanner" aria-controls="v-scanner" data-v="scanner" aria-selected="false"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5M8 11h6M11 8v6"/></svg><span>Board</span></button>
+    <button class="tab" type="button" role="tab" id="tab-tower" aria-controls="v-tower" data-v="tower" aria-selected="false"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 21V8l6-5 6 5v13"/><path d="M10 21v-4h4v4M9 11h1M14 11h1M9 14h1M14 14h1"/></svg><span>Tower</span></button>
+    <button class="tab" type="button" role="tab" id="tab-committee" aria-controls="v-committee" data-v="committee" aria-selected="false"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="7" cy="8" r="2.5"/><circle cx="17" cy="8" r="2.5"/><circle cx="12" cy="15" r="2.5"/><path d="M8.8 9.8l1.8 3.4M15.2 9.8l-1.8 3.4"/></svg><span>Committee</span></button>
+    <button class="tab" type="button" role="tab" id="tab-trades" aria-controls="v-trades" data-v="trades" aria-selected="false"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 4h14v16H5z"/><path d="M9 9h6M9 13h6M9 17h3"/></svg><span>Journal</span></button>
+    <button class="tab more-btn" type="button" id="moreBtn" aria-expanded="false" aria-controls="moreGroup"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg><span>More</span></button>
     <div class="more-group" id="moreGroup">
-    <button class="tab more" role="tab" id="tab-chart" aria-controls="v-chart" data-v="chart" aria-selected="false"><svg viewBox="0 0 24 24"><path d="M6 4v16M6 8h-2v6h2M12 6v12M12 9h-2v5h2M18 3v14M18 6h-2v7h2"/></svg><span>Chart</span></button>
-    <button class="tab more" role="tab" id="tab-strategies" aria-controls="v-strategies" data-v="strategies" aria-selected="false"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="7" height="7" rx="1"/><rect x="14" y="4" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg><span>Strategies</span></button>
-    <button class="tab more" role="tab" id="tab-markets" aria-controls="v-markets" data-v="markets" aria-selected="false"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 15l3-3 3 2 4-5"/></svg><span>News &amp; macro</span></button>
-    <button class="tab more" role="tab" id="tab-activity" aria-controls="v-activity" data-v="activity" aria-selected="false"><svg viewBox="0 0 24 24"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg><span>Activity</span></button>
-    <button class="tab more" role="tab" id="tab-system" aria-controls="v-system" data-v="system" aria-selected="false"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2"/></svg><span>System</span></button>
+    <button class="tab more" type="button" role="tab" id="tab-chart" aria-controls="v-chart" data-v="chart" aria-selected="false"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 4v16M6 8h-2v6h2M12 6v12M12 9h-2v5h2M18 3v14M18 6h-2v7h2"/></svg><span>Chart</span></button>
+    <button class="tab more" type="button" role="tab" id="tab-strategies" aria-controls="v-strategies" data-v="strategies" aria-selected="false"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3" y="4" width="7" height="7" rx="1"/><rect x="14" y="4" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg><span>Strategies</span></button>
+    <button class="tab more" type="button" role="tab" id="tab-markets" aria-controls="v-markets" data-v="markets" aria-selected="false"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 15l3-3 3 2 4-5"/></svg><span>News &amp; macro</span></button>
+    <button class="tab more" type="button" role="tab" id="tab-activity" aria-controls="v-activity" data-v="activity" aria-selected="false"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg><span>Activity</span></button>
+    <button class="tab more" type="button" role="tab" id="tab-system" aria-controls="v-system" data-v="system" aria-selected="false"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2"/></svg><span>System</span></button>
     </div>
   </div>
   <div class="sidebar-footer"><span class="chip paper">PAPER ONLY</span><p>Made for a clearer perspective.</p><small>No funded orders</small></div>

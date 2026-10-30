@@ -1,0 +1,12 @@
+/* Design tokens: the ONE definition of the dashboard's colours and fonts (light theme). Loaded before every other stylesheet.
+   These are the values the page already rendered with (previously spread over terminal.css and desk-layout.css). */
+:root {
+  --bg: #edf2fb; --panel: #ffffff; --panel-2: #eff3fc; --line: #dbe3f0; --line-2: #bccce1;
+  --fg: #263448; --fg-2: #50637c; --fg-3: #63748c;
+  --accent: #4f63d9; --accent-ink: #ffffff; --accent-soft: #5367df10;
+  --up: #167b62; --up-soft: #1685650c; --down: #b64459; --down-soft: #bd435510; --warn: #865b17;
+  --f-display: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --f-body: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --f-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  color-scheme: light;
+}

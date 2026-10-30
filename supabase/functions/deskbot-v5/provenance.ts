@@ -5,7 +5,7 @@ import {
   CFG, ML_IS_GOLD, setMlAsset, applyCfg, buildSeries, snapshot, evaluate, entryGates, openPosition, dynamicRisk, riskMultiplier, ensureState, idxAt,
   type Bar, type Signal, type Reject, type State, type Position, type Trade, type Context,
 } from "./engine.ts";
-import { SYMBOLS, type Sym } from "./data.ts";
+import { SYMBOLS, bookOf, type Sym } from "./data.ts";
 import { BUILD } from "./build_info.ts";
 import { canonical } from "./runtime.ts";
 import { catchUp } from "./catchup.ts";
@@ -150,7 +150,7 @@ export async function replayDecision(record: Record<string, any>, rows: Pick<Inp
   if (diffs.length) return { diffs, reproduced: false };
   const cfgBefore = clone(CFG), glBefore = ML_IS_GOLD;
   try {
-    applyCfg(record.config.resolved); setMlAsset(record.sym === "GOLD");
+    applyCfg(record.config.resolved); setMlAsset(bookOf(record.sym).mlGold);
     const S = buildSeries({ m5: frames.m5, m15: frames.m15, h1: frames.h1, h4: frames.h4 });
     const i5 = idxAt(frames.m5, record.dataAvailability.snapshotBarClose);
     if (i5 < 0 || frames.m5[i5].ct !== record.dataAvailability.snapshotBarClose) { add("snapshotBar", record.dataAvailability.snapshotBarClose, i5 < 0 ? "not found" : frames.m5[i5].ct); return { diffs, reproduced: false }; }
