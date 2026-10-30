@@ -136,3 +136,36 @@ Findings reproduced by the reviewer and fixed: (1) a failed replacement-entry ev
   - typecheck pass; npm test 256/256; diff check clean; build:web:check and build-info:check current
   - postgrest.sh 11/11; race 6/6; rollback 4/4; work_key.sh and shadow_lane.sh pass
   - smokes tower/markets/scanner/workers/strategies: 0 errors (strategies: 11 matrix rows, no horizontal scroll on mobile).
+
+## 2026-10-30 · Integrated paper release: acceptance on the exact candidate
+Candidate `4262f7f50618f61ab412858d496e35f2cc5d16e3` (tree `7a8e2edf61db105dd0b4fd7738aba57eb0511a56`). Run in a clean detached worktree at that SHA by `accept.sh`. Later commits are `docs/` only.
+
+**Local checks**
+- build_info current (`2b76b76b…`); web build current.
+- Typecheck OK.
+- `npm test`: **277/277**. This includes the cross-book scheduling regression (3 tests), egress (8), provider policy, account registry (6) and chart plan.
+- Diff check OK.
+
+**Database checks**
+- PostgREST 12.2.3 + PostgreSQL 16: application requests: all checks passed.
+- `RACE=1`: retried insert/ack, stale revision and 30 interleavings all pass (resurrected=0, lostY=0).
+- `ROLLBACK=1` with `afdf44a`: book row beside the shadow row; book-only reads; no shadow record discarded.
+- `outbox_guard.sh`:
+  - scale: 100 → 3.2 ms, 1k → 13.7 ms, 10k → 90.5 ms, 50k → 436 ms
+  - preservation ok
+  - retention: suppression ends with the 14-day log row; re-delivery after pruning is accepted as a new row
+- `work_key.sh`: pass.
+- `shadow_lane.sh`: pass.
+
+**Browser smokes** (SYNTHETIC / MOCK fixture, mocked network, desktop and phone)
+- tower, markets, scanner, workers, strategies: 0 problems.
+- chart_plan: loading placeholder present; no horizontal scroll; 6 plan rows (5 in the candle-error state).
+
+**Negative control**
+The cross-book regression fails on the previous scheduler: GOLD is saved after BTC's 8 LLM calls.
+
+**Not verified against hosted services**
+- The deployed edge function, migrations and Vercel build of this candidate: not deployed.
+- Live provider reachability: no provider is configured.
+- Broker connectivity: none exists.
+- Hyperliquid instrument metadata: the host is not reachable from this session.
