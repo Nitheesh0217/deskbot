@@ -516,7 +516,7 @@ async function chartDraw() {
       if (r.key === "entry") PL(r.price, cssVar("--fg"), `Entry · ${p.dir.toUpperCase()}`, 0, 2);
       else if (r.key === "stop") PL(r.price, cssVar("--down"), `${r.label} · ${tag}`, 0, 2);
       else if (r.key === "stop0") PL(r.price, cssVar("--down"), `Original stop · −1R (reference)`, 2, 1);
-      else if (/^tp/.test(r.key)) PL(r.price, cssVar("--up"), `${r.label}${r.status === "hit" ? " ✓" : ""} · ${tag} · ${Math.round(r.share * 100)}%`, r.status === "hit" ? 2 : 0);
+      else if (/^tp/.test(r.key)) PL(r.price, cssVar("--up"), `${r.label}${r.status === "hit" ? " ✓" : ""} · ${tag} · exit ${Math.round(r.share * 100)}% of orig.`, r.status === "hit" ? 2 : 0);
     }
     renderPlanPanel(plan, last);
     // markers: closed trades + open entry
@@ -563,7 +563,7 @@ async function chartDraw() {
     const nw = (S.last_run || {}).news; if (nw) rd.push(`<div>News risk <b>${esc(nw.risk)}</b> (${esc(String(nw.by || "").startsWith("ai:") ? "AI" : "keyword rules")}, ${esc(nw.mode)} mode): ${esc(nw.reason)}</div>`);
     $("botRead").innerHTML = rd.join("");
     renderSetupCard(p, S);
-  } catch (e) { if (request !== CH.request || book !== BOOK || tf !== CH.tf) return; renderSetupCard(((DATA.state || {}).state || {}).pos, DATA.state); $("lwMsg").hidden = false; $("lwMsg").textContent = "Couldn't load candles here (" + (e && e.message || "network") + "). Retry when the candle source is reachable."; }
+  } catch (e) { if (request !== CH.request || book !== BOOK || tf !== CH.tf) return; renderSetupCard(((DATA.state || {}).state || {}).pos, DATA.state); try { const ps = ((DATA.state || {}).state || {}).pos; renderPlanPanel(ps ? planOf(ps, null) : null, null, "Candles unavailable: the plan below comes from the stored position; current price and its distances are not shown."); } catch (_) { renderPlanPanel(null, null, null, true); } $("lwMsg").hidden = false; $("lwMsg").textContent = "Couldn't load candles here (" + (e && e.message || "network") + "). Retry when the candle source is reachable."; }
 }
 
 /** The plan table for the open position (plan.js), with this book's exit rules and the strategy's trigger timeframe. */
@@ -573,13 +573,15 @@ function planOf(p, price) {
   const cadence = globalThis.DeskCoverage ? DeskCoverage.cadenceFor(p.strategy, cfg) : null;
   return DeskPlan.planRows(p, { price, cadence, exitMode: cfg.EXIT_MODE, traderParts: cfg.TRADER_PARTS, now: Date.now() });
 }
-function renderPlanPanel(plan, price) {
+function renderPlanPanel(plan, price, warn, failed) {
   const el = $("planPanel"); if (!el) return;
+  if (failed) { el.innerHTML = '<p class="note down">Plan unavailable: the position data could not be read. Nothing about the position was changed.</p>'; return; }
+  const warnHtml = warn ? `<p class="note warn">${esc(warn)}</p>` : "";
   if (!plan) { el.innerHTML = '<p class="note faint">No open paper position: the chart shows price action and, if switched on, reference levels only.</p>'; return; }
-  const m = plan.meta, q = (x) => (x == null ? "—" : (+x).toFixed(5));
-  const row = (r) => `<tr class="pk-${r.kind} ${r.status === "hit" ? "hit" : ""}"><td>${esc(r.label)}${r.kind === "reference" ? ' <small class="faint">not an order</small>' : ""}</td><td class="r">${fmtPx(r.price)}</td><td class="r">${r.pct == null ? "—" : (r.pct > 0 ? "+" : "") + r.pct.toFixed(2) + "%"}</td><td class="r">${r.r == null ? "—" : (r.r > 0 ? "+" : "") + r.r.toFixed(2) + "R"}</td><td class="r">${r.share ? Math.round(r.share * 100) + "% · " : ""}${q(r.qty)}</td><td>${esc(r.status)}</td></tr>`;
-  el.innerHTML = `<div class="plan-meta"><b>${esc(nameOf(m.strategy))}</b> · ${esc(m.dir)} · signal on ${esc(m.signalTimeframe || "—")} · max hold ${esc(m.maxHoldText || "—")}${m.expiresAt ? ` (time exit ${new Date(m.expiresAt).toISOString().slice(0, 16).replace("T", " ")} UTC)` : ""} · 1R = ${fmtPx(m.riskPts)} pts (${m.riskPct.toFixed(2)}%) = ${fmt$(m.riskAmt)}</div>
-    <div class="plan-wrap"><table class="plan-t"><thead><tr><th>Level</th><th class="r">Price</th><th class="r">From entry</th><th class="r">R (original risk)</th><th class="r">Exit size</th><th>Status</th></tr></thead><tbody>${plan.rows.map(row).join("")}</tbody></table></div>
+  const m = plan.meta, q = (x) => (x == null ? "—" : (+x).toPrecision(6));
+  const row = (r) => `<tr class="pk-${r.kind} ${r.status === "hit" ? "hit" : ""}"><td>${esc(r.label)}${r.kind === "reference" ? ' <small class="faint">not an order</small>' : ""}</td><td class="r">${fmtPx(r.price)}</td><td class="r">${r.pct == null ? "—" : (r.pct > 0 ? "+" : "") + r.pct.toFixed(2) + "%"}</td><td class="r">${r.r == null ? "—" : (r.r > 0 ? "+" : "") + r.r.toFixed(2) + "R"}</td><td class="r">${r.exitText ? esc(r.exitText) + " · " : ""}${q(r.qty)}</td><td>${esc(r.status)}</td></tr>`;
+  el.innerHTML = `${warnHtml}<div class="plan-meta"><b>${esc(nameOf(m.strategy))}</b> · ${esc(m.dir)} · signal on ${esc(m.signalTimeframe || "—")} · max hold ${esc(m.maxHoldText || "—")}${m.heldH != null && m.maxHoldH ? ` (held ${m.heldH.toFixed(0)} h of ${m.maxHoldH} h)` : ""}${m.expiresAt ? ` · time exit ${new Date(m.expiresAt).toISOString().slice(0, 16).replace("T", " ")} UTC` : ""} · 1R = ${fmtPx(m.riskPts)} pts (${m.riskPct.toFixed(2)}%) = ${fmt$(m.riskAmt)}</div>
+    <div class="plan-wrap"><table class="plan-t"><thead><tr><th>Level</th><th class="r">Price</th><th class="r">From entry</th><th class="r">R (original risk)</th><th class="r">Exit size (planned)</th><th>Status</th></tr></thead><tbody>${plan.rows.map(row).join("")}</tbody></table></div>
     <p class="note faint">Executable levels are the paper engine's orders. Exit rules: ${esc(m.exitRules.join("; ") || "—")}. The chart timeframe you view is not the trade's deadline. Zones, Donchian, Asian range and agent levels are reference or advisory only.</p>`;
 }
 async function renderSetupCard(p, S) {

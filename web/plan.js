@@ -26,14 +26,17 @@
     let prevCum = 0;
     for (const k of ['tp1', 'tp2', 'tp3']) {
       const cum = CUM[k], share = cum - prevCum; prevCum = cum;
-      rows.push({ key: k, label: k.toUpperCase(), price: p[k], pct: pct(p[k]), r: rOf(p[k]), qty: q0 * share, share, kind: 'executable', status: p[k + 'Done'] ? 'hit' : 'resting' });
+      // the executor closes UP TO cum × original quantity (minus what is already closed), so the planned exit is `share` of the
+      // ORIGINAL size and the position is `cum` closed afterwards; an earlier partial close makes the actual fill smaller
+      const exitText = `${Math.round(share * 100)}% of original → ${Math.round(cum * 100)}% closed`;
+      rows.push({ key: k, label: k.toUpperCase(), price: p[k], pct: pct(p[k]), r: rOf(p[k]), qty: q0 * share, share, cum, exitText, kind: 'executable', status: p[k + 'Done'] ? 'hit' : 'resting' });
     }
     const expiresAt = finite(p.openT) && finite(p.maxHoldH) ? p.openT + p.maxHoldH * 3600e3 : null, now = a.now ?? Date.now();
     const exitRules = [];
     if (a.exitMode === 'HOLD') exitRules.push('stop stays at the original level until TP2, then moves to entry');
     if (a.exitMode === 'BE_AT_TP1') exitRules.push('stop moves to entry at TP1 and to TP1 at TP2');
     if (a.traderParts) exitRules.push(`trade manager may adjust: ${a.traderParts}`);
-    if (expiresAt) exitRules.push(`time exit at ${new Date(expiresAt).toISOString().slice(0, 16).replace('T', ' ')} UTC (max hold)`);
+    if (expiresAt) exitRules.push(`time exit at ${new Date(expiresAt).toISOString().slice(0, 16).replace('T', ' ')} UTC (max hold: a limit, not a forecast that a target is reached by then)`);
     return {
       rows,
       meta: {

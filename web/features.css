@@ -31,3 +31,4 @@
 .plan-t th { text-align: left; font: 600 10px/1.2 var(--f-mono); letter-spacing: .06em; color: var(--fg-3); padding: 7px 8px; border-bottom: 1px solid var(--line); background: #f7f9fd; }
 .plan-t td { padding: 7px 8px; border-bottom: 1px solid var(--line); } .plan-t .r { text-align: right; }
 .plan-t tr.pk-market td { color: var(--fg-2); } .plan-t tr.pk-reference td { color: var(--fg-3); font-style: italic; } .plan-t tr.hit td { opacity: .6; }
+.plan-panel .note.warn { color: var(--warn); } .plan-panel .note.down { color: var(--down); }

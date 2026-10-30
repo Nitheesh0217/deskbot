@@ -14,6 +14,9 @@ test("screenshot trade: distances, R from original risk, exit quantities, timefr
   assert.deepEqual(["tp1", "tp2", "tp3"].map((k) => +r[k].pct.toFixed(2)), [-4.32, -8.65, -17.3]);
   assert.deepEqual(["tp1", "tp2", "tp3"].map((k) => +r[k].r.toFixed(2)), [1.5, 3, 6]);
   assert.deepEqual(["tp1", "tp2", "tp3"].map((k) => +r[k].qty.toFixed(8)), [0.00147001, 0.00073501, 0.00073501]);
+  // executor semantics (engine.ts fill): close up to CUM × original; the label states both the increment and the cumulative level
+  assert.deepEqual(["tp1", "tp2", "tp3"].map((k) => r[k].exitText), ["50% of original → 50% closed", "25% of original → 75% closed", "25% of original → 100% closed"]);
+  assert.ok(meta.exitRules.some((x: string) => /a limit, not a forecast/.test(x)));
   assert.equal(+(r.tp1.qty + r.tp2.qty + r.tp3.qty).toFixed(12), +pos.originalQty.toFixed(12), "exit quantities reconcile to the original quantity");
   assert.equal(+r.current.r.toFixed(3), +((77822.4324 - 77300) / 2243.4975555).toFixed(3));
   assert.equal(meta.signalTimeframe, "4H close"); assert.equal(meta.maxHoldText, "21 days"); assert.equal(new Date(meta.expiresAt).toISOString(), "2026-11-20T00:01:01.202Z");
