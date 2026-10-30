@@ -1,0 +1,14 @@
+{
+ "frozenAt": "2026-10-30",
+ "files": {
+  "research/2026-10-30-entry-exit/SPEC_FROZEN.md": "96a5c0b4331d6076ca44007d7d5d44f57037f6fdc2d150490bc2c2073bdbf828",
+  "scripts/excursion_study.ts": "a9ba0254ce041129e2b8a79481e821db8fc1bf0bb839cf08a9a9ae13527c08af",
+  "supabase/functions/deskbot-v5/engine.ts": "e60893ad37bdff1c7095060374e2cc609d2ec45c620f7b3f7232f276ec7fdd07",
+  "supabase/functions/deskbot-v5/lanes.ts": "05ed38d536c07fad51418f2fe6591b38c64d1d7582e81e621bc6c71ab128a6e2"
+ },
+ "data": {
+  "kline5_BTC.csv.gz": "0088d1f131fcd3fc35317daae6ca76dc2c1658c63d0231e1520fd110071ac09f",
+  "kline5_PAXG.csv.gz": "32c7421e7e177cf714ffecae1177973ae47a2953f99108e8745bf5292cdac528",
+  "live_cfg_2026-10-28.json": "cc51a955bda38b3af2f302eeb0cd0b13b5e4df60677bf1d71caafa509ea62688"
+ }
+}
