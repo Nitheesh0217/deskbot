@@ -1,27 +1,6 @@
 
 /* Layout: a phone-first trading terminal — sticky header, one scrolling view per tab, fixed bottom tab bar. */
-:root {
-  --bg: #0d1116; --panel: #151b23; --panel-2: #1b232d; --line: #263140; --line-2: #33414f;
-  --fg: #e6ebf1; --fg-2: #9aa8b8; --fg-3: #67778a;
-  --accent: #f2a93b; --accent-ink: #1a1203; --accent-soft: rgba(242,169,59,.14);
-  --up: #3fcf8e; --up-soft: rgba(63,207,142,.13); --down: #f0616d; --down-soft: rgba(240,97,109,.13); --warn: #e3c14d;
-  --f-display: "Chakra Petch", "Trebuchet MS", sans-serif;
-  --f-body: "IBM Plex Sans", -apple-system, "Segoe UI", sans-serif;
-  --f-mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
-  color-scheme: dark;
-}
-@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) {
-  --bg: #f3f5f8; --panel: #ffffff; --panel-2: #eef1f5; --line: #dde3ea; --line-2: #c9d2dc;
-  --fg: #121821; --fg-2: #4b5a6b; --fg-3: #7b8898;
-  --accent: #b86a00; --accent-ink: #ffffff; --accent-soft: rgba(184,106,0,.10);
-  --up: #108a55; --up-soft: rgba(16,138,85,.10); --down: #c8303e; --down-soft: rgba(200,48,62,.09); --warn: #96720a;
-  color-scheme: light; } }
-:root[data-theme="light"] {
-  --bg: #f3f5f8; --panel: #ffffff; --panel-2: #eef1f5; --line: #dde3ea; --line-2: #c9d2dc;
-  --fg: #121821; --fg-2: #4b5a6b; --fg-3: #7b8898;
-  --accent: #b86a00; --accent-ink: #ffffff; --accent-soft: rgba(184,106,0,.10);
-  --up: #108a55; --up-soft: rgba(16,138,85,.10); --down: #c8303e; --down-soft: rgba(200,48,62,.09); --warn: #96720a;
-  color-scheme: light; }
+/* Colour and font tokens live in tokens.css (loaded first). */
 
 * { box-sizing: border-box; }
 html, body { background: var(--bg); }
