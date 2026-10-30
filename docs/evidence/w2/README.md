@@ -1,2 +1,3 @@
-# W2 screenshots (SYNTHETIC status, mocked network)
-Taken by `scripts/web_smoke/workers.cjs` against this branch build. No AI provider is configured, there is one fresh scan with per-worker telemetry, and there is one synthetic manager work-log row. These images show the UI states, not production data.
+# W2 screenshots: SYNTHETIC TEST DATA
+Taken by `scripts/web_smoke/workers.cjs` against build `5af2e83` (mocked network). Every image carries a red banner reading "SYNTHETIC TEST DATA · mocked network · build 5af2e83".
+The status is synthetic: no AI provider configured, one fresh scan with per-worker telemetry, one ETH derivatives failure, and one manager work-log row. The images show UI states, not production data.

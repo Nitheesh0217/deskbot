@@ -74,3 +74,12 @@ Findings reproduced by the reviewer and fixed: (1) a failed replacement-entry ev
 - Runtime queries (Supabase SQL, read-only): 288/288 equity rows per book in 24 h; cron 0/408 failed; 25 scans since 17:46; ERROR events 0/7d; providers [] on both books; dbv5_decisions 0 (no entry since the provenance release); manager agent rows 1 vs 53 exit events in 7 d.
 - Tests run locally on the W2 branch: `npm run typecheck` pass; `npm test` 223/223 pass (new: tests/worklog.test.ts 5, tests/tower_workers.test.ts 5, desk_handler retry test 1). Browser smokes (Playwright, mocked network, SYNTHETIC status): tower, markets, scanner, workers: 0 page/console errors on desktop 1360×900 and mobile 390×844.
 - Pre-flight: the W2 bundle against the 29 Oct live book snapshots gives the same positions and equity as the v19 bundle on the same input (BTC 339.2622633013888, GOLD 319.00746503674634). The scan action writes only dbv5_scans.
+
+## 30 Oct 2026 - PR #19 revision after review of 33af114 (sandbox evidence; NOT deployed)
+- Reproduction before the fix:
+  - tests/tower_workers_rev.test.ts: 5/5 failed on 33af114, 5/5 pass now.
+  - worklog_identity scenarios: 3/5 failed against the 33af114 worklog (destination-keyed); both retry tests passed there too.
+  - Persistence handler test: failed on a 33af114 worktree (the outage lost the records); passes now.
+- Suite: `npm run typecheck` pass; `npm test` 235/235; `git diff --check` clean. Browser smokes tower/markets/scanner/workers: 0 errors at 1360x900 and 390x844.
+- Real PostgreSQL 16 (scripts/sql_test/work_key.sh): migration applied twice (idempotent). 16 concurrent `insert ... on conflict (work_key) do nothing` with the same key gave 1 row; 3 NULL-key rows coexist.
+- Not verified here: PostgREST's handling of `?columns=...&on_conflict=work_key` against the production schema (no PostgREST locally). It must be checked by a post-migration smoke before release is called verified.

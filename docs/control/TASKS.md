@@ -55,12 +55,13 @@ Next: T007 replay-fidelity mismatch report (PAXG first); T008 atomic/recoverable
 
 ## W1 — Current-state audit and truthful roster (DONE 30 Oct 2026; CURRENT_STATE.md)
 
-## W2 — Theo work log and missing worker desks (IN PR; deploy + additive migration `20261030_scan_work.sql` need owner approval)
-- Objective: every material management action is recorded once. New desks reflect real workers, and their states come from runtime evidence.
-- Contracts: `worklog.ts` (pure diff, keys `<posId>:<action>:<id>`); `writeAgentRows` drops keys already logged (the per-book lease serializes runs); scan rows gain `work` telemetry; status gains `ai` flags (booleans and provider names only).
-- Acceptance: a retry from the same state adds no row and changes no trade (handler test). Missing AI credentials show BLOCKED with the exact reason (tower test). Event-driven waiting shows WAITING. Absent telemetry shows UNKNOWN.
-- Rollback: redeploy the edge entry pinned to `3e25392`. The migration is additive and needs no rollback; the code tolerates the column being absent.
-- Known limits: dedupe is code-level (no DB unique constraint on agent log keys). Last attempt is not recorded per worker; it is shown as "not recorded". Stella still has no backend.
+## W2 — Theo work log and missing worker desks (IN PR #19, revised after review of 33af114; deploy + additive migration need owner approval)
+- Objective: every material management action is recorded exactly once, and every tower state comes from runtime evidence.
+- Identity: exits by bar time; announced trade-manager actions by 5m bar + sequence + kind + text fingerprint; unannounced net field changes by bar + from->to (attributed:false); close; failure by stuck bar.
+- Completeness (narrowed): announced actions and every exit are individual records. Silent TP2/TP3 moves and other unexplained changes are one net record per run. Intermediate values inside one run are not reconstructed.
+- Persistence: records sit in a state outbox saved in the same write as the management, then are inserted with ON CONFLICT (work_key) DO NOTHING. The outbox is cleared only after a confirmed insert; a failed write raises an ERROR event and retries next run. Without the migration the writer falls back to check-then-insert.
+- Acceptance tests: tower_workers_rev.test.ts (issues 1-5), worklog_identity.test.ts (issue 6), desk_handler persistence tests (issue 7), scripts/sql_test/work_key.sh (real PostgreSQL concurrency).
+- Rollback: re-pin the edge entry to 3e25392; Vercel instant-rollback to dpl_2V5vuDPQndNEG94J3mKmCDEYk2U7. The migration is additive and is left in place.
 
 ## W3 — Strategy invocation and veto coverage (NEXT, dependency-ready)
 
