@@ -169,3 +169,54 @@ The cross-book regression fails on the previous scheduler: GOLD is saved after B
 - Live provider reachability: no provider is configured.
 - Broker connectivity: none exists.
 - Hyperliquid instrument metadata: the host is not reachable from this session.
+
+## 2026-10-30 · Integrated paper release: production record (approved by the owner)
+**Backend**
+- Edge function `deskbot-v5` v25 (deployed 16:37:04 UTC, `verify_jwt=false`).
+- The stored entry imports `raw.githubusercontent.com/Nitheesh0217/deskbot/4262f7f50618f61ab412858d496e35f2cc5d16e3/supabase/functions/deskbot-v5/index.ts` (read back with `get_edge_function`).
+- Previous: v24 pinned to `3e25392`.
+
+**Baseline (16:36:53, read-only)**
+- BTC `V5-1793318461202`: short HTF_TREND, stop 80065.92996, equity 342.52801.
+- GOLD `GOLD-1793376063210`: short HTF_TREND, stop 3965.46480, equity 322.48836.
+- `_rev` null on both; outboxes empty.
+
+**Old schema, new code**
+- Runs 16:41 and 16:46: CAS active (`_rev` 1 → 2); `ai.policy` present (7 providers); usable providers []; no ERROR events.
+- Scan 16:52: 3.4 s, 10 markets.
+
+**Migrations** (text byte-identical to the candidate files)
+- `20261030_scan_work` at 16:53:
+  - `dbv5_scans.work` and `dbv5_agent_log.work_key` added, with a unique index;
+  - `dbv5_ack_work` is SECURITY DEFINER, EXECUTE only by postgres and service_role;
+  - `dbv5_state_outbox_guard` trigger enabled.
+- `20261030_shadow_lane` at 16:53:
+  - `lane` (default 'book', check book|shadow) and `cfg_id` added;
+  - `dbv5_scan_signals_lane_key (sym, strategy, bar_t, lane)` created; the old 3-column key is gone;
+  - guard and no-truncate triggers enabled;
+  - 64/64 existing rows are lane=book; no row changed.
+- RLS is enabled with no policies on dbv5_state, agent_log, scan_signals and scans. Unchanged.
+
+**Post-migration**
+- Runs 16:56, 17:01, 17:06, 17:11: `_rev` 3 → 7; no events, no ERRORs; outboxes empty.
+- Production order of the two-phase run: GOLD state saved 17:01:04.307, before BTC's advisory row at 17:01:04.638.
+- Scan 17:07: `work` present.
+  - BTC `book:b2b0ca9c` / `SHADOW-1:a6b9c92d`; shadow evaluators HTF_SWEEP, EMA_CROSS, SSR, EMA_PB, each 3/3 evaluated, 0 errors, 0 noData.
+  - GOLD `book:26c8fd4d` / `SHADOW-1:2ccc3625`; shadow evaluators HTF_SWEEP, SSR, EMA_PB. EMA_CROSS is active in GOLD, so it is not in GOLD's shadow lane.
+  - Tracker 14 open, 0 errors; no new setups.
+
+**Reconciled transitions** (only hourly funding at 17:01, applied in the 17:06 run)
+- BTC: +0.0028416 = 0.0000125/h × 227.33 notional (short receives).
+- GOLD: −0.000659 = 0.000001554/h × 424.10 notional (short pays).
+- No exits, no entries, no stop moves. Decisions 2 and trades 35 are unchanged.
+
+**Merge and frontend**
+- PR #25 merged as `8ca91a2484198d02988d7f9ff624aa59ab4a0145` (merge commit, expected head `ce0bf1b`).
+- `git diff 4262f7f 8ca91a2 -- supabase web tests scripts` is empty (docs only).
+- Vercel production `dpl_GRdZ9rofS1haXy5CR8Yy4ekVRXx9`: READY, `githubCommitSha` 8ca91a2, aliases deskbot-azure.vercel.app and others. Served `plan.js` and `evidence.js` contain the release changes.
+
+**Not observed in production**
+- A work-log delivery: no management action occurred, so no outbox record. This was tested on real PostgREST before the release.
+- A shadow setup row: no signal fired.
+- An AI call: no provider is usable.
+- A rendered browser view of production: this session cannot reach the hosts.
