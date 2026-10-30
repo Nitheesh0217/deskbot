@@ -84,3 +84,10 @@ details.engine-more { grid-column: 1 / -1; } details.engine-more[open] > summary
 .pulse-hero[hidden] { display: none !important; }
 .mini-board .section-top { display: flex; align-items: flex-end; gap: 12px; } .mini-board .section-top .btn { flex: none; width: auto; margin-left: auto; }
 @media (max-width: 639px) { .tab[data-v=trades] span::after { content: "Journal"; } .tab[data-v=system] span::after { content: "System"; } }
+
+/* W3 coverage matrix */
+.mx-wrap { overflow-x: auto; margin-top: 10px; border: 1px solid var(--line); border-radius: 12px; }
+.mx { width: 100%; border-collapse: collapse; font: 500 12px/1.35 var(--f-mono); min-width: 980px; }
+.mx th { text-align: left; font: 600 10px/1.2 var(--f-mono); letter-spacing: .06em; color: var(--fg-3); padding: 8px; border-bottom: 1px solid var(--line); background: #f7f9fd; position: sticky; top: 0; }
+.mx td { padding: 8px; border-bottom: 1px solid var(--line); vertical-align: top; } .mx .r { text-align: right; } .mx tr.open td { background: #eef6ff; } .mx tr.warn td { background: #fdf1de; }
+.mx small { font-size: 10.5px; } .mx .down { color: #d0414f; } .mx .faint { color: var(--fg-3); }

@@ -7,7 +7,7 @@
 //  There is NO order-placement code in this function or project.
 // ═══════════════════════════════════════════════════════════════════════════
 import {
-  VERSION, CFG, STRATEGIES, buildSeries, snapshot, evaluate, entryGates, openPosition, managePosition,
+  VERSION, CFG, STRATEGIES, OPT_IN, buildSeries, snapshot, evaluate, entryGates, openPosition, managePosition,
   initState, unrealized, backtest, summarize, rollDay, dynamicRisk, applyCfg, resolvedCfg, ensureState, markEquity, setMlAsset, traderManage, m1View, type State, type Trade, type Bar,
 } from "./engine.ts";
 import { candles, candlesRange, candlesRangeBinance, hlContext, fearGreed, orderFlow, SYMBOLS, isSym, type Sym } from "./data.ts";
@@ -434,10 +434,10 @@ async function status() {
       select(`dbv5_equity?select=ts,equity,upnl,price&symbol=eq.${sym}&ts=gte.${new Date(Date.now() - 14 * 86400_000).toISOString()}&order=ts.asc`),
     ]);
     const c = (eqb ?? []).filter((_: unknown, i: number, a: unknown[]) => a.length < 400 || i % Math.ceil(a.length / 400) === 0 || i === a.length - 1);
-    books[sym] = r?.[0] ? { name: SYMBOLS[sym].name, hl: SYMBOLS[sym].hl, integrity: await integrityFor(sym, resolvedCfg(r[0].state?.cfg)), state: r[0].state, lastRun: r[0].last_run, updated: r[0].updated_at, curve: c } : { name: SYMBOLS[sym].name, hl: SYMBOLS[sym].hl, state: null };
+    books[sym] = r?.[0] ? { name: SYMBOLS[sym].name, hl: SYMBOLS[sym].hl, integrity: await integrityFor(sym, resolvedCfg(r[0].state?.cfg)), config: (({ RISK_SCALE, XC_TF, HSW_TF }) => ({ RISK_SCALE, XC_TF, HSW_TF }))(resolvedCfg(r[0].state?.cfg)), state: r[0].state, lastRun: r[0].last_run, updated: r[0].updated_at, curve: c } : { name: SYMBOLS[sym].name, hl: SYMBOLS[sym].hl, state: null };
   }
   const curve = (eq ?? []).filter((_: unknown, i: number, a: unknown[]) => a.length < 600 || i % Math.ceil(a.length / 600) === 0 || i === a.length - 1);
-  return { version: VERSION, mode: "PAPER", now: new Date().toISOString(), updated: s?.[0]?.updated_at ?? null, integrity, state: st, lastRun: s?.[0]?.last_run ?? null, events: ev, agents: agents ?? [], trades: tr, curve, books, backtest: bt?.[0] ?? null, experiment, config, scan, track, chat: { enabled: !!CHAT_KEY, ai: providersFromEnv().map((p) => p.name) } };
+  return { version: VERSION, mode: "PAPER", now: new Date().toISOString(), updated: s?.[0]?.updated_at ?? null, integrity, state: st, lastRun: s?.[0]?.last_run ?? null, events: ev, agents: agents ?? [], trades: tr, curve, books, backtest: bt?.[0] ?? null, experiment, config, registry: { strategies: STRATEGIES, optIn: OPT_IN }, scan, track, chat: { enabled: !!CHAT_KEY, ai: providersFromEnv().map((p) => p.name) } };
 }
 
 // ─── AI assistant (owner only; password = DESKBOT_CHAT_KEY secret) ─────────
