@@ -190,10 +190,11 @@
     if (document.hidden) return; const el = $('towerPx'); if (!el) return;
     try {
       const r = await fetch('https://api.hyperliquid.xyz/info', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'allMids' }), signal: AbortSignal.timeout(6000) });
-      const j = await r.json(), px = +j.BTC; if (!Number.isFinite(px)) throw 0;
-      const prev = +el.dataset.px || px; el.dataset.px = px; el.textContent = '$' + px.toLocaleString('en-US', { maximumFractionDigits: 0 }) + ' BTC';
+      const coin = ctx && ctx.book === 'GOLD' ? 'PAXG' : 'BTC';   // the selected book's coin (GOLD book trades PAXG)
+      const j = await r.json(), px = +j[coin]; if (!Number.isFinite(px)) throw 0;
+      const prev = el.dataset.coin === coin ? +el.dataset.px || px : px; el.dataset.px = px; el.dataset.coin = coin; el.textContent = '$' + px.toLocaleString('en-US', { maximumFractionDigits: 0 }) + ' ' + coin;
       if (!reduce() && el.animate && px !== prev) el.animate([{ color: px > prev ? 'var(--up)' : 'var(--down)' }, { color: 'inherit' }], { duration: 900 });
-      if (!playing && !reduce() && !motionOff && M && !$('v-tower').hidden) courier({ from: 'feed', to: 'steward', label: `BTC $${px.toLocaleString('en-US', { maximumFractionDigits: 0 })} ${px > prev ? '▲' : px < prev ? '▼' : '·'}`, live: true }, 1.3);
+      if (!playing && !reduce() && !motionOff && M && !$('v-tower').hidden) courier({ from: 'feed', to: 'steward', label: `${coin} $${px.toLocaleString('en-US', { maximumFractionDigits: 0 })} ${px > prev ? '▲' : px < prev ? '▼' : '·'}`, live: true }, 1.3);
     } catch (_) { el.textContent = 'live price unavailable'; }
   }
 

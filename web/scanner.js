@@ -5,11 +5,12 @@
 // derived here from controls the bot already has; it adds no new control.
 (function (root) {
   'use strict';
-  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  // util.js is a browser global; under node (tests require this file) load the same module directly
+  const { esc } = root.DeskUtil || (typeof require === 'function' ? require('./util.js') : {});
   const num = (x, d = 2) => (typeof x === 'number' && Number.isFinite(x) ? x.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }) : '—');
   const px = (x) => (typeof x === 'number' ? num(x, x >= 1000 ? 1 : x >= 1 ? 3 : 5) : '—');
   const sgn = (x, d = 2, u = '%') => (typeof x === 'number' && Number.isFinite(x) ? `<span class="${x > 0 ? 'up' : x < 0 ? 'down' : ''}">${x > 0 ? '+' : ''}${num(x, d)}${u}</span>` : '—');
-  const ago = (iso, now) => { const m = Math.round((now - Date.parse(iso)) / 60000); return !Number.isFinite(m) ? '—' : m < 1 ? 'just now' : m < 60 ? `${m} min ago` : `${Math.round(m / 60)} h ago`; };
+  const agoMinutes = (iso, now) => { const m = Math.round((now - Date.parse(iso)) / 60000); return !Number.isFinite(m) ? '—' : m < 1 ? 'just now' : m < 60 ? `${m} min ago` : `${Math.round(m / 60)} h ago`; };
 
   /** ACTIVE: new entries allowed. REDUCING: new entries blocked by a risk control, open positions still managed. HALTED: the book is not running. */
   function tradingState(state, config, lastRun, now) {
@@ -83,7 +84,7 @@
       <ul class="cm-l">${(g.why || []).map((w) => `<li>${esc(w)}</li>`).join('')}</ul></div>`)).join('');
     const recs = Object.fromEntries(((track && track.calls) || []).map((c) => [c.sym, c]));
     const order = [...ms].sort((a, b) => byBoard(a, b));
-    el.innerHTML = `<div class="bd-head"><span><b>${ms.length} markets</b> checked ${esc(ago(scan.ts, now))}</span><span class="faint">every 15 min · calls are rule-based leans for the next 4 h, scored afterwards</span></div>
+    el.innerHTML = `<div class="bd-head"><span><b>${ms.length} markets</b> checked ${esc(agoMinutes(scan.ts, now))}</span><span class="faint">every 15 min · calls are rule-based leans for the next 4 h, scored afterwards</span></div>
       <div class="bd-grid">${order.map((m) => boardCard(m, recs[m.sym])).join('')}</div>
       ${cards ? `<h3 class="bd-sub">Rules firing now</h3><div class="sc-cards">${cards}</div>` : ''}
       <details class="bd-more"><summary>Details: call record, setup record, options &amp; futures, all indicators</summary>

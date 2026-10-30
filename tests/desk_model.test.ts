@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { STRATEGIES } from '../supabase/functions/deskbot-v5/engine.ts';
+import { STRATEGIES, OPT_IN, CFG_DEFAULTS, applyCfg, offReason } from '../supabase/functions/deskbot-v5/engine.ts';
 
 const ctx: any = {};
 vm.runInNewContext(readFileSync(new URL('../web/desk-model.js', import.meta.url), 'utf8'), ctx);
@@ -67,4 +67,40 @@ test('net-positive strategy count uses closed net outcomes, not win rate or setu
   const op = model.operations(st, {}, [], true);
   assert.equal(op.traded, 2); assert.equal(op.positive, 1);
   assert.equal(new Set(op.rows.map((r: any) => r.family)).size, 4);
+});
+test('one enabled / risk-scale resolver matches the engine and never mutates its inputs', () => {
+  // defaults and the opt-in list are the engine's
+  assert.deepEqual({ ...model.DEFAULT_RISK_SCALE }, { ...CFG_DEFAULTS.RISK_SCALE });
+  assert.deepEqual([...model.OPT_IN].sort(), [...OPT_IN].sort());
+  // book cfg RISK_SCALE merges over the defaults (opt-ins default 0, others 1); inputs untouched
+  const cfg = { RISK_SCALE: { EMA_CROSS: 0.25, TREND_MTF: 0.5 } }, before = JSON.stringify(cfg), defaults = JSON.stringify(model.DEFAULT_RISK_SCALE);
+  const map = model.riskScaleMap(cfg);
+  assert.equal(map.EMA_CROSS, 0.25); assert.equal(map.TREND_MTF, 0.5); assert.equal(map.HTF_TREND, 1); assert.equal(map.SSR, 0);
+  map.SSR = 1;
+  assert.equal(JSON.stringify(cfg), before); assert.equal(JSON.stringify(model.DEFAULT_RISK_SCALE), defaults);
+  assert.ok(Object.isFrozen(model.DEFAULT_RISK_SCALE));
+  assert.equal(model.riskScaleMap(undefined).D_BEARTRAP, 1); assert.equal(model.riskScaleMap({}).EMA_PB, 0);
+  // each OFF rule
+  assert.equal(model.resolveStrategy('TREND_MTF', {}, { TREND_MTF: false }).off, 'flag');
+  assert.equal(model.resolveStrategy('SESSION_BO', { RISK_SCALE: { SESSION_BO: 0 } }, {}).off, 'scale');
+  assert.equal(model.resolveStrategy('HTF_SWEEP', { RISK_SCALE: { HTF_SWEEP: -1 } }, {}).off, 'opt-in');
+  assert.equal(model.resolveStrategy('HTF_SWEEP', { RISK_SCALE: { HTF_SWEEP: 0.3 } }, {}).enabled, true);
+  assert.equal(model.resolveStrategy('D_THRUST', undefined, undefined).enabled, true);
+  // the same on/off decision as engine.offReason for every strategy under a spread of configs and flags
+  const cases: any[] = [
+    [undefined, {}], [{ RISK_SCALE: {} }, {}], [{ RISK_SCALE: { EMA_CROSS: 0.5, SESSION_BO: 0 } }, { TREND_MTF: false }],
+    [{ RISK_SCALE: { ...CFG_DEFAULTS.RISK_SCALE, SSR: 1, EMA_PB: 0.25, D_BEARTRAP: 0 } }, { SWEEP_REV: false, SSR: true }],
+    [{ RISK_SCALE: { HTF_SWEEP: -0.5, VWAP_REVERT: 0.1 } }, { HTF_TREND: true }],
+  ];
+  try {
+    for (const [c, enabled] of cases) {
+      applyCfg(c as never);
+      for (const id of STRATEGIES) {
+        const engineOn = offReason(id, enabled) === null, why = `${id} ${JSON.stringify(c)} ${JSON.stringify(enabled)}`;
+        assert.equal(model.resolveStrategy(id, c, enabled).enabled, engineOn, why);
+        // strategyStatus (operations / setup radar) uses the same rule
+        assert.equal(model.strategyStatus(id, { cfg: c, enabled }, {}, true).enabled, engineOn, why);
+      }
+    }
+  } finally { applyCfg(); }
 });
