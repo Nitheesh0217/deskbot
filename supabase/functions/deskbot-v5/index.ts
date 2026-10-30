@@ -389,7 +389,7 @@ async function runScan() {
       })));
     }
   } finally { applyCfg(); setMlAsset(false); }
-  if (fresh.length) await rest("dbv5_scan_signals?on_conflict=sym,strategy,bar_t", { method: "POST", headers: { Prefer: "resolution=ignore-duplicates,return=minimal" }, body: JSON.stringify(fresh.map((x) => ({ ...x, checked_t: x.bar_t }))) }).catch((e) => trackErrors.push(`insert: ${(e as Error).message}`.slice(0, 120)));
+  if (fresh.length) await /* rollback-compat: lane-aware key after 20261030_shadow_lane.sql; rows get the column default lane='book' */ rest("dbv5_scan_signals?on_conflict=sym,strategy,bar_t,lane", { method: "POST", headers: { Prefer: "resolution=ignore-duplicates,return=minimal" }, body: JSON.stringify(fresh.map((x) => ({ ...x, checked_t: x.bar_t }))) }).catch((e) => trackErrors.push(`insert: ${(e as Error).message}`.slice(0, 120)));
   for (const u of updates) {
     const body = u.status === "open" ? { checked_t: u.checked_t } : { status: u.status, checked_t: u.checked_t, exit_t: u.exit_t, exit_px: u.exit_px, r_gross: u.r_gross, r_net: u.r_net, resolved_at: new Date().toISOString() };
     await rest(`dbv5_scan_signals?id=eq.${u.id}&status=eq.open`, { method: "PATCH", body: JSON.stringify(body) }).catch((e) => trackErrors.push(`update ${u.id}: ${(e as Error).message}`.slice(0, 120)));
@@ -405,7 +405,7 @@ async function runScan() {
 // forward record per market for the status payload (null until the table exists)
 async function trackStatus() {
   try {
-    const rows = await select("dbv5_scan_signals?select=sym,strategy,dir,bar_t,entry,stop,tp1,status,r_net,exit_t,score&order=id.desc&limit=5000");
+    const rows = await /* rollback-compat: book lane only */ select("dbv5_scan_signals?select=sym,strategy,dir,bar_t,entry,stop,tp1,status,r_net,exit_t,score&lane=eq.book&order=id.desc&limit=5000");
     const calls = await select("dbv5_calls?select=sym,t,lean,votes,source,cautions,px,status,hit,move_pct,move_atr&order=id.desc&limit=5000").catch(() => []);
     return { markets: trackRecord(rows ?? []), recent: (rows ?? []).slice(0, 25), promotion: PROMOTION.rule, calls: callRecord(calls ?? []), recentCalls: (calls ?? []).slice(0, 40) };
   } catch { return null; }
