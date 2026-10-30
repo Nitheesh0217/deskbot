@@ -14,6 +14,7 @@ import { candles, candlesRange, candlesRangeBinance, hlContext, fearGreed, order
 import { readNews, newsBlocks, type NewsRead } from "./news.ts";
 import { providersFromEnv, providerPolicy, type Usage, type AiFeature } from "./ai.ts";
 import { chatFacts, pushClose, pushOpen } from "./egress.ts";
+import { bookSpec, shadowEntry } from "./books.ts";
 import { chat, validatePatch, mergeCfg, EDITABLE, type ChatTurn } from "./chat.ts";
 import { configIntegrity, serialExecutor } from "./runtime.ts";
 import { runDesk, deskChart, type AgentRow } from "./agents.ts";
@@ -203,6 +204,7 @@ async function runOnce(sym: Sym = "BTC", scheduler?: (fn: () => Promise<void>) =
   let action = st.pos ? "HOLD" : "SKIP"; let decision: unknown = null;
   let deskSignals: Awaited<ReturnType<typeof evaluate>>["signals"] = []; let deskRejects: Awaited<ReturnType<typeof evaluate>>["rejects"] = [];
   let provenanceError: string | null = null;
+  let shadowSeen: ReturnType<typeof shadowEntry> | null = null;
   let opened: { strategy: string; dir: string; entry: number; stop: number; reentry?: boolean; why: string[] } | null = null;
   let covNow: unknown = null;
   let catchup: unknown = null;
@@ -233,6 +235,17 @@ async function runOnce(sym: Sym = "BTC", scheduler?: (fn: () => Promise<void>) =
       // events) are untouched whatever happens here. Only when the decision evidence is durably recorded is the copy adopted.
       const trial = JSON.parse(JSON.stringify(st)) as State;
       let picked = newsBlock || (enforce && !integrity.approved) ? null : pickEntry(trial, signals, now, refFor, notes);
+      // SHADOW books (books.ts) record the would-be entry at their own lot, minimum size and costs, once per strategy and signal bar,
+      // and never adopt the trial position: equity, positions and the decision ledger stay untouched.
+      if (picked && bookSpec(sym).mode === "shadow") {
+        const sx2 = st as State & { _shadowSeen?: Record<string, number> }, seen = (sx2._shadowSeen ??= {});
+        if (seen[picked.sig.strategy] !== picked.sig.barT) {
+          seen[picked.sig.strategy] = picked.sig.barT;
+          const sh = shadowEntry(bookSpec(sym), picked.sig, picked.p, picked.fillRef); shadowSeen = sh;
+          evs.push({ kind: "SHADOW", strategy: picked.sig.strategy, symbol: sym, msg: `${tag}SHADOW ${picked.sig.strategy} ${picked.sig.dir.toUpperCase()} @ ${picked.p.entry.toPrecision(6)} · ${sh.executable ? `qty ${sh.qtyAtLot}` : sh.reason} · not entered (shadow book)`, data: sh });
+        }
+        action = "SHADOW_SIGNAL"; picked = null;
+      }
       if (picked) {
         const { sig, p, fillRef } = picked;
         if (sym !== "BTC") p.id = `${sym}-${now}`;
@@ -293,7 +306,7 @@ async function runOnce(sym: Sym = "BTC", scheduler?: (fn: () => Promise<void>) =
   if (!wx._workOutbox.length) delete wx._workOutbox;
   // providers = names usable for the desk committee (the tower seats); policy = the five separate facts per provider and feature
   const ai = { providers: providersFromEnv("committee").map((p) => p.name), policy: providerPolicy(aiFeaturesOf(), sx._aiUsage ?? {}, now), usage: sx._aiUsage ?? {} };
-  const lastRun = { ts: new Date(now).toISOString(), sym, action, trader: { acts: traderActs, plan: st.pos?.plan ?? [] }, source, integrity, news, ai, upnl: +upnl.toFixed(2), market, decision, risk: dynamicRisk(st.equity), desk: desk.summary, coverage: covNow, catchup, provenanceError, ms: Date.now() - now };
+  const lastRun = { ts: new Date(now).toISOString(), sym, book: { mode: bookSpec(sym).mode, researchConfig: bookSpec(sym).researchConfig, financialValidation: bookSpec(sym).financialValidation }, shadow: shadowSeen, action, trader: { acts: traderActs, plan: st.pos?.plan ?? [] }, source, integrity, news, ai, upnl: +upnl.toFixed(2), market, decision, risk: dynamicRisk(st.equity), desk: desk.summary, coverage: covNow, catchup, provenanceError, ms: Date.now() - now };
   st.version = VERSION;
   await saveState(st, lastRun, sym);
   await upsert("dbv5_equity", [{ symbol: sym, ts: new Date(now).toISOString(), equity: +st.equity.toFixed(4), upnl: +upnl.toFixed(4), price: snap.price }]);
@@ -503,13 +516,25 @@ async function status() {
       select(`dbv5_equity?select=ts,equity,upnl,price&symbol=eq.${sym}&ts=gte.${new Date(Date.now() - 14 * 86400_000).toISOString()}&order=ts.asc`),
     ]);
     const c = (eqb ?? []).filter((_: unknown, i: number, a: unknown[]) => a.length < 400 || i % Math.ceil(a.length / 400) === 0 || i === a.length - 1);
-    books[sym] = r?.[0] ? { name: SYMBOLS[sym].name, hl: SYMBOLS[sym].hl, integrity: await integrityFor(sym, resolvedCfg(r[0].state?.cfg)), config: (({ RISK_SCALE, XC_TF, HSW_TF }) => ({ RISK_SCALE, XC_TF, HSW_TF }))(resolvedCfg(r[0].state?.cfg)), state: (({ _workOutbox, _aiUsage, ...rest }) => rest)(r[0].state ?? {}), work: backlog(r[0].state), lastRun: r[0].last_run, updated: r[0].updated_at, curve: c } : { name: SYMBOLS[sym].name, hl: SYMBOLS[sym].hl, state: null };
+    books[sym] = r?.[0] ? { spec: bookSpec(sym), name: SYMBOLS[sym].name, hl: SYMBOLS[sym].hl, integrity: await integrityFor(sym, resolvedCfg(r[0].state?.cfg)), config: (({ RISK_SCALE, XC_TF, HSW_TF }) => ({ RISK_SCALE, XC_TF, HSW_TF }))(resolvedCfg(r[0].state?.cfg)), state: (({ _workOutbox, _aiUsage, ...rest }) => rest)(r[0].state ?? {}), work: backlog(r[0].state), lastRun: r[0].last_run, updated: r[0].updated_at, curve: c } : { name: SYMBOLS[sym].name, hl: SYMBOLS[sym].hl, state: null };
   }
   for (const [k, b] of Object.entries(books)) if ((b as { work?: unknown }).work) workBacklog[k] = (b as { work?: unknown }).work;
   const curve = (eq ?? []).filter((_: unknown, i: number, a: unknown[]) => a.length < 600 || i % Math.ceil(a.length / 600) === 0 || i === a.length - 1);
   return { version: VERSION, mode: "PAPER", now: new Date().toISOString(), updated: s?.[0]?.updated_at ?? null, integrity, state: st, lastRun: s?.[0]?.last_run ?? null, events: ev, agents: agents ?? [], trades: tr, curve, books, backtest: bt?.[0] ?? null, experiment, config, registry: { strategies: STRATEGIES, optIn: OPT_IN }, scan, track, work: { backlog: workBacklog, lastFlush: Array.isArray(lastFlush) ? lastFlush : null, flushFailures24h: Array.isArray(flushFails) ? flushFails.length : null, lastFlushFailure: Array.isArray(flushFails) && flushFails[0] ? flushFails[0] : null }, chat: { enabled: !!CHAT_KEY, ai: providersFromEnv("chat").map((p) => p.name) }, ai: { policy: providerPolicy(aiFeaturesOf(), (st as { _aiUsage?: Usage } | null)?._aiUsage ?? {}), providers: providersFromEnv("committee").map((p) => p.name), byFeature: { news: providersFromEnv("news").map((p) => p.name), committee: providersFromEnv("committee").map((p) => p.name), chat: providersFromEnv("chat").map((p) => p.name) }, agentAi: AGENT_AI, deskWorkflow: DESK_WORKFLOW, newsAi: NEWS_AI, newsMode: NEWS_MODE },
     // real-account preparation: the registry/adapter contract (accounts.ts) exists, no broker is connected, funded orders are disabled
-    brokers: { connected: [] as string[], contract: "read-only (accounts.ts)", fundedOrders: "disabled" as const } };
+    brokers: { connected: [] as string[], contract: "read-only (accounts.ts)", fundedOrders: "disabled" as const }, spec: bookSpec("BTC"),
+    pendingBooks: BOOKS.filter((b) => b !== "BTC" && !books[b]).map((b) => ({ sym: b, state: "NOT INITIALISED", spec: bookSpec(b) })) };
+}
+
+async function initShadowBook(sym: string) {
+  if (!isSym(sym) || sym === "BTC") return { ok: false, error: "unknown or reserved book" };
+  const spec = bookSpec(sym);
+  if (spec.mode !== "shadow") return { ok: false, error: `${sym} is not a shadow book; only shadow books are created here` };
+  if (await loadState(sym)) return { ok: true, sym, created: false, note: "book already exists; nothing changed" };
+  const st = ensureState(initState(spec.simulatedStartEquity, Date.now())) as State & { simulated?: unknown };
+  st.simulated = { startEquity: spec.simulatedStartEquity, note: "SIMULATED capital; not real money; never added to real wealth", researchConfig: spec.researchConfig };
+  await rest("dbv5_state?on_conflict=id", { method: "POST", headers: { Prefer: "resolution=ignore-duplicates,return=minimal" }, body: JSON.stringify([{ id: rowId(sym), state: st }]) });
+  return { ok: true, sym, created: true, mode: spec.mode, simulatedStartEquity: spec.simulatedStartEquity };
 }
 
 // ─── AI assistant (owner only; password = DESKBOT_CHAT_KEY secret) ─────────
@@ -587,6 +612,8 @@ Deno.serve(async (req) => {
     if (!expected || req.headers.get("x-deskbot-key") !== expected) return json({ ok: false, error: "unauthorized" }, 401);
     const body = await req.json().catch(() => ({}));
     if (body.action === "scan") return json(await exclusive(() => runScan()));
+    // create a SHADOW book's state row with simulated equity (part of an approved deployment); never overwrites, never a paper/real book
+    if (body.action === "init_book") return json(await exclusive(() => initShadowBook(String(body.sym ?? ""))));
     if (body.action === "backtest") return json(await exclusive(() => runBacktest({ sym: isSym(body.sym) ? body.sym : "BTC", endDaysAgo: body.endDaysAgo, days: body.days, source: body.source, cfg: body.cfg, label: body.label, save: body.save, only: body.only, combinedOnly: body.combinedOnly })));
     return json(await exclusive(() => runLocked()));
   } catch (e) {

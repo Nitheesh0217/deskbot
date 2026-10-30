@@ -297,7 +297,7 @@ function renderEvents() {
 function renderSystem() {
   const evidence = globalThis.DeskBotEvidence.summarize(RAW, Date.now(), LIVE);
   $("evidenceMode").textContent = evidence.mode + " · Observations, not a forecast or execution authorization.";
-  $("evidenceRows").innerHTML = evidence.rows.map((r) => `<div class="li"><div class="a">${esc(r.instrument)}</div><div class="b">${r.fresh ? "Recent timestamps" : "STALE / UNKNOWN"}</div><div class="c">Last run UTC: ${esc(r.runAt)} · ${esc(r.approval)} · AI: ${esc(r.ai)}</div></div>`).join("");
+  $("evidenceRows").innerHTML = evidence.rows.map((r) => `<div class="li"><div class="a">${esc(r.instrument)} · ${esc(r.mode || "")}</div><div class="b">${r.fresh ? "Recent timestamps" : "STALE / UNKNOWN"}</div><div class="c">Last run UTC: ${esc(r.runAt)} · ${esc(r.approval)} · AI: ${esc(r.ai)} · financial validation: ${esc(r.validation || "not reported")}${(r.limitations || []).length ? " · limits: " + esc(r.limitations.join("; ")) : ""}</div></div>`).join("");
   $("evidenceIssues").innerHTML = evidence.issues.map((s) => `<li>${esc(s)}</li>`).join("");
   const b = DATA.bt, S = DATA.state || {}, lr = S.last_run || {};
   if (!b) { $("btSub").textContent = "No instrument-matched saved validation was returned for this book."; $("btChart").innerHTML = ""; $("btTable").innerHTML = ""; }
