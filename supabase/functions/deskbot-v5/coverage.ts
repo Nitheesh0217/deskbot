@@ -1,7 +1,7 @@
 // Strategy coverage: for every strategy and every 5-minute evaluation, WHY there was or was not a trade. Observability only:
 // nothing here is read by entry, sizing, exit or risk logic. Zero closed trades is never evidence that a strategy was not evaluated;
 // these counters are what shows whether it was due, evaluated, blocked, displaced or entered.
-import { CFG, STRATEGIES, OPT_IN, entryGates, type StrategyId, type StrategyTrace, type Signal, type State } from "./engine.ts";
+import { CFG, OPT_IN, entryGates, type StrategyId, type StrategyTrace, type Signal, type State } from "./engine.ts";
 
 export type Code = "NOT_DUE" | "DISABLED" | "INSUFFICIENT_DATA" | "NO_SETUP" | "GATE_REJECTED" | "PORTFOLIO_BLOCKED" | "NOT_SELECTED" | "ERROR" | "ENTERED";
 import { type Cadence, CADENCE_MS, cadenceFor, viewStrategy, type OpState } from "./coverage_view.ts";
@@ -123,4 +123,3 @@ export function recordCoverage(st: State, a: { T: number; now: number; trace: St
 export function operationalState(id: StrategyId, st: State, now: number) {
   return viewStrategy({ id, cfg: CFG, riskScale: CFG.RISK_SCALE[id], optIn: OPT_IN.includes(id), enabledFlag: st.enabled?.[id], cov: st.cov?.[id] ?? null, stat: st.stats?.by?.[id], probationMin: CFG.PROBATION_MIN_TRADES, now });
 }
-export const allStates = (st: State, now: number) => STRATEGIES.map((id) => operationalState(id, st, now));

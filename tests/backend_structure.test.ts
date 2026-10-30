@@ -90,6 +90,13 @@ test("scan: a book whose state cannot be loaded is skipped (no default-config la
   assert.ok(r.scanRow.markets.some((m: any) => m.sym === "GOLD" && m.ok !== false), "the GOLD market row itself is still scanned");
 });
 
+// ─── fix 8: dead code stays removed (carryFromV3 is kept by owner decision) ──
+test("dead exports providerAvailability / allStates are gone; carryFromV3 stays", async () => {
+  const { readFileSync } = await import("node:fs"), src = (f: string) => readFileSync(new URL(`../supabase/functions/deskbot-v5/${f}`, import.meta.url), "utf8");
+  assert.ok(!/providerAvailability/.test(src("ai.ts"))); assert.ok(!/allStates/.test(src("coverage.ts")));
+  assert.match(src("index.ts"), /async function carryFromV3\(/);
+});
+
 // ─── fix 3: backtest assumptions describe the costs the run used ────────────
 test("backtest: the assumptions text reports the overridden costs, not the restored defaults", async () => {
   const bt = (cfg?: Record<string, unknown>) => call({ i5: 34000, body: { action: "backtest", sym: "BTC", days: 7, save: false, combinedOnly: true, ...(cfg ? { cfg } : {}) } });
