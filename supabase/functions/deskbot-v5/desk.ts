@@ -5,6 +5,7 @@
 // Method sources (patterns, not code): execution-plan-check and post-trade-review (marian2js, MIT), day-trader-skill risk/exit/budget ideas
 // (Jakeschincariol, MIT), TradingAgents analyst -> bull/bear -> risk -> decision staging (TauricResearch, Apache-2.0). See docs/AGENT_WORKFLOWS.md.
 import { decideJSON, type Provider, type Usage, type FetchLike } from "./ai.ts";
+import { committeeFacts } from "./egress.ts";
 import type { AgentRow } from "./agents.ts";
 
 export type Check = { id: string; level: "info" | "warn"; text: string; value?: number };
@@ -105,15 +106,16 @@ export function analystReports(a: AnalystInput) {
 }
 
 export type ReviewInput = {
-  ref: string; sym: string; strategy: string; dir: string; plan: Plan & { tp2: number; tp3: number; riskAmt: number }; why: string[]; regime: string;
+  ref: string; sym: string; strategy: string; dir: string; plan: Plan & { tp2: number; tp3: number; riskAmt?: number }; why: string[]; regime: string;
   chart: unknown; checks: Check[]; newsRisk?: string | null; analysts?: ReturnType<typeof analystReports>; lessons?: string[];
 };
 export type FlowOpts = { providers: Provider[]; usage: Usage; now: number; deadlineMs?: number; debateRounds?: number; riskRounds?: number; fetchImpl?: FetchLike; sleep?: (ms: number) => Promise<void> };
 /** Runs the staged workflow. Never throws, never mutates its input, every stage and failure is returned as a row. */
 export async function runDeskWorkflow(inp: ReviewInput, o: FlowOpts): Promise<{ rows: AgentRow[]; verdict: string | null; rating: Rating | null; stance: "keep" | "skip" | "abstain" }> {
   const rows: AgentRow[] = [], t0 = Date.now(), total = o.deadlineMs ?? 75_000;
-  const facts = JSON.parse(JSON.stringify({ ref: inp.ref, instrument: inp.sym, strategy: inp.strategy, direction: inp.dir, regime: inp.regime, rules_said: inp.why.slice(0, 8), plan: inp.plan,
-    analyst_reports: inp.analysts ?? null, chart: inp.chart, deterministic_checks: inp.checks, news_risk: inp.newsRisk ?? null, lessons_from_past_trades: (inp.lessons ?? []).slice(0, 6) }));
+  // allowlisted payload (egress.ts): plan in price / % / R, no size or risk dollars
+  const facts = JSON.parse(JSON.stringify(committeeFacts({ ref: inp.ref, sym: inp.sym, strategy: inp.strategy, dir: inp.dir, regime: inp.regime, why: inp.why, plan: inp.plan,
+    analysts: inp.analysts, chart: inp.chart, checks: inp.checks, newsRisk: inp.newsRisk, lessons: inp.lessons })));
   rows.push({ agent: "desk-checks", input_summary: `${inp.ref} ${inp.dir} ${inp.strategy}`, output: { ref: inp.ref, authority: "advisory", checks: inp.checks } });
   if (inp.analysts) rows.push({ agent: "desk-analysts", input_summary: `${inp.ref} market/sentiment/positioning/news`, output: { ref: inp.ref, authority: "advisory", ...inp.analysts } });
   if (!o.providers.length) return { rows, verdict: null, rating: null, stance: "abstain" };
