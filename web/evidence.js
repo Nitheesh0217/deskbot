@@ -25,6 +25,9 @@
     });
     var bt = status.backtest && status.backtest.results;
     if (!bt || bt.version !== status.version) issues.push('Displayed historical validation does not match the current runtime version.');
+    var br = status.brokers;
+    if (!br || !Array.isArray(br.connected)) issues.push('Broker connection state not reported.');
+    else if (!br.connected.length) issues.push('No broker account connected (read-only registry only). Paper execution only; funded orders ' + (br.fundedOrders === 'disabled' ? 'disabled.' : 'state not reported.'));
     issues.push('Deployed artifact SHA and complete account history are not verified by public status.');
     return { mode: status.mode === 'PAPER' ? 'PAPER · PUBLIC OBSERVATION' : 'MODE UNVERIFIED', rows: rows, issues: issues };
   }

@@ -61,3 +61,8 @@ test('a failed refresh clears live evidence and exposes the disconnected banner'
   assert.equal(ctx.LIVE, false); assert.equal(banner.hidden, false);
   assert.match(banner.textContent, /Disconnected/);
 });
+test('broker connection state is explicit: none connected means paper only, never a connected account', () => {
+  const none = evidence.summarize({ ...fixture(), brokers: { connected: [], fundedOrders: 'disabled' } }, now, true);
+  assert.ok(none.issues.some((x: string) => /No broker account connected .*Paper execution only; funded orders disabled/.test(x)));
+  assert.ok(evidence.summarize(fixture(), now, true).issues.includes('Broker connection state not reported.'));
+});

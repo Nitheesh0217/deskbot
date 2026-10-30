@@ -23,7 +23,7 @@ test("the adapter contract has read methods only; the module imports nothing", (
   const iface = src.slice(src.indexOf("export interface ReadOnlyAdapter"), src.indexOf("export const ADAPTER_METHODS"));
   assert.ok(!/place|submit|cancel|modify|amend|order\s*\(/i.test(iface.replace(/openOrders/g, "")), "no order-writing method in the interface");
   const index = readFileSync(new URL("../supabase/functions/deskbot-v5/index.ts", import.meta.url), "utf8");
-  assert.ok(!/accounts\.ts/.test(index), "not wired into the live loop");
+  assert.ok(!/from "\.\/accounts\.ts"/.test(index), "not imported by the live loop (status only names it)");
 });
 
 const btcPerp: Instrument = { id: "hl:BTC", venue: "hyperliquid", symbol: "BTC", currency: "USD", tick: 1, lot: 0.00001, sessions: [{ always: true }], dataSource: "hyperliquid", cls: "crypto_perp", multiplier: 1 };
