@@ -59,11 +59,33 @@ The candidate runs on the old schema with these tested fallbacks. Keep this wind
    - Do not expect unchanged equity or position: compare transitions against the run's inputs as in step 2.
    - Work-log health: `work.lastFlush` shows a WORKLOG result per book; `work.backlog.*.pending` is 0 or falling; any backlog drains at most 500 records per run.
 7. **Merge** (approval required) the release PR `release/w2-w3` → `main` with a merge commit, then prove equivalence:
-   `git diff --stat 5662f80dee237c6e30513ce0e3e681c5382b7473 <merge-sha> -- supabase/ web/ scripts/ tests/` must be empty (only `docs/` may differ).
+   `git diff --stat 5662f80dee237c6e30513ce0e3e681c5382b7473 <merge-sha> -- supabase/ web/ tests/` must be empty. `scripts/` may differ only by the added test `scripts/sql_test/outbox_guard.sh` (not deployed); `docs/` may differ.
    If it is not empty, stop: redeploy the backend from the merge SHA after re-running the checks.
 8. **Frontend** (Vercel auto-deploys the merge). Confirm the production deployment's `githubCommitSha` is the merge SHA and the build is READY. Then load `#tower`, `#strategies` and `#scanner` and check the states against the status JSON.
 
 Provenance and entries: do **not** force an entry to exercise decision records. They are verified when the next natural entry happens.
+
+## Work-log guarantees (exact; this is not permanent exactly-once processing)
+Order inside one book run: management → state save (compare-and-set) → equity/events → flush (insert with `on_conflict=work_key` → scoped ack). Desk/LLM review runs after that.
+- **At most one row per key while it exists.** `dbv5_agent_log.work_key` has a unique index; inserts use `ON CONFLICT DO NOTHING`, so a retried batch, an overlapping run or a crash between insert and ack adds no second row.
+- **No loss before delivery.** A record stays in the book's `_workOutbox` until a confirmed insert; it is removed only by the ack RPC for its own key, by the guard trigger once its key is in the log, or by the CAS save of a trimmed outbox when the RPC is missing.
+- **No resurrection while the log row exists.** The guard trigger (`dbv5_state_outbox_guard`) runs on every insert/update of `dbv5_state.state` and drops outbox entries whose key is in the log; position, equity, `_rev` and all other fields are untouched, and the remaining entries keep their order (`scripts/sql_test/outbox_guard.sh`: preservation ok; `RACE=1 scripts/sql_test/postgrest.sh`: stale-copy race, retries, 30 interleavings).
+- **Window = work-log retention.** The nightly job `deskbot-v5-prune-agents` (03:11 UTC) deletes rows with `ts` older than 14 days; `ts` is the insert time. After that, a key is no longer known: the same record, if presented again, is accepted as a new row (reproduced in `outbox_guard.sh`). In practice a key is only presented again if it is still in an outbox, which requires that no state write succeeded for 14 days (every successful write passes through the trigger) or a replay of an old run. Keys are generated once from a run's own position diff, not re-derived later.
+- **Cost.** The trigger does one index probe per outbox entry. Measured on PostgreSQL 16 with 200,000 log rows: outbox 100 → 3.4 ms, 1,000 → 13 ms, 10,000 → 248 ms, 50,000 → 1.4 s per state write. Normal backlog is 0-10 entries.
+
+## Flush budget: a scheduling budget, not a hard deadline
+`FLUSH_BUDGET = {maxBatches: 5, maxMs: 4000}` is checked **before** each batch. A batch that starts at 3.99 s runs to completion. Each request has a 10 s abort timeout (`persist.ts makeDb`). Worst case for one book:
+- flush loop ≤ 4 s + one batch: insert (1 request; 2 in the pre-migration check-then-insert path) + ack (1 request) → ≤ 24 s (≤ 34 s pre-migration);
+- then ≤ 2 event writes (WORKLOG, ERROR) ≤ 20 s, and pre-migration one CAS state save ≤ 10 s.
+So ≤ 44 s after migration, ≤ 64 s before it, against the 120 s run lease. Normal: one batch, well under 1 s.
+**Priority.** Within a book, management and its state save complete before the flush starts, so a slow flush cannot delay that book's position management. Across books the run is sequential (BTC, then GOLD): BTC's flush and BTC's advisory desk review (75 s deadline, only on a run that opened a trade; existing behaviour) run before GOLD's management. Exits are computed from the bar path since the last run, so a delay does not skip a stop or target; it delays GOLD's evaluation time and therefore the reference price of a GOLD entry. A follow-up (not in this release) can move every book's flush and desk review after all books are managed.
+
+## Chart (PR #22) integration sequence
+PR #22 (`feat/chart-plan`) is frontend-only (`web/`, `tests/plan_rows.test.ts`, `scripts/web_smoke/`, `docs/evidence/chart/`) and contains no strategy, engine or config change.
+1. Release steps 0-8 above (this PR) first.
+2. Retarget PR #22 to `main`, merge `main` into `feat/chart-plan` (merge commit), re-run `npm test`, `npm run build:web:check` and `scripts/web_smoke/chart_plan.cjs`; record the screenshots with the new head SHA.
+3. Merge PR #22 (approval required); Vercel deploys it; verify `githubCommitSha` and the chart on desktop and mobile.
+4. Frontend rollback for the chart alone: Vercel instant rollback to the release's production deployment.
 
 ## Rollback (by component; pick the row for the current migration state)
 | Component | Before `20261030_shadow_lane.sql` | After `20261030_shadow_lane.sql` |
