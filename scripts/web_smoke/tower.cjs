@@ -26,6 +26,7 @@ const srv = http.createServer((q, r) => { const f = path.join(web, q.url === "/"
   await new Promise((r) => srv.listen(0, r)); const base = `http://127.0.0.1:${srv.address().port}/`; const browser = await chromium.launch(); const problems = [], result = {};
   for (const [name, vp] of [["desktop", { width: 1360, height: 900 }], ["mobile", { width: 390, height: 844 }]]) {
     const page = await (await browser.newContext({ viewport: vp })).newPage();
+    await page.addInitScript(() => { try { localStorage.setItem("deskbot.towerView", "list"); } catch (_) { /* optional */ } });   // List layout; tower3d.cjs covers Building
     page.on("console", (m) => { if (m.type() === "error") problems.push(`${name} console: ${m.text()}`); }); page.on("pageerror", (e) => problems.push(`${name} pageerror: ${e.message}`));
     await page.route("**/*", async (route) => {
       const u = route.request().url();
