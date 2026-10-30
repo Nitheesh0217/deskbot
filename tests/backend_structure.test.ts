@@ -89,3 +89,31 @@ test("scan: a book whose state cannot be loaded is skipped (no default-config la
   assert.deepEqual(r.signals.filter((s: any) => s.sym !== "GOLD"), ok.signals.filter((s: any) => s.sym !== "GOLD"));
   assert.ok(r.scanRow.markets.some((m: any) => m.sym === "GOLD" && m.ok !== false), "the GOLD market row itself is still scanned");
 });
+
+// ─── fix 1: one feed per evaluation ─────────────────────────────────────────
+test("run: frames from different feeds are recorded per frame and block NEW entries (same bars from one feed open a position)", async () => {
+  const i = firstEntryBar(), states = { main: fresh(LOOSE) };
+  const same = await call({ books: "BTC", states, i5: i });
+  assert.ok(same.states.main.pos, "fixture: one feed, the setup opens a position");
+  assert.deepEqual(same.lastRun.main.sources, { m5: "hyperliquid", m15: "hyperliquid", h1: "hyperliquid", h4: "hyperliquid" });
+  // Hyperliquid 1h fails: candles() serves 1h from Binance (identical bars), the other frames from Hyperliquid
+  const mixed = await call({ books: "BTC", states, i5: i, hlFail: (_c, iv) => iv === "1h" });
+  assert.equal(mixed.states.main.pos, null, "no entry on mixed feeds");
+  assert.deepEqual(mixed.lastRun.main.sources, { m5: "hyperliquid", m15: "hyperliquid", h1: "binance", h4: "hyperliquid" });
+  assert.equal(mixed.lastRun.main.source, "hyperliquid", "the m5 source field is kept for older readers");
+  assert.deepEqual(mixed.res.books.BTC.sources, mixed.lastRun.main.sources);
+  assert.ok(mixed.lastRun.main.notes.some((n: string) => /^Entries paused: evaluation frames came from different feeds \(m5 hyperliquid, m15 hyperliquid, h1 binance, h4 hyperliquid\)/.test(n)));
+  const skip = mixed.posts.find((p) => p.path === "dbv5_events")?.body.find((e: any) => e.kind === "SKIP");
+  assert.match(skip.msg, /different feeds/, "the SKIP event says why");
+  assert.equal(mixed.states.main.lastEvalT, same.states.main.lastEvalT, "the bar is still evaluated once");
+});
+
+test("run: an open position is still managed when feeds are mixed", async () => {
+  const i = firstEntryBar(), opened = (await call({ books: "BTC", states: { main: fresh(LOOSE) }, i5: i })).states.main;
+  const pick = (s: State) => ({ equity: s.equity, pos: s.pos && { stop: s.pos.stop, remainingQty: s.pos.remainingQty, exits: s.pos.exits }, lastBarT: s.lastBarT, trades: s.stats.all.n });
+  for (const off of [12, 48, 144]) {
+    const a = await call({ books: "BTC", states: { main: opened }, i5: i + off }), b = await call({ books: "BTC", states: { main: opened }, i5: i + off, hlFail: (_c, iv) => iv === "4h" });
+    assert.equal(b.lastRun.main.sources.h4, "binance");
+    assert.deepEqual(pick(b.states.main), pick(a.states.main), `management identical ${off} bars later`);
+  }
+});

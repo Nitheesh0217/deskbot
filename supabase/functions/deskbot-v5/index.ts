@@ -149,6 +149,11 @@ async function runOnce(sym: Sym = "BTC", scheduler?: (fn: () => Promise<void>) =
   ]);
   if (fng) (st as State & { _fng?: unknown })._fng = { v: fng.value, l: fng.label, t: now };
   const source = m5.source;
+  // candles() falls back Hyperliquid→Binance per timeframe, so one run can mix feeds. Frames from different venues are not the data
+  // the strategies were researched on: no NEW entry this run. Position management continues.
+  const sources = { m5: m5.source, m15: m15.source, h1: h1.source, h4: h4.source };
+  const mixedFeeds = new Set(Object.values(sources)).size > 1 ? `Entries paused: evaluation frames came from different feeds (${Object.entries(sources).map(([k, v]) => `${k} ${v}`).join(", ")})` : null;
+  if (mixedFeeds) notes.push(mixedFeeds);
 
   // 1) manage an open position on the 1m path since the last processed bar
   const closed: Trade[] = [];
@@ -232,7 +237,7 @@ async function runOnce(sym: Sym = "BTC", scheduler?: (fn: () => Promise<void>) =
       // Pre-entry boundary: the entry is tried on a COPY of the state. Management results already applied to `st` (closed trades, equity,
       // events) are untouched whatever happens here. Only when the decision evidence is durably recorded is the copy adopted.
       const trial = JSON.parse(JSON.stringify(st)) as State;
-      let picked = newsBlock || (enforce && !integrity.approved) ? null : pickEntry(trial, signals, now, refFor, notes);
+      let picked = newsBlock || mixedFeeds || (enforce && !integrity.approved) ? null : pickEntry(trial, signals, now, refFor, notes);
       if (picked) {
         const { sig, p, fillRef } = picked;
         if (sym !== "BTC") p.id = `${sym}-${now}`;
@@ -266,7 +271,7 @@ async function runOnce(sym: Sym = "BTC", scheduler?: (fn: () => Promise<void>) =
     // Strategy coverage (observability only): why each strategy did or did not trade on this bar. Must never break a run.
     try {
       const enf = (Deno.env.get("DESKBOT_ENFORCE_APPROVAL") ?? "off") === "on";
-      const globalBlock = newsBlock ? `Entries paused: ${newsBlock}` : enf && !integrity.approved ? `New entries paused: ${integrity.reason}` : null;
+      const globalBlock = newsBlock ? `Entries paused: ${newsBlock}` : mixedFeeds ? mixedFeeds : enf && !integrity.approved ? `New entries paused: ${integrity.reason}` : null;
       covNow = recordCoverage(st, { T: snap.T, now, trace, boundary: boundaryFlags(snap.T, { "15m": snap.new15, "1h": snap.new1h, "4h": snap.new4h, "1d": snap.i1d >= 0 && S.d1[snap.i1d].ct === snap.T }), disp: dispositions(signals, { hadPos, opened: opened ? { strategy: opened.strategy as StrategyTrace["id"], dir: opened.dir } : null, globalBlock, gateState: gateCopy, now }) });
     } catch (e) { notes.push(`coverage: ${(e as Error).message}`.slice(0, 120)); }
   }
@@ -293,7 +298,7 @@ async function runOnce(sym: Sym = "BTC", scheduler?: (fn: () => Promise<void>) =
   if (!wx._workOutbox.length) delete wx._workOutbox;
   // providers = names usable for the desk committee (the tower seats); policy = the five separate facts per provider and feature
   const ai = { providers: providersFromEnv("committee").map((p) => p.name), policy: providerPolicy(aiFeaturesOf(), sx._aiUsage ?? {}, now), usage: sx._aiUsage ?? {} };
-  const lastRun = { ts: new Date(now).toISOString(), sym, action, trader: { acts: traderActs, plan: st.pos?.plan ?? [] }, source, integrity, news, ai, upnl: +upnl.toFixed(2), market, decision, risk: dynamicRisk(st.equity), desk: desk.summary, coverage: covNow, catchup, provenanceError, ms: Date.now() - now };
+  const lastRun = { ts: new Date(now).toISOString(), sym, action, trader: { acts: traderActs, plan: st.pos?.plan ?? [] }, source, sources, notes, integrity, news, ai, upnl: +upnl.toFixed(2), market, decision, risk: dynamicRisk(st.equity), desk: desk.summary, coverage: covNow, catchup, provenanceError, ms: Date.now() - now };
   st.version = VERSION;
   await saveState(st, lastRun, sym);
   await upsert("dbv5_equity", [{ symbol: sym, ts: new Date(now).toISOString(), equity: +st.equity.toFixed(4), upnl: +upnl.toFixed(4), price: snap.price }]);
@@ -345,7 +350,7 @@ async function runOnce(sym: Sym = "BTC", scheduler?: (fn: () => Promise<void>) =
     if (rows.length) { try { await writeAgentRows(sym, rows); } catch (e) { try { await events([{ kind: "ERROR", msg: `${tag}agent log write failed: ${(e as Error).message}`.slice(0, 280), symbol: sym }]); } catch { /* ignore */ } } }
   });
   for (const fn of pending) await fn();   // direct callers without a scheduler keep the old inline order
-  return { ok: true, sym, version: VERSION, integrity, action, equity: +st.equity.toFixed(2), upnl: +upnl.toFixed(2), pos: st.pos ? { strategy: st.pos.strategy, dir: st.pos.dir, entry: st.pos.entry, stop: st.pos.stop, tp1: st.pos.tp1 } : null, trader: traderActs, closed: closed.length, source, news: news ? { risk: news.risk, by: news.by } : null, provenanceError, ms: Date.now() - now };
+  return { ok: true, sym, version: VERSION, integrity, action, equity: +st.equity.toFixed(2), upnl: +upnl.toFixed(2), pos: st.pos ? { strategy: st.pos.strategy, dir: st.pos.dir, entry: st.pos.entry, stop: st.pos.stop, tp1: st.pos.tp1 } : null, trader: traderActs, closed: closed.length, source, sources, news: news ? { risk: news.risk, by: news.by } : null, provenanceError, ms: Date.now() - now };
 }
 
 // ─── backtest (walk-forward; in-sample = first 2/3, out-of-sample = last 1/3) ──
