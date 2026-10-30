@@ -33,9 +33,10 @@
 .plan-t tr.pk-market td { color: var(--fg-2); } .plan-t tr.pk-reference td { color: var(--fg-3); font-style: italic; } .plan-t tr.hit td { opacity: .6; }
 .plan-panel .note.warn { color: var(--warn); } .plan-panel .note.down { color: var(--down); }
 @media (max-width: 520px) {
-  .plan-t thead { display: none; }
+  .plan-t, .plan-t tbody { display: block; min-width: 0; width: 100%; } .plan-t thead { display: none; }
+  .plan-wrap { overflow-x: visible; padding: 0 10px; }
   .plan-t tr { display: grid; grid-template-columns: 1.3fr 1fr 1fr; gap: 2px 8px; padding: 8px 0; border-bottom: 1px solid var(--line); }
-  .plan-t td { display: block; padding: 0; border: 0; text-align: left; }
+  .plan-t td, .plan-t td.r { display: block; padding: 0; border: 0; text-align: left; min-width: 0; overflow-wrap: anywhere; }
   .plan-t td::before { content: attr(data-k); display: block; font-size: 10px; color: var(--fg-3); text-transform: uppercase; letter-spacing: .03em; }
   .plan-t td[data-k="Level"] { grid-row: span 2; font-weight: 600; } .plan-t td[data-k="Exit (planned)"] { grid-column: 2 / span 2; }
 }
