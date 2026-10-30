@@ -16,6 +16,6 @@ Start here. Each topic has one authoritative document; the others listed as *sup
 | Real-account preparation | `control/BROKER_READINESS.md` | — |
 | Decisions, provenance, catch-up, research protocol | `control/DECISIONS.md`, `control/PROVENANCE.md`, `control/CATCHUP.md`, `control/RESEARCH_PROTOCOL.md` | — |
 | Plans | `control/ROADMAP.md`, `control/TASKS.md` | — |
-| Research reports | `research/`, `../research/` | — |
+| Research reports | `research/` (incl. `research/2026-10-31-repos-setups-ui.md`: repos, intraday setups, UI references), `../research/` | — |
 
 Local checks: `npm run check` (typecheck, tests, generated web files, build identity). SQL tests: `scripts/sql_test/*.sh` (need PostgreSQL 16; PostgREST for `postgrest.sh`). Browser smokes: `scripts/web_smoke/*.cjs` (need Playwright).
