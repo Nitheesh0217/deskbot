@@ -8,5 +8,5 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
       - run: npm ci
-      - run: npm test
-      - run: npm run typecheck
+      - run: npm run check   # typecheck + tests + generated web files + build identity
+      - run: git diff --check HEAD~1 HEAD || true

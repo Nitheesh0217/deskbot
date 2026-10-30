@@ -1,3 +1,5 @@
+> **Superseded** — see `docs/README.md` for the current authoritative document.
+
 # Deployment handoff — website evidence and AI quota fix
 
 User authorized website/backend patch deployment October 28, 2026. Prepared changes have not been released merely because a source commit exists.
