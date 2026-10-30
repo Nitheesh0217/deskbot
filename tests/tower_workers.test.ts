@@ -23,7 +23,9 @@ test("missing AI credentials: every AI seat and the assistant are BLOCKED with t
   const off = staffOf({ aiProviders: ["groq"], ai: { providers: ["groq"], agentAi: false, deskWorkflow: true } });
   assert.equal(off.bull.state, "DISABLED");
   const ready = staffOf({ aiProviders: ["groq"], ai: { providers: ["groq"], agentAi: true, deskWorkflow: true }, chat: { enabled: true, ai: ["groq"] } });
-  assert.equal(ready.cio.state, "WAITING", "a provider and no new entry: waiting for its trigger, not broken"); assert.equal(ready.assistant.state, "WAITING");
+  assert.equal(ready.cio.state, "UNKNOWN", "a provider name proves configuration only"); assert.match(ready.cio.facts.blocker, /connectivity unverified/); assert.equal(ready.assistant.state, "UNKNOWN");
+  const proven = staffOf({ aiProviders: ["groq"], ai: { providers: ["groq"], agentAi: true, deskWorkflow: true }, agents: [{ agent: "desk-pm", ts: new Date(now - 3 * 86400e3).toISOString(), output: { rating: "Hold" } }] });
+  assert.equal(proven.cio.state, "WAITING", "a past successful call and no new entry: healthy and waiting for its trigger");
   assert.equal(staffOf({ chat: { enabled: false, ai: [] } }).assistant.state, "DISABLED");
 });
 

@@ -20,7 +20,7 @@ const good = (role: string, dir: string): unknown => ({
   trader: { action: "take", reason: "Plan matches the rules.", execution_note: "Filled." }, aggressive: sp("Reward covers costs."), conservative: sp("Costs are heavy."), neutral: sp("Both hold."),
   pm: { rating: dir === "short" ? "Sell" : "Buy", executive_summary: "Keep.", thesis: "Rules satisfied.", would_change_my_mind: "News." },
 } as Record<string, unknown>)[role];
-async function run(i5: number, o: { env?: Record<string, string>; llm?: "ok" | "down"; lastEvalT?: number; state?: State; log?: any[]; m1?: boolean } = {}) {
+async function run(i5: number, o: { env?: Record<string, string>; llm?: "ok" | "down"; lastEvalT?: number; state?: State; log?: any[]; m1?: boolean; logFail?: boolean; noWorkKey?: boolean } = {}) {
   const nowMs = m5[i5].ct + 4000, env: Record<string, string> = { SUPABASE_URL: "https://deskbot.test", SUPABASE_SERVICE_ROLE_KEY: "test-only", DESKBOT_CRON_SECRET: "test-only", NEWS_MODE: "off", DESKBOT_BOOKS: "BTC", GROQ_API_KEY: "gsk_test_key_not_real", ...(o.env ?? {}) };
   const order: string[] = []; let state: State = o.state ? structuredClone(o.state) : initState(350, T0); if (!o.state) { state.cfg = LOOSE as never; state.lastEvalT = o.lastEvalT ?? 0; } const evRows: any[] = [], decisions: any[] = []; const agentRows: any[] = [], verdicts: any[] = []; let stateWrites = 0;
   let handler!: (req: Request) => Promise<Response>; const pD = (globalThis as any).Deno, pF = globalThis.fetch, pN = Date.now; (globalThis as any).Deno = { env: { get: (k: string) => env[k] }, serve: (h: typeof handler) => { handler = h; } }; Date.now = () => nowMs;
@@ -34,7 +34,15 @@ async function run(i5: number, o: { env?: Record<string, string>; llm?: "ok" | "
       if (path === "rpc/dbv5_lease") return json(true);
       if (path === "rpc/dbv5_record_decision") { order.push("decision"); decisions.push(body); return json(true); }
       if (path.startsWith("dbv5_state?") && body.state) { stateWrites++; order.push("state"); state = structuredClone(body.state); }
-      if (path === "dbv5_agent_log") { order.push("agent_log"); agentRows.push(...body); o.log?.push(...body); }
+      if (path.startsWith("dbv5_agent_log")) {
+        order.push("agent_log");
+        if (o.logFail) return json({ message: "simulated work-log outage" }, 503);
+        if (path.includes("work_key") && o.noWorkKey) return json({ message: "Could not find the 'work_key' column of 'dbv5_agent_log' in the schema cache" }, 400);
+        // emulate the unique index: ON CONFLICT (work_key) DO NOTHING
+        const have = new Set((o.log ?? []).map((r) => r.work_key ?? r.output?.key).filter(Boolean));
+        const keep = path.includes("on_conflict=work_key") ? body.filter((r: any) => !r.work_key || !have.has(r.work_key)) : body;
+        agentRows.push(...keep); o.log?.push(...keep);
+      }
       if (path === "dbv5_events") evRows.push(...body);
       if (path === "dbv5_filter_verdicts") { order.push("verdicts"); verdicts.push(...body); }
       return json(null);
@@ -131,4 +139,36 @@ test("Theo's work log: management actions are recorded once with keys linked to 
   const again = await run(k, { state: opened, log, m1: true, env: { AGENT_AI: "off" } });
   assert.deepEqual(again.agentRows.filter((a) => a.agent === "manager"), [], "nothing recorded twice");
   assert.deepEqual(again.state.pos, first!.state.pos); assert.equal(again.state.equity, first!.state.equity, "the work log changes no trade or P&L");
+});
+
+const mgrKeys = (rows: any[]) => rows.filter((a) => a.agent === "manager").map((a) => a.output.key);
+async function firstManagement(extra: Parameters<typeof run>[1] = {}) {
+  const { i, r } = await entryBar({ env: { AGENT_AI: "off" } }); const opened = structuredClone(r.state);
+  for (let k = i + 1; k < Math.min(i + 400, m5.length - 2); k += 3) { const x = await run(k, { state: opened, log: [], m1: true, env: { AGENT_AI: "off" } }); if (mgrKeys(x.agentRows).length) return { k, opened, ref: x }; }
+  throw new Error("no management action in the window");
+}
+
+test("persistence: a failed work-log write keeps the records in the state outbox, raises an ERROR event, changes no trade, and the next run writes them exactly once", async () => {
+  const { k, opened, ref } = await firstManagement();
+  const log: any[] = [];
+  const down = await run(k, { state: opened, log, m1: true, logFail: true, env: { AGENT_AI: "off" } });
+  assert.deepEqual(down.state.pos, ref.state.pos); assert.equal(down.state.equity, ref.state.equity, "a log outage cannot change the trade");
+  assert.deepEqual(((down.state as any)._workOutbox ?? []).map((r: any) => r.output.key), mgrKeys(ref.agentRows), "records persisted with the management state");
+  assert.ok(down.evRows.some((e) => e.kind === "ERROR" && /work log write failed/.test(e.msg)), "the failure is a recorded event, not a lost note");
+  const next = await run(k + 1, { state: down.state, log, m1: true, env: { AGENT_AI: "off" } });
+  const written = log.filter((r) => r.agent === "manager").map((r) => r.work_key);
+  for (const key of mgrKeys(ref.agentRows)) assert.equal(written.filter((x) => x === key).length, 1, `${key} written once`);
+  assert.equal((next.state as any)._workOutbox, undefined, "outbox cleared after a confirmed write");
+  const again = await run(k + 1, { state: down.state, log, m1: true, env: { AGENT_AI: "off" } });   // the same flush retried (e.g. the clearing save failed)
+  assert.equal(log.filter((r) => r.agent === "manager").length, written.length, "a repeated flush adds nothing");
+  assert.deepEqual(again.state.pos, next.state.pos);
+});
+
+test("persistence: without the work_key migration the writer falls back to check-then-insert and still writes each key once", async () => {
+  const { k, opened } = await firstManagement();
+  const log: any[] = [];
+  const a = await run(k, { state: opened, log, m1: true, noWorkKey: true, env: { AGENT_AI: "off" } });
+  const b = await run(k, { state: opened, log, m1: true, noWorkKey: true, env: { AGENT_AI: "off" } });
+  const ks = log.filter((r) => r.agent === "manager").map((r) => r.output.key); assert.ok(ks.length > 0); assert.equal(new Set(ks).size, ks.length);
+  assert.deepEqual(a.state.pos, b.state.pos);
 });

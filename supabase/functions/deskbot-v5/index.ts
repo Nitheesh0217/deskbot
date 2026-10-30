@@ -19,7 +19,7 @@ import { runDesk, deskChart, type AgentRow } from "./agents.ts";
 import { preTradeChecks, postTradeReview, runDeskWorkflow, analystReports, lessonsFrom } from "./desk.ts";
 import { verdictsFor, filterReport } from "./experiment.ts";
 import { catchUp } from "./catchup.ts";
-import { managerRows, managerFailure, snapshotPos, unrecorded, workKey } from "./worklog.ts";
+import { managerRows, managerFailure, snapshotPos, unrecorded, workKey, mergeOutbox, type WorkRow } from "./worklog.ts";
 import { scanMarket, rankScan, derivatives, SCAN_NOTE, CALL_HORIZON_H } from "./scan.ts";
 import { signalsOverBars, resolve, trackRecord, scoreCall, callRecord, PRIORITY, PROMOTION, type NewSignal, type OpenSignal, type Resolution, type OpenCall, type CallScore } from "./track.ts";
 import { captureDecision, pickEntry, decisionIdFor } from "./provenance.ts";
@@ -63,15 +63,27 @@ async function rest(path: string, init: RequestInit = {}) {
 const upsert = (table: string, rows: unknown) => rest(table, { method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify(rows) });
 const insert = (table: string, rows: unknown) => rest(table, { method: "POST", body: JSON.stringify(rows) });
 const select = (q: string) => rest(q, { method: "GET", headers: { Prefer: "" } });
-// Agent work-log writer. Rows carrying output.key (Theo's management actions) are written once: keys already in the log
-// (an earlier attempt of the same run) and repeats within the batch are dropped. Runs hold the per-book lease, so the
-// check and the insert cannot interleave with another run of the same book.
-async function writeAgentRows(sym: string, rows: { agent: string; input_summary: string; output: unknown; provider?: string | null; ms?: number | null; error?: string | null }[]) {
-  const keys = [...new Set(rows.map((r) => (r.output as { key?: unknown } | null)?.key).filter((k): k is string => typeof k === "string"))];
-  const have = new Set<string>();
-  if (keys.length) for (const x of (await select(`dbv5_agent_log?select=k:output->>key&agent=eq.manager&output->>key=in.(${keys.map((k) => `"${k.replace(/["\\]/g, "")}"`).join(",")})`)) ?? []) have.add(x.k);
-  const fresh = unrecorded(rows as { output?: Record<string, unknown> }[], have).filter((r, i, a) => { const k = r.output?.key; return typeof k !== "string" || a.findIndex((x) => x.output?.key === k) === i; }) as typeof rows;
-  if (fresh.length) await insert("dbv5_agent_log", fresh.map((r) => ({ symbol: sym, agent: r.agent, input_summary: r.input_summary, output: r.output, provider: r.provider ?? null, ms: r.ms ?? null, error: r.error ?? null })));
+// Agent work-log writer. Rows carrying output.key (Theo's management records) are inserted with
+// ON CONFLICT (work_key) DO NOTHING against a unique index, so overlapping or retried runs cannot record a key twice.
+// If that column is not migrated yet, it falls back to check-then-insert (safe only while runs do not overlap) and says so.
+type LogRow = { agent: string; input_summary: string; output: unknown; provider?: string | null; ms?: number | null; error?: string | null };
+const LOG_COLS = "symbol,agent,input_summary,output,provider,ms,error,work_key";
+async function writeAgentRows(sym: string, rows: LogRow[]): Promise<"conflict-safe" | "check-then-insert" | "none"> {
+  const keyOf = (r: LogRow) => { const k = (r.output as { key?: unknown } | null)?.key; return typeof k === "string" ? k : null; };
+  const batch = unrecorded(rows as { output?: Record<string, unknown> }[], new Set()) as LogRow[];
+  if (!batch.length) return "none";
+  const body = (rs: LogRow[], withKey: boolean) => JSON.stringify(rs.map((r) => ({ symbol: sym, agent: r.agent, input_summary: r.input_summary, output: r.output, provider: r.provider ?? null, ms: r.ms ?? null, error: r.error ?? null, ...(withKey ? { work_key: keyOf(r) } : {}) })));
+  try {
+    await rest(`dbv5_agent_log?columns=${LOG_COLS}&on_conflict=work_key`, { method: "POST", headers: { Prefer: "resolution=ignore-duplicates,return=minimal" }, body: body(batch, true) });
+    return "conflict-safe";
+  } catch (e) {
+    if (!/work_key|ON CONFLICT|unique or exclusion constraint/i.test(String((e as Error).message))) throw e;
+    const keys = batch.map(keyOf).filter((k): k is string => !!k), have = new Set<string>();
+    if (keys.length) for (const x of (await select(`dbv5_agent_log?select=k:output->>key&agent=eq.manager&output->>key=in.(${keys.map((k) => `"${k.replace(/["\\]/g, "")}"`).join(",")})`)) ?? []) have.add(x.k);
+    const fresh = unrecorded(batch as { output?: Record<string, unknown> }[], have) as LogRow[];
+    if (fresh.length) await insert("dbv5_agent_log", JSON.parse(body(fresh, false)));
+    return "check-then-insert";
+  }
 }
 
 // cron key lives in Supabase Vault; read via a service-role-only RPC (env var overrides if set)
@@ -170,7 +182,7 @@ async function runOnce(sym: Sym = "BTC") {
     if (st.pos) for (const e of st.pos.exits) if (e.t > since && e.kind !== "stop") evs.push({ kind: e.kind.toUpperCase(), strategy: st.pos.strategy, symbol: sym, msg: `${tag}${e.kind.toUpperCase()} filled @ ${e.px.toFixed(1)} · stop → ${st.pos.stop.toFixed(1)}`, data: { decisionId: decisionIdFor(st.pos.id), px: e.px, qty: e.qty, stop: st.pos.stop, work: workKey(st.pos.id, e.kind.startsWith("tp") ? "target_fill" : "exit", `${e.kind}:${e.t}`) } });
   } catch (e) {
     // record the failure once per position and stuck bar, then fail the run exactly as before
-    if (posBefore) await writeAgentRows(sym, [managerFailure(sym, posBefore, st.lastBarT, e, decisionIdFor)]).catch(() => {});
+    if (posBefore) await writeAgentRows(sym, [managerFailure(sym, posBefore, st.lastBarT, e, decisionIdFor)]).catch(() => {});   // best effort; the run's ERROR event is the primary record
     throw e;
   }
   else st.lastBarT = now;
@@ -288,13 +300,29 @@ async function runOnce(sym: Sym = "BTC") {
   const news = nw ? { t: nw.t, risk: nw.risk, bias: nw.bias, event: nw.event, reason: nw.reason, by: nw.by, mode: NEWS_MODE, top: nw.headlines.slice(0, 5).map((h) => ({ src: h.src, title: h.title, t: h.t })), errors: nw.aiErrors ?? [] } : null;
   // desk agents: chart read + validator/risk/re-entry views, persisted to dbv5_agent_log (never allowed to break a run)
   const desk = runDesk({ snap, S, m1, st, signals: deskSignals, rejects: deskRejects, traderActs, opened, closedNow: closed.length, ms: Date.now() - now });
-  const rows: AgentRow[] = [...desk.rows, ...managerRows(sym, posBefore, snapshotPos(st.pos), closed, decisionIdFor)];
+  const rows: AgentRow[] = [...desk.rows];
+  // Theo's records go into an outbox inside the book state, so they persist in the SAME write as the management they describe;
+  // they are removed only after the work log confirms them (flushWork below), so a failed log write is retried next run.
+  const wx = st as State & { _workOutbox?: WorkRow[] };
+  wx._workOutbox = mergeOutbox(wx._workOutbox, managerRows(sym, posBefore, snapshotPos(st.pos), closed, decisionIdFor, { snapT: posBefore ? snap.T : null, acts: traderActs }));
+  if (!wx._workOutbox.length) delete wx._workOutbox;
   const ai = { providers: providersFromEnv().map((p) => p.name), usage: sx._aiUsage ?? {} };
   const lastRun = { ts: new Date(now).toISOString(), sym, action, trader: { acts: traderActs, plan: st.pos?.plan ?? [] }, source, integrity, news, ai, upnl: +upnl.toFixed(2), market, decision, risk: dynamicRisk(st.equity), desk: desk.summary, coverage: covNow, catchup, provenanceError, ms: Date.now() - now };
   st.version = VERSION;
   await saveState(st, lastRun, sym);
   await upsert("dbv5_equity", [{ symbol: sym, ts: new Date(now).toISOString(), equity: +st.equity.toFixed(4), upnl: +upnl.toFixed(4), price: snap.price }]);
   await events(evs);
+  // flush Theo's outbox: conflict-safe insert, then clear it with a second state write. A failure keeps it for the next run and is
+  // recorded as an ERROR event (never only in run notes, which are not persisted after the save). Trading state is already saved.
+  if (wx._workOutbox?.length) {
+    try {
+      const mode = await writeAgentRows(sym, wx._workOutbox);
+      delete wx._workOutbox; await saveState(st, lastRun, sym);
+      if (mode === "check-then-insert") notes.push("work log: work_key column missing; deduplicated by check-then-insert");
+    } catch (e) {
+      try { await events([{ kind: "ERROR", msg: `${tag}work log write failed; ${wx._workOutbox?.length ?? 0} record(s) kept for the next run: ${(e as Error).message}`.slice(0, 280), symbol: sym }]); } catch { /* the outbox is still saved */ }
+    }
+  }
   // Desk review layer (advisory). Runs AFTER state and ledger are saved so slow or failing providers can never cost a persisted trade.
   // Post-trade reviews are deterministic and free; the LLM roles run only for a trade opened this run and only when a provider is configured.
   if (DESK_WORKFLOW) {
@@ -320,7 +348,7 @@ async function runOnce(sym: Sym = "BTC") {
       }
     } catch (e) { notes.push(`desk review: ${(e as Error).message}`.slice(0, 120)); }
   }
-  if (rows.length) { try { await writeAgentRows(sym, rows); } catch (e) { notes.push(`agent log: ${(e as Error).message}`.slice(0, 120)); } }
+  if (rows.length) { try { await writeAgentRows(sym, rows); } catch (e) { try { await events([{ kind: "ERROR", msg: `${tag}agent log write failed: ${(e as Error).message}`.slice(0, 280), symbol: sym }]); } catch { /* ignore */ } } }
   return { ok: true, sym, version: VERSION, integrity, action, equity: +st.equity.toFixed(2), upnl: +upnl.toFixed(2), pos: st.pos ? { strategy: st.pos.strategy, dir: st.pos.dir, entry: st.pos.entry, stop: st.pos.stop, tp1: st.pos.tp1 } : null, trader: traderActs, closed: closed.length, source, news: news ? { risk: news.risk, by: news.by } : null, provenanceError, ms: Date.now() - now };
 }
 
@@ -445,7 +473,7 @@ async function status() {
   const experiment = await experimentStatus();
   const config = resolvedCfg(st?.cfg);
   const integrity = await integrityFor("BTC", config);
-  if (st) { delete st._aiUsage; }
+  if (st) { delete st._aiUsage; delete st._workOutbox; }
   const books: Record<string, unknown> = {};
   for (const sym of BOOKS.filter((b) => b !== "BTC")) {
     const [r, eqb] = await Promise.all([
@@ -453,7 +481,7 @@ async function status() {
       select(`dbv5_equity?select=ts,equity,upnl,price&symbol=eq.${sym}&ts=gte.${new Date(Date.now() - 14 * 86400_000).toISOString()}&order=ts.asc`),
     ]);
     const c = (eqb ?? []).filter((_: unknown, i: number, a: unknown[]) => a.length < 400 || i % Math.ceil(a.length / 400) === 0 || i === a.length - 1);
-    books[sym] = r?.[0] ? { name: SYMBOLS[sym].name, hl: SYMBOLS[sym].hl, integrity: await integrityFor(sym, resolvedCfg(r[0].state?.cfg)), state: r[0].state, lastRun: r[0].last_run, updated: r[0].updated_at, curve: c } : { name: SYMBOLS[sym].name, hl: SYMBOLS[sym].hl, state: null };
+    books[sym] = r?.[0] ? { name: SYMBOLS[sym].name, hl: SYMBOLS[sym].hl, integrity: await integrityFor(sym, resolvedCfg(r[0].state?.cfg)), state: (({ _workOutbox, _aiUsage, ...rest }) => rest)(r[0].state ?? {}), lastRun: r[0].last_run, updated: r[0].updated_at, curve: c } : { name: SYMBOLS[sym].name, hl: SYMBOLS[sym].hl, state: null };
   }
   const curve = (eq ?? []).filter((_: unknown, i: number, a: unknown[]) => a.length < 600 || i % Math.ceil(a.length / 600) === 0 || i === a.length - 1);
   return { version: VERSION, mode: "PAPER", now: new Date().toISOString(), updated: s?.[0]?.updated_at ?? null, integrity, state: st, lastRun: s?.[0]?.last_run ?? null, events: ev, agents: agents ?? [], trades: tr, curve, books, backtest: bt?.[0] ?? null, experiment, config, scan, track, chat: { enabled: !!CHAT_KEY, ai: providersFromEnv().map((p) => p.name) }, ai: { providers: providersFromEnv().map((p) => p.name), agentAi: AGENT_AI, deskWorkflow: DESK_WORKFLOW, newsAi: NEWS_AI, newsMode: NEWS_MODE } };
