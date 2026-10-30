@@ -4,6 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { initState, openPosition, applyCfg, buildSeries, snapshot, evaluate, ensureState, type Bar, type State } from "../supabase/functions/deskbot-v5/engine.ts";
 import { replayDecision, decisionIdFor } from "../supabase/functions/deskbot-v5/provenance.ts";
+import { casMatches } from "./helpers/cas.ts";
 
 const M5 = 300_000, T0 = Date.UTC(2026, 0, 1);
 const seeded = (seed: number) => () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
@@ -42,7 +43,7 @@ async function runAt(i5: number, failDecision: boolean, w: World = newWorld()) {
       calls.push(path.split("?")[0]);
       if (path === "rpc/dbv5_lease") return json(true);
       if (path === "rpc/dbv5_record_decision") { if (failDecision) return json({ message: "down" }, 500); w.decision = body; return json(true); }
-      if (path.startsWith("dbv5_state?") && body.state) w.state = structuredClone(body.state);
+      if (path.startsWith("dbv5_state?") && body.state) { if (!casMatches(path, w.state)) return json([]); w.state = structuredClone(body.state); return json([{ id: "main" }]); }
       if (path === "dbv5_events") w.events = w.events.concat(body);
       if (path === "dbv5_trades") w.trades = w.trades.concat(body);
       return json(null);

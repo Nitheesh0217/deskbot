@@ -206,7 +206,7 @@ function renderTower() {
   const strategies = STRATS.map((s) => { const v = stratView(s.id, st), c = v.cov; return { id: s.id, name: s.name, state: OPST[v.state] ? OPST[v.state][1].toUpperCase() : v.state, reason: v.state === "DISABLED" ? (v.offReason || "") : c ? ((c.lastDueCode || c.lastCode || "") + " " + (c.lastDueReason || c.lastReason || "")).trim() : "no evaluation counters yet" }; });
   if (globalThis.DeskMarkets && !$("v-tower").hidden && Date.now() - TOWER_CAL.at > 10 * 60e3) { TOWER_CAL.at = Date.now(); globalThis.DeskMarkets.nextHighImpact().then((e) => { TOWER_CAL.next = e; renderTower(); }).catch(() => {}); }
   globalThis.TowerView.render({ calendarNext: TOWER_CAL.next, state: S, agents: DATA.agents || [], trades: DATA.trades || [], curve: DATA.curve || [], strategies, book: BOOK, bt: DATA.bt || null,
-    experiment: RAW ? (RAW.experiment === undefined ? null : RAW.experiment) : null, config: BOOK === "BTC" && RAW ? RAW.config || null : null, aiProviders: RAW && RAW.chat ? RAW.chat.ai || [] : null, ai: RAW ? RAW.ai || null : null, scan: RAW ? RAW.scan || null : null, track: RAW ? RAW.track || null : null, chat: RAW ? RAW.chat || null : null });
+    experiment: RAW ? (RAW.experiment === undefined ? null : RAW.experiment) : null, config: BOOK === "BTC" && RAW ? RAW.config || null : null, aiProviders: RAW && RAW.chat ? RAW.chat.ai || [] : null, ai: RAW ? RAW.ai || null : null, scan: RAW ? RAW.scan || null : null, track: RAW ? RAW.track || null : null, chat: RAW ? RAW.chat || null : null, work: RAW ? RAW.work || null : null });
 }
 let strategyFilter = "all";
 function renderStrategies() {

@@ -3,6 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { initState, applyCfg, buildSeries, snapshot, evaluate, ensureState, type Bar, type State } from "../supabase/functions/deskbot-v5/engine.ts";
 import { replayDecision } from "../supabase/functions/deskbot-v5/provenance.ts";
+import { casMatches } from "./helpers/cas.ts";
 
 const M5 = 300_000, T0 = Date.UTC(2026, 0, 1);
 const seeded = (seed: number) => () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
@@ -20,7 +21,7 @@ const good = (role: string, dir: string): unknown => ({
   trader: { action: "take", reason: "Plan matches the rules.", execution_note: "Filled." }, aggressive: sp("Reward covers costs."), conservative: sp("Costs are heavy."), neutral: sp("Both hold."),
   pm: { rating: dir === "short" ? "Sell" : "Buy", executive_summary: "Keep.", thesis: "Rules satisfied.", would_change_my_mind: "News." },
 } as Record<string, unknown>)[role];
-async function run(i5: number, o: { env?: Record<string, string>; llm?: "ok" | "down"; lastEvalT?: number; state?: State; log?: any[]; m1?: boolean; logFail?: boolean; noWorkKey?: boolean } = {}) {
+async function run(i5: number, o: { env?: Record<string, string>; llm?: "ok" | "down"; lastEvalT?: number; state?: State; log?: any[]; m1?: boolean; logFail?: boolean; noWorkKey?: boolean; noAck?: boolean } = {}) {
   const nowMs = m5[i5].ct + 4000, env: Record<string, string> = { SUPABASE_URL: "https://deskbot.test", SUPABASE_SERVICE_ROLE_KEY: "test-only", DESKBOT_CRON_SECRET: "test-only", NEWS_MODE: "off", DESKBOT_BOOKS: "BTC", GROQ_API_KEY: "gsk_test_key_not_real", ...(o.env ?? {}) };
   const order: string[] = []; let state: State = o.state ? structuredClone(o.state) : initState(350, T0); if (!o.state) { state.cfg = LOOSE as never; state.lastEvalT = o.lastEvalT ?? 0; } const evRows: any[] = [], decisions: any[] = []; const agentRows: any[] = [], verdicts: any[] = []; let stateWrites = 0;
   let handler!: (req: Request) => Promise<Response>; const pD = (globalThis as any).Deno, pF = globalThis.fetch, pN = Date.now; (globalThis as any).Deno = { env: { get: (k: string) => env[k] }, serve: (h: typeof handler) => { handler = h; } }; Date.now = () => nowMs;
@@ -32,8 +33,9 @@ async function run(i5: number, o: { env?: Record<string, string>; llm?: "ok" | "
       if (init.method === "GET" && path.startsWith("dbv5_agent_log?")) { const want = decodeURIComponent(path).match(/in\.\((.*)\)/)?.[1].split(",").map((x) => x.replace(/"/g, "")) ?? []; return json((o.log ?? []).filter((r) => want.includes(r.output?.key)).map((r) => ({ k: r.output.key }))); }
       if (init.method === "GET") return path.startsWith("dbv5_state?") ? json([{ state: structuredClone(state), updated_at: new Date(nowMs).toISOString() }]) : json([]);
       if (path === "rpc/dbv5_lease") return json(true);
+      if (path === "rpc/dbv5_ack_work") { if (o.noAck) return json({ code: "PGRST202", message: "Could not find the function public.dbv5_ack_work" }, 404); const k = new Set(body.p_keys); if (Array.isArray((state as any)._workOutbox)) (state as any)._workOutbox = (state as any)._workOutbox.filter((r: any) => !k.has(r.output.key)); order.push("ack"); return json((state as any)._workOutbox?.length ?? 0); }
       if (path === "rpc/dbv5_record_decision") { order.push("decision"); decisions.push(body); return json(true); }
-      if (path.startsWith("dbv5_state?") && body.state) { stateWrites++; order.push("state"); state = structuredClone(body.state); }
+      if (path.startsWith("dbv5_state?") && body.state) { if (!casMatches(path, state)) return json([]); stateWrites++; order.push("state"); state = structuredClone(body.state); return json([{ id: "main" }]); }
       if (path.startsWith("dbv5_agent_log")) {
         order.push("agent_log");
         if (o.logFail) return json({ message: "simulated work-log outage" }, 503);
@@ -158,7 +160,7 @@ test("persistence: a failed work-log write keeps the records in the state outbox
   const next = await run(k + 1, { state: down.state, log, m1: true, env: { AGENT_AI: "off" } });
   const written = log.filter((r) => r.agent === "manager").map((r) => r.work_key);
   for (const key of mgrKeys(ref.agentRows)) assert.equal(written.filter((x) => x === key).length, 1, `${key} written once`);
-  assert.equal((next.state as any)._workOutbox, undefined, "outbox cleared after a confirmed write");
+  assert.equal(((next.state as any)._workOutbox ?? []).length, 0, "outbox emptied by the scoped acknowledgement after a confirmed write");
   const again = await run(k + 1, { state: down.state, log, m1: true, env: { AGENT_AI: "off" } });   // the same flush retried (e.g. the clearing save failed)
   assert.equal(log.filter((r) => r.agent === "manager").length, written.length, "a repeated flush adds nothing");
   assert.deepEqual(again.state.pos, next.state.pos);
@@ -171,4 +173,28 @@ test("persistence: without the work_key migration the writer falls back to check
   const b = await run(k, { state: opened, log, m1: true, noWorkKey: true, env: { AGENT_AI: "off" } });
   const ks = log.filter((r) => r.agent === "manager").map((r) => r.output.key); assert.ok(ks.length > 0); assert.equal(new Set(ks).size, ks.length);
   assert.deepEqual(a.state.pos, b.state.pos);
+});
+
+test("persistence: without the ack RPC the trimmed outbox is saved by compare-and-set; nothing is lost or duplicated", async () => {
+  const { k, opened, ref } = await firstManagement();
+  const log: any[] = [];
+  const down = await run(k, { state: opened, log, m1: true, logFail: true, env: { AGENT_AI: "off" } });
+  const up = await run(k + 1, { state: down.state, log, m1: true, noAck: true, env: { AGENT_AI: "off" } });
+  assert.equal(((up.state as any)._workOutbox ?? []).length, 0);
+  for (const key of mgrKeys(ref.agentRows)) assert.equal(log.filter((r) => r.work_key === key).length, 1, key);
+  assert.ok(up.state._rev > down.state._rev, "state revision advanced through compare-and-set saves");
+});
+
+test("durability through the handler: 250 records already pending + an outage keeps every record; recovery persists each distinct one once", async () => {
+  const { k, opened, ref } = await firstManagement();
+  const seeded = structuredClone(opened) as any;
+  seeded._workOutbox = Array.from({ length: 250 }, (_, i) => ({ agent: "manager", input_summary: `old ${i}`, output: { key: `${seeded.pos.id}:manage:old:${i}`, ref: seeded.pos.id, symbol: "BTC", action: "manage", queuedAt: 1 } }));
+  const log: any[] = [];
+  const down = await run(k, { state: seeded, log, m1: true, logFail: true, env: { AGENT_AI: "off" } });
+  const want = [...seeded._workOutbox.map((r: any) => r.output.key), ...mgrKeys(ref.agentRows)];
+  assert.deepEqual(((down.state as any)._workOutbox ?? []).map((r: any) => r.output.key).sort(), [...new Set(want)].sort(), "all 250 + this run's records retained");
+  assert.ok(down.evRows.some((e) => e.kind === "ERROR" && /work log write failed; \d+ record\(s\) pending/.test(e.msg)));
+  const up = await run(k + 1, { state: down.state, log, m1: true, env: { AGENT_AI: "off" } });
+  for (const key of new Set(want)) assert.equal(log.filter((r) => r.work_key === key).length, 1, key);
+  assert.equal(((up.state as any)._workOutbox ?? []).length, 0);
 });

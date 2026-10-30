@@ -2,6 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { initState, applyCfg, STRATEGIES, type State } from "../supabase/functions/deskbot-v5/engine.ts";
+import { casMatches } from "./helpers/cas.ts";
 
 test("a run records WHY each strategy did or did not trade, for all 11 strategies, in state and lastRun", async () => {
   const env: Record<string, string> = { SUPABASE_URL: "https://deskbot.test", SUPABASE_SERVICE_ROLE_KEY: "test-only", DESKBOT_CRON_SECRET: "test-only", NEWS_MODE: "off", DESKBOT_BOOKS: "BTC", AGENT_AI: "off" };
@@ -13,7 +14,7 @@ test("a run records WHY each strategy did or did not trade, for all 11 strategie
     const url = String(input), body = init.body ? JSON.parse(String(init.body)) : null;
     if (url.startsWith("https://deskbot.test/rest/v1/")) {
       const path = url.split("/rest/v1/")[1];
-      if (init.method !== "GET") { if (path === "rpc/dbv5_lease") return json(true); if (path.startsWith("dbv5_state?") && body.state) { state = structuredClone(body.state); lastRun = body.last_run; } return json(null); }
+      if (init.method !== "GET") { if (path === "rpc/dbv5_lease") return json(true); if (path.startsWith("dbv5_state?") && body.state) { if (!casMatches(path, state)) return json([]); state = structuredClone(body.state); lastRun = body.last_run; return json([{ id: "main" }]); } return json(null); }
       return path.startsWith("dbv5_state?") ? json([{ state: structuredClone(state), updated_at: new Date(now).toISOString() }]) : json([]);
     }
     if (url.includes("hyperliquid")) {

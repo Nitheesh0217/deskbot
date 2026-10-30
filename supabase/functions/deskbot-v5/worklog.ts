@@ -68,6 +68,7 @@ export const unrecorded = <R extends { output?: Record<string, unknown> }>(rows:
   const inBatch = new Set<string>();
   return rows.filter((r) => { const k = r.output?.key; if (typeof k !== "string") return true; if (existing.has(k) || inBatch.has(k)) return false; inBatch.add(k); return true; });
 };
-/** The outbox kept inside the book state: rows not yet confirmed in the work log, newest last, bounded. */
-export const OUTBOX_MAX = 200;
-export const mergeOutbox = (box: WorkRow[] | undefined, add: WorkRow[]) => unrecorded([...(box ?? []), ...add], new Set()).slice(-OUTBOX_MAX) as WorkRow[];
+/** The outbox kept inside the book state: rows not yet confirmed in the work log, oldest first. Unbounded on purpose:
+ *  dropping unconfirmed records would lose evidence. Repeats (same key) are merged; queuedAt records first entry (backlog age). */
+export const mergeOutbox = (box: WorkRow[] | undefined, add: WorkRow[], now = Date.now()) =>
+  unrecorded([...(box ?? []), ...add.map((r) => (r.output.queuedAt == null ? { ...r, output: { ...r.output, queuedAt: now } } : r))], new Set()) as WorkRow[];

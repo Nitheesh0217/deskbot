@@ -19,7 +19,8 @@ import { runDesk, deskChart, type AgentRow } from "./agents.ts";
 import { preTradeChecks, postTradeReview, runDeskWorkflow, analystReports, lessonsFrom } from "./desk.ts";
 import { verdictsFor, filterReport } from "./experiment.ts";
 import { catchUp } from "./catchup.ts";
-import { managerRows, managerFailure, snapshotPos, unrecorded, workKey, mergeOutbox, type WorkRow } from "./worklog.ts";
+import { managerRows, managerFailure, snapshotPos, workKey, mergeOutbox, type WorkRow } from "./worklog.ts";
+import { makeDb, saveStateCAS, writeAgentRows as writeLog, ackWork, flushOutbox, backlog } from "./persist.ts";
 import { scanMarket, rankScan, derivatives, SCAN_NOTE, CALL_HORIZON_H } from "./scan.ts";
 import { signalsOverBars, resolve, trackRecord, scoreCall, callRecord, PRIORITY, PROMOTION, type NewSignal, type OpenSignal, type Resolution, type OpenCall, type CallScore } from "./track.ts";
 import { captureDecision, pickEntry, decisionIdFor } from "./provenance.ts";
@@ -52,39 +53,10 @@ const BOOKS: Sym[] = (Deno.env.get("DESKBOT_BOOKS") ?? "BTC,GOLD").split(",").ma
 const rowId = (sym: Sym) => (sym === "BTC" ? "main" : sym.toLowerCase());
 const CORS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "content-type, x-deskbot-key, x-chat-key", "Access-Control-Allow-Methods": "GET, POST, OPTIONS" };
 
-// ─── tiny PostgREST client ──────────────────────────────────────────────────
-async function rest(path: string, init: RequestInit = {}) {
-  const r = await fetch(`${SB}/rest/v1/${path}`, {
-    ...init, signal: init.signal ?? AbortSignal.timeout(10000), headers: { apikey: KEY, Authorization: `Bearer ${KEY}`, "Content-Type": "application/json", Prefer: "return=minimal", ...(init.headers ?? {}) },
-  });
-  if (!r.ok) throw new Error(`DB ${path.split("?")[0]} ${r.status}: ${(await r.text()).slice(0, 200)}`);
-  const t = await r.text(); return t ? JSON.parse(t) : null;
-}
-const upsert = (table: string, rows: unknown) => rest(table, { method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify(rows) });
-const insert = (table: string, rows: unknown) => rest(table, { method: "POST", body: JSON.stringify(rows) });
-const select = (q: string) => rest(q, { method: "GET", headers: { Prefer: "" } });
-// Agent work-log writer. Rows carrying output.key (Theo's management records) are inserted with
-// ON CONFLICT (work_key) DO NOTHING against a unique index, so overlapping or retried runs cannot record a key twice.
-// If that column is not migrated yet, it falls back to check-then-insert (safe only while runs do not overlap) and says so.
-type LogRow = { agent: string; input_summary: string; output: unknown; provider?: string | null; ms?: number | null; error?: string | null };
-const LOG_COLS = "symbol,agent,input_summary,output,provider,ms,error,work_key";
-async function writeAgentRows(sym: string, rows: LogRow[]): Promise<"conflict-safe" | "check-then-insert" | "none"> {
-  const keyOf = (r: LogRow) => { const k = (r.output as { key?: unknown } | null)?.key; return typeof k === "string" ? k : null; };
-  const batch = unrecorded(rows as { output?: Record<string, unknown> }[], new Set()) as LogRow[];
-  if (!batch.length) return "none";
-  const body = (rs: LogRow[], withKey: boolean) => JSON.stringify(rs.map((r) => ({ symbol: sym, agent: r.agent, input_summary: r.input_summary, output: r.output, provider: r.provider ?? null, ms: r.ms ?? null, error: r.error ?? null, ...(withKey ? { work_key: keyOf(r) } : {}) })));
-  try {
-    await rest(`dbv5_agent_log?columns=${LOG_COLS}&on_conflict=work_key`, { method: "POST", headers: { Prefer: "resolution=ignore-duplicates,return=minimal" }, body: body(batch, true) });
-    return "conflict-safe";
-  } catch (e) {
-    if (!/work_key|ON CONFLICT|unique or exclusion constraint/i.test(String((e as Error).message))) throw e;
-    const keys = batch.map(keyOf).filter((k): k is string => !!k), have = new Set<string>();
-    if (keys.length) for (const x of (await select(`dbv5_agent_log?select=k:output->>key&agent=eq.manager&output->>key=in.(${keys.map((k) => `"${k.replace(/["\\]/g, "")}"`).join(",")})`)) ?? []) have.add(x.k);
-    const fresh = unrecorded(batch as { output?: Record<string, unknown> }[], have) as LogRow[];
-    if (fresh.length) await insert("dbv5_agent_log", JSON.parse(body(fresh, false)));
-    return "check-then-insert";
-  }
-}
+// ─── PostgREST client and persistence (persist.ts; the same requests are tested against a local PostgREST) ───
+const db = makeDb(`${SB}/rest/v1`, KEY, (u, i) => fetch(u, i));
+const { rest, upsert, insert, select } = db;
+const writeAgentRows = (sym: string, rows: Parameters<typeof writeLog>[2]) => writeLog(db, sym, rows);
 
 // cron key lives in Supabase Vault; read via a service-role-only RPC (env var overrides if set)
 let _key: string | null = null;
@@ -97,8 +69,10 @@ async function cronKey(): Promise<string> {
 async function loadState(sym: Sym = "BTC"): Promise<State | null> {
   const r = await select(`dbv5_state?id=eq.${rowId(sym)}&select=state`); return r?.[0]?.state ?? null;
 }
-async function saveState(st: State, lastRun: Record<string, unknown>, sym: Sym = "BTC") {
-  await rest(`dbv5_state?id=eq.${rowId(sym)}`, { method: "PATCH", body: JSON.stringify({ state: st, last_run: lastRun, updated_at: new Date().toISOString() }) });
+// every book-state write is a compare-and-set on state._rev (persist.ts): a run whose loaded revision is no longer current
+// (e.g. an expired-lease worker) gets StateConflict and writes nothing
+async function saveState(st: State, lastRun: Record<string, unknown> | null, sym: Sym = "BTC") {
+  await saveStateCAS(db, rowId(sym), st as unknown as Record<string, unknown>, lastRun);
 }
 type Ev = { kind: string; strategy?: string | null; msg: string; data?: unknown; symbol?: Sym };
 async function events(evs: Ev[]) { if (evs.length) await insert("dbv5_events", evs.map(e => ({ kind: e.kind, strategy: e.strategy ?? null, msg: e.msg, data: e.data ?? null, symbol: e.symbol ?? "BTC" }))); }
@@ -312,15 +286,16 @@ async function runOnce(sym: Sym = "BTC") {
   await saveState(st, lastRun, sym);
   await upsert("dbv5_equity", [{ symbol: sym, ts: new Date(now).toISOString(), equity: +st.equity.toFixed(4), upnl: +upnl.toFixed(4), price: snap.price }]);
   await events(evs);
-  // flush Theo's outbox: conflict-safe insert, then clear it with a second state write. A failure keeps it for the next run and is
-  // recorded as an ERROR event (never only in run notes, which are not persisted after the save). Trading state is already saved.
+  // flush Theo's outbox (persist.ts flushOutbox): batches of conflict-safe inserts, each acknowledged by a scoped RPC that removes
+  // exactly its keys. Pending records are never dropped; a failure is an ERROR event and the rest stays for the next run.
   if (wx._workOutbox?.length) {
     try {
-      const mode = await writeAgentRows(sym, wx._workOutbox);
-      delete wx._workOutbox; await saveState(st, lastRun, sym);
-      if (mode === "check-then-insert") notes.push("work log: work_key column missing; deduplicated by check-then-insert");
+      const f = await flushOutbox(wx, { insert: (rs) => writeAgentRows(sym, rs), ack: (keys) => ackWork(db, rowId(sym), keys) });
+      if (f.error) await events([{ kind: "ERROR", msg: `${tag}work log write failed; ${f.pending} record(s) pending (${f.delivered} delivered this run): ${f.error}`.slice(0, 280), symbol: sym }]);
+      if (f.needsStateSave) await saveState(st, lastRun, sym);   // RPC not migrated: persist the trimmed outbox by compare-and-set
+      if (f.mode === "check-then-insert") notes.push("work log: work_key column missing; deduplicated by check-then-insert");
     } catch (e) {
-      try { await events([{ kind: "ERROR", msg: `${tag}work log write failed; ${wx._workOutbox?.length ?? 0} record(s) kept for the next run: ${(e as Error).message}`.slice(0, 280), symbol: sym }]); } catch { /* the outbox is still saved */ }
+      try { await events([{ kind: "ERROR", msg: `${tag}work log flush: ${(e as Error).message}`.slice(0, 280), symbol: sym }]); } catch { /* the outbox is still saved */ }
     }
   }
   // Desk review layer (advisory). Runs AFTER state and ledger are saved so slow or failing providers can never cost a persisted trade.
@@ -344,7 +319,8 @@ async function runOnce(sym: Sym = "BTC") {
         rows.push(...wf.rows);
         // FILTER-1 shadow verdicts: recorded now, before this trade has an outcome. Append-only; a failure here is visible and changes nothing else.
         try { await insert("dbv5_filter_verdicts", verdictsFor(p.id, sym, p.strategy, checks, wf.rows)); } catch (e) { notes.push(`filter verdicts: ${(e as Error).message}`.slice(0, 120)); }
-        if (JSON.stringify(sx._aiUsage ?? {}) !== usageBefore) await saveState(st, lastRun, sym);   // persist the provider call counters (daily caps) after the LLM stages
+        // persist the provider call counters (daily caps) after the LLM stages; compare-and-set like every other write
+        if (JSON.stringify(sx._aiUsage ?? {}) !== usageBefore) await saveState(st, lastRun, sym).catch(async (e) => { await events([{ kind: "ERROR", msg: `${tag}provider counters not saved: ${(e as Error).message}`.slice(0, 280), symbol: sym }]).catch(() => {}); });
       }
     } catch (e) { notes.push(`desk review: ${(e as Error).message}`.slice(0, 120)); }
   }
@@ -469,10 +445,12 @@ async function status() {
   ]);
   const [scanRows, track] = await Promise.all([select("dbv5_scans?select=ts,markets,deriv,note,ms,work&order=id.desc&limit=1").catch(() => select("dbv5_scans?select=ts,markets,deriv,note,ms&order=id.desc&limit=1")).catch(() => []), trackStatus()]);
   const scan = scanRows?.[0] ?? null;
+  const flushFails = await select(`dbv5_events?select=ts,symbol,msg&kind=eq.ERROR&msg=ilike.*work%20log*&ts=gte.${new Date(Date.now() - 86400_000).toISOString()}&order=id.desc&limit=50`).catch(() => null);
   const st = s?.[0]?.state ?? null;
   const experiment = await experimentStatus();
   const config = resolvedCfg(st?.cfg);
   const integrity = await integrityFor("BTC", config);
+  const workBacklog: Record<string, unknown> = { BTC: backlog(st) };
   if (st) { delete st._aiUsage; delete st._workOutbox; }
   const books: Record<string, unknown> = {};
   for (const sym of BOOKS.filter((b) => b !== "BTC")) {
@@ -481,10 +459,11 @@ async function status() {
       select(`dbv5_equity?select=ts,equity,upnl,price&symbol=eq.${sym}&ts=gte.${new Date(Date.now() - 14 * 86400_000).toISOString()}&order=ts.asc`),
     ]);
     const c = (eqb ?? []).filter((_: unknown, i: number, a: unknown[]) => a.length < 400 || i % Math.ceil(a.length / 400) === 0 || i === a.length - 1);
-    books[sym] = r?.[0] ? { name: SYMBOLS[sym].name, hl: SYMBOLS[sym].hl, integrity: await integrityFor(sym, resolvedCfg(r[0].state?.cfg)), state: (({ _workOutbox, _aiUsage, ...rest }) => rest)(r[0].state ?? {}), lastRun: r[0].last_run, updated: r[0].updated_at, curve: c } : { name: SYMBOLS[sym].name, hl: SYMBOLS[sym].hl, state: null };
+    books[sym] = r?.[0] ? { name: SYMBOLS[sym].name, hl: SYMBOLS[sym].hl, integrity: await integrityFor(sym, resolvedCfg(r[0].state?.cfg)), state: (({ _workOutbox, _aiUsage, ...rest }) => rest)(r[0].state ?? {}), work: backlog(r[0].state), lastRun: r[0].last_run, updated: r[0].updated_at, curve: c } : { name: SYMBOLS[sym].name, hl: SYMBOLS[sym].hl, state: null };
   }
+  for (const [k, b] of Object.entries(books)) if ((b as { work?: unknown }).work) workBacklog[k] = (b as { work?: unknown }).work;
   const curve = (eq ?? []).filter((_: unknown, i: number, a: unknown[]) => a.length < 600 || i % Math.ceil(a.length / 600) === 0 || i === a.length - 1);
-  return { version: VERSION, mode: "PAPER", now: new Date().toISOString(), updated: s?.[0]?.updated_at ?? null, integrity, state: st, lastRun: s?.[0]?.last_run ?? null, events: ev, agents: agents ?? [], trades: tr, curve, books, backtest: bt?.[0] ?? null, experiment, config, scan, track, chat: { enabled: !!CHAT_KEY, ai: providersFromEnv().map((p) => p.name) }, ai: { providers: providersFromEnv().map((p) => p.name), agentAi: AGENT_AI, deskWorkflow: DESK_WORKFLOW, newsAi: NEWS_AI, newsMode: NEWS_MODE } };
+  return { version: VERSION, mode: "PAPER", now: new Date().toISOString(), updated: s?.[0]?.updated_at ?? null, integrity, state: st, lastRun: s?.[0]?.last_run ?? null, events: ev, agents: agents ?? [], trades: tr, curve, books, backtest: bt?.[0] ?? null, experiment, config, scan, track, work: { backlog: workBacklog, flushFailures24h: Array.isArray(flushFails) ? flushFails.length : null, lastFlushFailure: Array.isArray(flushFails) && flushFails[0] ? flushFails[0] : null }, chat: { enabled: !!CHAT_KEY, ai: providersFromEnv().map((p) => p.name) }, ai: { providers: providersFromEnv().map((p) => p.name), agentAi: AGENT_AI, deskWorkflow: DESK_WORKFLOW, newsAi: NEWS_AI, newsMode: NEWS_MODE } };
 }
 
 // ─── AI assistant (owner only; password = DESKBOT_CHAT_KEY secret) ─────────
@@ -548,7 +527,7 @@ async function chatRoute(body: Record<string, unknown>) {
         const prev = sx.cfgHistory.pop(); if (!prev) return { ok: false, error: "nothing_to_undo" };
         st.cfg = prev.cfg as State["cfg"]; msg = `Owner undid last config change (back to ${new Date(prev.t).toISOString().slice(0, 16)} UTC)`;
       }
-      await rest("dbv5_state?id=eq.main", { method: "PATCH", body: JSON.stringify({ state: st }) });
+      await saveState(st, null, "BTC");   // compare-and-set: a run that advanced the book since loadState wins; the owner retries
       await events([{ kind: "CONFIG", msg }]);
       return { ok: true, cfg: st.cfg, history: sx.cfgHistory.length };
     } finally { try { await rest("rpc/dbv5_release", { method: "POST", body: JSON.stringify({ owner }) }); } catch { /* expires */ } }

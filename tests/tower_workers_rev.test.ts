@@ -50,3 +50,9 @@ test("5. freshness applies to every seat: historical output never proves current
   assert.notEqual(f.steward.state, "RUNNING", "Stella has no backend worker"); assert.match(f.steward.facts.blocker, /no backend/);
   const flat = S({}).manager; assert.equal(flat.facts.lastAttempt, null, "no position, so no management attempt");
 });
+
+test("Theo: a work-log backlog older than 30 min is DEGRADED with the count; a young backlog is not", () => {
+  const old = S({ work: { backlog: { BTC: { pending: 260, oldestQueuedAt: new Date(now - 2 * 3600e3).toISOString() } } } }).manager;
+  assert.equal(old.state, "DEGRADED"); assert.match(old.facts.blocker, /260 record\(s\) pending for 120 min \(kept, not lost\)/);
+  assert.notEqual(S({ work: { backlog: { BTC: { pending: 3, oldestQueuedAt: new Date(now - 60e3).toISOString() } } } }).manager.state, "DEGRADED");
+});

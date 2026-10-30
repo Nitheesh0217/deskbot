@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { initState, openPosition, applyCfg, CFG, type State } from "../supabase/functions/deskbot-v5/engine.ts";
+import { casMatches } from "./helpers/cas.ts";
 
 test("edge run keeps managing an open position while unapproved entries are paused; GET is read-only", async () => {
   const env: Record<string, string> = { SUPABASE_URL: "https://deskbot.test", SUPABASE_SERVICE_ROLE_KEY: "test-only", DESKBOT_CRON_SECRET: "test-only", NEWS_MODE: "off", DESKBOT_BOOKS: "BTC" };
@@ -19,7 +20,7 @@ test("edge run keeps managing an open position while unapproved entries are paus
       if (init.method !== "GET") {
         writes++;
         if (path === "rpc/dbv5_lease") return json(true);
-        if (path.startsWith("dbv5_state?") && body.state) state = structuredClone(body.state);
+        if (path.startsWith("dbv5_state?") && body.state) { if (!casMatches(path, state)) return json([]); state = structuredClone(body.state); return json([{ id: "main" }]); }
         if (path === "dbv5_trades") savedTrades = body;
         return json(null);
       }

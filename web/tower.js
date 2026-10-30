@@ -55,7 +55,7 @@
   function factsTable(f) {
     if (!f) return '';
     const rows = [['Last attempt', f.lastAttempt ? when(f.lastAttempt) : f.lastAttemptNote ? 'not recorded (' + f.lastAttemptNote + ')' : 'not recorded'], ['Last success', when(f.lastSuccess) || 'none reported'], ['Last output', f.lastOutput || '—'],
-      ['Next run', f.next ? until(f.next) : null], ['Trigger', f.trigger], ['Blocker', f.blocker || 'none'], ['Input freshness', f.freshness], ['Duration', f.durationMs != null ? f.durationMs + ' ms' : null], ['Provider', f.usage], ['Model calls', f.calls], ['Permissions', f.permissions]]
+      ['Next run', f.next ? until(f.next) : null], ['Trigger', f.trigger], ['Blocker', f.blocker || 'none'], ['Input freshness', f.freshness], ['Duration', f.durationMs != null ? f.durationMs + ' ms' : null], ['Provider', f.usage], ['Work-log backlog', f.backlog], ['Model calls', f.calls], ['Permissions', f.permissions]]
       .filter((r) => r[1] != null && r[1] !== '');
     return `<dl class="wfacts">${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}${f.evidence ? `<dt>Evidence</dt><dd><a href="${esc(f.evidence)}" target="_blank" rel="noopener">source</a></dd>` : ''}</dl>`;
   }
