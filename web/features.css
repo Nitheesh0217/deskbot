@@ -40,3 +40,6 @@
   .plan-t td::before { content: attr(data-k); display: block; font-size: 10px; color: var(--fg-3); text-transform: uppercase; letter-spacing: .03em; }
   .plan-t td[data-k="Level"] { grid-row: span 2; font-weight: 600; } .plan-t td[data-k="Exit (planned)"] { grid-column: 2 / span 2; }
 }
+/* robustness notes: a component that did not load, a panel that failed to draw, chart structure layers that failed */
+.component-unavailable, .panel-error, .zone-msg { color: var(--warn); border: 1px dashed var(--line-2); border-radius: 8px; padding: 8px 12px; margin: 0 0 12px; font-size: 12px; }
+.zone-msg { margin: 8px 0 0; } .zone-msg[hidden] { display: none; }

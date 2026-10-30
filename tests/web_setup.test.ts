@@ -4,7 +4,8 @@ import vm from "node:vm";
 import { readFileSync } from "node:fs";
 import { build } from "esbuild";
 
-const win: any = {}; vm.runInNewContext(readFileSync(new URL("../web/setup.js", import.meta.url), "utf8"), { window: win });
+// setup.js reads the shared helpers (util.js) the page loads first, so load them into the same context
+const win: any = {}; vm.runInNewContext(["util.js", "setup.js"].map((f) => readFileSync(new URL("../web/" + f, import.meta.url), "utf8")).join("\n"), { window: win });
 const S = win.DeskSetup;
 const pal = { bull: "#4fd1c5", bear: "#d46bd6", obBull: "#5aa9e6", obBear: "#f2a93b", sl: "#f0616d", tp: "#3fcf8e", slText: "#f0616d", tpText: "#3fcf8e", fg: "#ffffff", muted: "#999999" };
 const snap = (t: number) => t;
