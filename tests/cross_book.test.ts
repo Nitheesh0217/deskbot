@@ -22,7 +22,7 @@ const reply = (sys: string, dir: string) => /Bull/.test(sys) || /Bear/.test(sys)
   : /Research Manager/.test(sys) ? { rating: "Hold", rationale: "Balanced.", stronger_side: "balanced" } : /Trader/.test(sys) ? { action: "take", reason: "Plan matches.", execution_note: "Filled." }
   : { rating: dir === "short" ? "Sell" : "Buy", executive_summary: "Keep.", thesis: "Rules.", would_change_my_mind: "News." };
 
-type Opt = { books: string; states: Record<string, State>; llmDelayMs?: number; logDelayMs?: number; logFailFor?: string; failCandlesFor?: string; i5: number };
+type Opt = { books: string; states: Record<string, State>; llmDelayMs?: number; logDelayMs?: number; logFailFor?: string; failCandlesFor?: string; i5: number; body?: string };
 async function run(o: Opt) {
   const nowMs = m5[o.i5].ct + 4000, t0 = performance.now();
   const env: Record<string, string> = { SUPABASE_URL: "https://deskbot.test", SUPABASE_SERVICE_ROLE_KEY: "test-only", DESKBOT_CRON_SECRET: "test-only", NEWS_MODE: "off", DESKBOT_BOOKS: o.books, GROQ_API_KEY: "gsk_test_key_not_real", AI_TERMS_VERIFIED: "groq", AI_DATA_USE_ACCEPTED: "groq:committee" };
@@ -39,6 +39,7 @@ async function run(o: Opt) {
       if (init.method === "GET") return json([]);
       if (path === "rpc/dbv5_lease" || path === "rpc/dbv5_record_decision") return json(true);
       if (path === "rpc/dbv5_ack_work") { const k = new Set(body.p_keys), s = states[body.p_id] as any; if (Array.isArray(s?._workOutbox)) s._workOutbox = s._workOutbox.filter((r: any) => !k.has(r.output.key)); return json(0); }
+      if (path.startsWith("dbv5_state?on_conflict=id")) { for (const row of body) if (!states[row.id]) { states[row.id] = structuredClone(row.state); mark(`create:${row.id}`); } return json(null); }
       if (id && body?.state) { if (!casMatches(path, states[id])) return json([]); states[id] = structuredClone(body.state); mark(`state:${id}`); return json([{ id }]); }
       if (path.startsWith("dbv5_agent_log")) {
         const sym = body?.[0]?.symbol ?? "?"; mark(`agent_log:${sym}`); await sleep(o.logDelayMs ?? 0);
@@ -54,7 +55,7 @@ async function run(o: Opt) {
       return json({ choices: [{ message: { content: JSON.stringify(reply(b.messages[0].content, facts.direction)) } }] });
     }
     if (url.includes("hyperliquid")) {
-      if (body.type === "metaAndAssetCtxs") return json([{ universe: [{ name: "BTC" }, { name: "PAXG" }] }, [{ funding: "0.0001", openInterest: "5", markPx: String(closes[o.i5]) }, { funding: "0.0001", openInterest: "5", markPx: String(closes[o.i5]) }]]);
+      if (body.type === "metaAndAssetCtxs") return json([{ universe: [{ name: "BTC" }, { name: "PAXG" }, { name: "ETH" }, { name: "SOL" }] }, [0, 1, 2, 3].map(() => ({ funding: "0.0001", openInterest: "5", markPx: String(closes[o.i5]) }))]);
       const { interval, startTime, endTime, coin } = body.req, sym = coin === "PAXG" ? "GOLD" : "BTC";
       if (o.failCandlesFor === sym) return json({ error: "simulated feed outage" }, 500);
       return json((interval === "1m" ? m5 : FR[interval]).filter((b) => b.t >= startTime && b.t <= endTime && b.ct < nowMs).map((b) => ({ t: b.t, o: String(b.o), h: String(b.h), l: String(b.l), c: String(b.c), v: String(b.v) })));
@@ -65,7 +66,7 @@ async function run(o: Opt) {
   }) as typeof fetch;
   try {
     await import("../supabase/functions/deskbot-v5/index.ts?x=" + Math.random());
-    const res = await (await handler(new Request("https://edge.test", { method: "POST", headers: { "x-deskbot-key": "test-only", "Content-Type": "application/json" }, body: '{"action":"run"}' }))).json();
+    const res = await (await handler(new Request("https://edge.test", { method: "POST", headers: { "x-deskbot-key": "test-only", "Content-Type": "application/json" }, body: o.body ?? '{"action":"run"}' }))).json();
     return { res, states, order, agentRows, evRows, at: (w: string) => order.find((x) => x.what === w), idx: (w: string) => order.findIndex((x) => x.what === w) };
   } finally { globalThis.fetch = pF; (globalThis as any).Deno = pD; Date.now = pN; applyCfg(); }
 }
@@ -119,4 +120,30 @@ test("a BTC phase-1 failure (data outage) does not stop GOLD's management", asyn
   const r = await run({ books: "BTC,GOLD", states: { main: fresh(LOOSE), gold }, i5: i + 24, failCandlesFor: "BTC" });
   assert.equal((r.res.books.BTC as any).ok, false); assert.ok(r.idx("state:gold") >= 0);
   assert.deepEqual(pick(r.states.gold), pick(alone.states.gold));
+});
+
+test("shadow ETH book beside BTC and GOLD: records the would-be entry once per signal bar, never opens or moves equity; BTC and GOLD unchanged", async () => {
+  const { i, gold } = await goldWithPosition(), at = candidateBars().find((j) => j >= i + 12)!;
+  const eth0 = fresh(LOOSE);
+  const base = await run({ books: "BTC,GOLD", states: { main: fresh(LOOSE), gold }, i5: at });
+  const withEth = await run({ books: "BTC,GOLD,ETH", states: { main: fresh(LOOSE), gold, eth: eth0 }, i5: at });
+  const e = withEth.states.eth, sh = withEth.evRows.filter((x) => x.kind === "SHADOW" && x.symbol === "ETH");
+  assert.equal(e.pos, null, "shadow book never holds a position"); assert.equal(e.equity, eth0.equity, "equity untouched"); assert.equal(e.stats.all.n, 0);
+  assert.equal(sh.length, 1, "one shadow record"); assert.equal(sh[0].data.mode, "shadow"); assert.equal(sh[0].data.financialValidation, "UNVALIDATED"); assert.equal(sh[0].data.researchConfig, "ETH-SHADOW-1");
+  assert.ok(!withEth.evRows.some((x) => x.symbol === "ETH" && x.kind === "OPEN"), "no OPEN event for a shadow book");
+  assert.deepEqual(pick(withEth.states.main), pick(base.states.main), "BTC identical with or without the ETH book");
+  assert.deepEqual(pick(withEth.states.gold), pick(base.states.gold), "GOLD identical with or without the ETH book");
+  // restart / retry on the same bar: the record is not repeated
+  const again = await run({ books: "ETH", states: { eth: withEth.states.eth }, i5: at });
+  assert.equal(again.evRows.filter((x) => x.kind === "SHADOW").length, 0, "same signal bar after a restart: no duplicate shadow record");
+  assert.equal(again.states.eth.pos, null);
+});
+
+test("init_book creates only a missing SHADOW book with simulated capital; refuses BTC/GOLD and never overwrites", async () => {
+  const i = firstEntryBar(), call = (sym: string, states: Record<string, State> = {}) => run({ books: "BTC", states, i5: i, body: JSON.stringify({ action: "init_book", sym }) });
+  const made = await call("ETH");
+  assert.equal(made.res.created, true); assert.equal(made.states.eth.equity, 350); assert.match((made.states.eth as any).simulated.note, /SIMULATED capital; not real money/);
+  for (const s of ["BTC", "GOLD"]) assert.equal((await call(s)).res.ok, false, s);
+  const existing = fresh(LOOSE); existing.equity = 123;
+  const keep = await call("SOL", { sol: existing }); assert.equal(keep.res.created, false); assert.equal(keep.states.sol.equity, 123);
 });
