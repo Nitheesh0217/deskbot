@@ -20,7 +20,7 @@ import { preTradeChecks, postTradeReview, runDeskWorkflow, analystReports, lesso
 import { verdictsFor, filterReport } from "./experiment.ts";
 import { catchUp } from "./catchup.ts";
 import { scanMarket, rankScan, derivatives, SCAN_NOTE, CALL_HORIZON_H } from "./scan.ts";
-import { signalsOverBars, resolve, trackRecord, scoreCall, callRecord, PRIORITY, PROMOTION, type NewSignal, type OpenSignal, type Resolution, type OpenCall, type CallScore } from "./track.ts";
+import { signalsOverBars, resolve, trackRecord, shadowRecord, scoreCall, callRecord, PRIORITY, PROMOTION, type NewSignal, type OpenSignal, type Resolution, type OpenCall, type CallScore } from "./track.ts";
 import { captureDecision, pickEntry, decisionIdFor } from "./provenance.ts";
 import { recordCoverage, dispositions, boundaryFlags } from "./coverage.ts";
 import type { StrategyTrace } from "./engine.ts";
@@ -382,14 +382,27 @@ async function runScan() {
             const c = (row as { call?: { lean: string; votes: number; source: string; cautions: string[]; t: number; px: number; atr: number } }).call;
             if (c && c.lean !== "NONE" && mine.every((x) => scored.some((y) => y.id === x.id))) newCalls.push({ sym, t: c.t, horizon_h: CALL_HORIZON_H, lean: c.lean, votes: c.votes, source: c.source, cautions: c.cautions, px: c.px, atr: c.atr });
           } catch (e) { trackErrors.push(`${sym} call: ${(e as Error).message}`.slice(0, 120)); }
-          try { fresh.push(...signalsOverBars(sym, frames)); for (const o of open.filter((x) => x.sym === sym)) { const u = resolve(o, m5.bars); if (u.status !== "open" || u.checked_t !== o.checked_t) updates.push(u); } }
+          try {
+            fresh.push(...signalsOverBars(sym, frames));
+            // isolated shadow lane (P1 books only): evaluators switched off in this book's config, run with an all-on test
+            // config and recorded as lane "shadow". The book config is restored by the finally below / the next applyCfg.
+            if (PRIORITY[sym] === 1) {
+              const bookCfg = sym === "GOLD" ? goldCfg : btcCfg, offIds = new Set(STRATEGIES.filter((id) => !(resolvedCfg(bookCfg).RISK_SCALE[id] > 0)));
+              if (offIds.size) { applyCfg({ ...(bookCfg ?? {}), RISK_SCALE: Object.fromEntries(STRATEGIES.map((id) => [id, 1])) } as never); try { fresh.push(...signalsOverBars(sym, frames, 3, { only: offIds, lane: "shadow" })); } finally { applyCfg(bookCfg); } }
+            } for (const o of open.filter((x) => x.sym === sym)) { const u = resolve(o, m5.bars); if (u.status !== "open" || u.checked_t !== o.checked_t) updates.push(u); } }
           catch (e) { trackErrors.push(`${sym}: ${(e as Error).message}`.slice(0, 120)); }
           return { ...row, name: SYMBOLS[sym].name, book: PRIORITY[sym] === 1, priority: PRIORITY[sym] ?? 3, source: m5.source };
         } catch (e) { return { sym, ok: false, error: (e as Error).message.slice(0, 120), priority: PRIORITY[sym] ?? 3 }; }
       })));
     }
   } finally { applyCfg(); setMlAsset(false); }
-  if (fresh.length) await rest("dbv5_scan_signals?on_conflict=sym,strategy,bar_t", { method: "POST", headers: { Prefer: "resolution=ignore-duplicates,return=minimal" }, body: JSON.stringify(fresh.map((x) => ({ ...x, checked_t: x.bar_t }))) }).catch((e) => trackErrors.push(`insert: ${(e as Error).message}`.slice(0, 120)));
+  // older schema without the lane column: keep the book rows, drop the shadow rows, and say so
+  const sigInsert = (rows: NewSignal[]) => rest("dbv5_scan_signals?on_conflict=sym,strategy,bar_t", { method: "POST", headers: { Prefer: "resolution=ignore-duplicates,return=minimal" }, body: JSON.stringify(rows.map((x) => ({ ...x, checked_t: x.bar_t }))) });
+  if (fresh.length) await sigInsert(fresh).catch(async (e) => {
+    if (!/lane/.test(String((e as Error).message))) throw e;
+    trackErrors.push("shadow lane skipped: dbv5_scan_signals.lane not migrated");
+    const book = fresh.filter((x) => x.lane !== "shadow").map(({ lane: _l, ...x }) => x); if (book.length) await sigInsert(book as NewSignal[]);
+  }).catch((e) => trackErrors.push(`insert: ${(e as Error).message}`.slice(0, 120)));
   for (const u of updates) {
     const body = u.status === "open" ? { checked_t: u.checked_t } : { status: u.status, checked_t: u.checked_t, exit_t: u.exit_t, exit_px: u.exit_px, r_gross: u.r_gross, r_net: u.r_net, resolved_at: new Date().toISOString() };
     await rest(`dbv5_scan_signals?id=eq.${u.id}&status=eq.open`, { method: "PATCH", body: JSON.stringify(body) }).catch((e) => trackErrors.push(`update ${u.id}: ${(e as Error).message}`.slice(0, 120)));
@@ -405,9 +418,9 @@ async function runScan() {
 // forward record per market for the status payload (null until the table exists)
 async function trackStatus() {
   try {
-    const rows = await select("dbv5_scan_signals?select=sym,strategy,dir,bar_t,entry,stop,tp1,status,r_net,exit_t,score&order=id.desc&limit=5000");
+    const rows = await select("dbv5_scan_signals?select=sym,strategy,dir,bar_t,entry,stop,tp1,status,r_net,exit_t,score,lane&order=id.desc&limit=5000").catch(() => select("dbv5_scan_signals?select=sym,strategy,dir,bar_t,entry,stop,tp1,status,r_net,exit_t,score&order=id.desc&limit=5000"));
     const calls = await select("dbv5_calls?select=sym,t,lean,votes,source,cautions,px,status,hit,move_pct,move_atr&order=id.desc&limit=5000").catch(() => []);
-    return { markets: trackRecord(rows ?? []), recent: (rows ?? []).slice(0, 25), promotion: PROMOTION.rule, calls: callRecord(calls ?? []), recentCalls: (calls ?? []).slice(0, 40) };
+    return { markets: trackRecord(rows ?? []), shadow: shadowRecord(rows ?? []), recent: (rows ?? []).slice(0, 25), promotion: PROMOTION.rule, calls: callRecord(calls ?? []), recentCalls: (calls ?? []).slice(0, 40) };
   } catch { return null; }
 }
 

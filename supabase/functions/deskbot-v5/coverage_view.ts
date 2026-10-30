@@ -60,6 +60,7 @@ export type MatrixArgs = {
   strategies: string[]; optIn: string[]; cfg: { RISK_SCALE?: Record<string, number>; XC_TF?: string; HSW_TF?: string };
   st: { enabled?: Record<string, boolean>; cov?: Record<string, CovLike>; stats?: { by?: Record<string, { n: number; sumR: number; net?: number }> }; pos?: { strategy?: string } | null } | null;
   trades: { strategy: string; r: number | string; net: number | string; close_t?: string }[]; riskPct: number | null; now: number; probationMin?: number;
+  shadow?: { strategy: string; open: number; resolved: number; wins: number; meanNetR: number | null }[];   // B for switched-off evaluators (this book's market)
 };
 /**
  * Coverage matrix rows. Three kinds of evidence stay separate: A) signal frequency (setups the rules produced), B) standalone
@@ -83,6 +84,7 @@ export function strategyMatrix(a: MatrixArgs) {
       portfolioBlocked: c ? c.portfolioBlocked : 0, notSelected: c ? c.notSelected : 0, entered: c ? c.entered : 0,
       closed: rs.length, wins: rs.filter((r) => r > 0).length, sumR: +rs.reduce((x, y) => x + y, 0).toFixed(3), net: +mine.reduce((x, t) => x + (+t.net || 0), 0).toFixed(2),
       openNow: !!(st.pos && st.pos.strategy === id), riskScale: v.riskScale, probation: v.probation, riskPerTradePct: riskPerTrade,
+      shadow: (a.shadow || []).find((x) => x.strategy === id) ?? null,
       starved: v.state === "DATA_BLOCKED" || (v.state !== "DISABLED" && !!c && c.bars > 0 && c.due === 0 && c.bars * 300_000 > 1.5 * v.cadenceMs),
     };
   });

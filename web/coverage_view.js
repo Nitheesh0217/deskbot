@@ -124,6 +124,7 @@ var DeskCoverage = (() => {
         riskScale: v.riskScale,
         probation: v.probation,
         riskPerTradePct: riskPerTrade,
+        shadow: (a.shadow || []).find((x) => x.strategy === id) ?? null,
         starved: v.state === "DATA_BLOCKED" || v.state !== "DISABLED" && !!c && c.bars > 0 && c.due === 0 && c.bars * 3e5 > 1.5 * v.cadenceMs
       };
     });

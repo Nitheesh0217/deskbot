@@ -13,25 +13,28 @@ import type { Frames } from "./scan.ts";
 export const PRIORITY: Record<string, 1 | 2 | 3> = { BTC: 1, GOLD: 1, ETH: 2, SOL: 2, XRP: 3, BNB: 3, DOGE: 3, LINK: 3, AVAX: 3, SUI: 3 };
 export const PROMOTION = { minResolved: 30, rule: "≥30 resolved setups, mean net R > 0 and the 95% bootstrap lower bound > 0. Meeting it makes a market a CANDIDATE for a paper book; the owner decides. Nothing is promoted automatically." };
 
-export type NewSignal = { sym: string; strategy: string; dir: "long" | "short"; bar_t: number; entry: number; stop: number; tp1: number; r_dist: number; cost_r: number; max_hold_h: number; score: number; why: string[] };
+export type NewSignal = { lane?: "book" | "shadow"; sym: string; strategy: string; dir: "long" | "short"; bar_t: number; entry: number; stop: number; tp1: number; r_dist: number; cost_r: number; max_hold_h: number; score: number; why: string[] };
 export type OpenSignal = NewSignal & { id: number; checked_t: number | null };
 export type Resolution = { id: number; status: "open" | "tp1" | "stop" | "time"; checked_t: number; exit_t?: number; exit_px?: number; r_gross?: number; r_net?: number };
 
-/** Setups fired on each of the last `lookback` closed 5m bars (a scan every 15 min sees all three bars since the previous scan). */
-export function signalsOverBars(sym: string, f: Frames, lookback = 3): NewSignal[] {
+/** Setups fired on each of the last `lookback` closed 5m bars (a scan every 15 min sees all three bars since the previous scan).
+ *  opts.only + lane "shadow": the isolated research lane. The caller applies an all-on test config; only the listed evaluators
+ *  (those switched off in the book) are recorded, labelled lane "shadow". Shadow rows never touch a book, its state or its trades. */
+export function signalsOverBars(sym: string, f: Frames, lookback = 3, opts: { only?: Set<string>; lane?: "book" | "shadow" } = {}): NewSignal[] {
   if (f.m5.length < 300 || f.m15.length < 100 || f.h1.length < 60 || f.h4.length < 60) return [];
   const S = buildSeries(f), out: NewSignal[] = [];
   for (let i5 = f.m5.length - lookback; i5 < f.m5.length; i5++) {
     if (i5 < 1) continue;
     const s = snapshot(S, i5, {}), st = ensureState(initState(1000, s.T));
     for (const g of evaluate(s, st.enabled, S, st).signals) {
+      if (opts.only && !opts.only.has(g.strategy)) continue;
       const d = g.dir === "long" ? 1 : -1, entry = g.entryRef, minStop = Math.max(CFG.MIN_STOP_PCT, CFG.MIN_STOP_BY[g.strategy] ?? 0);
       let stop = g.stop; if ((stop - entry) * d >= 0) continue;
       if (!g.bodyStop && minStop > 0 && Math.abs(entry - stop) < minStop * entry) stop = entry - d * minStop * entry;
       const R = Math.abs(entry - stop), costR = (entry * (2 * CFG.TAKER_FEE + 2 * CFG.SLIPPAGE)) / R;
       if (!(R > 0) || costR > CFG.MAX_COST_R) continue;
       const T = CFG.TARGETS[g.strategy];
-      out.push({ sym, strategy: g.strategy, dir: g.dir, bar_t: s.T, entry, stop, tp1: entry + d * T.tp1 * R, r_dist: R, cost_r: +costR.toFixed(4), max_hold_h: T.maxHoldH, score: g.score, why: g.why.slice(0, 5) });
+      out.push({ lane: opts.lane ?? "book", sym, strategy: g.strategy, dir: g.dir, bar_t: s.T, entry, stop, tp1: entry + d * T.tp1 * R, r_dist: R, cost_r: +costR.toFixed(4), max_hold_h: T.maxHoldH, score: g.score, why: g.why.slice(0, 5) });
     }
   }
   return out;
@@ -62,10 +65,11 @@ function bootLo(xs: number[], n = 2000, seed = 20261029): number | null {
   for (let k = 0; k < n; k++) { let t = 0; for (let i = 0; i < xs.length; i++) t += xs[Math.floor(rnd() * xs.length)]; means.push(t / xs.length); }
   means.sort((a, b) => a - b); return +means[Math.floor(0.025 * n)].toFixed(4);
 }
-type Row = { sym: string; strategy: string; status: string; r_net: number | null };
+type Row = { sym: string; strategy: string; status: string; r_net: number | null; lane?: string | null };
 /** Per-market forward record from resolved setups, with the promotion check. Descriptive; never feeds the executor. */
 export function trackRecord(rows: Row[]) {
-  const by = new Map<string, Row[]>(); for (const r of rows) { if (!by.has(r.sym)) by.set(r.sym, []); by.get(r.sym)!.push(r); }
+  // the market record and its promotion check use the book lane only; shadow-lane evaluators are reported separately
+  const by = new Map<string, Row[]>(); for (const r of rows) { if (r.lane === "shadow") continue; if (!by.has(r.sym)) by.set(r.sym, []); by.get(r.sym)!.push(r); }
   return Object.keys(PRIORITY).map((sym) => {
     const all = by.get(sym) ?? [], res = all.filter((r) => r.status !== "open" && typeof r.r_net === "number"), xs = res.map((r) => r.r_net as number);
     const mean = xs.length ? +(xs.reduce((a, b) => a + b, 0) / xs.length).toFixed(4) : null, lo = xs.length >= PROMOTION.minResolved ? bootLo(xs) : null;
@@ -77,6 +81,14 @@ export function trackRecord(rows: Row[]) {
       byStrategy: [...strat.entries()].map(([s, v]) => ({ strategy: s, n: v.length, meanNetR: +(v.reduce((a, b) => a + b, 0) / v.length).toFixed(3) })).sort((a, b) => b.n - a.n),
     };
   }).sort((a, b) => a.priority - b.priority || b.resolved - a.resolved);
+}
+
+/** Shadow lane: standalone hypothetical outcomes (B) of evaluators switched off in a book, per market and strategy. Research only. */
+export function shadowRecord(rows: Row[]) {
+  const g = new Map<string, Row[]>(); for (const r of rows) { if (r.lane !== "shadow") continue; const k = `${r.sym}|${r.strategy}`; if (!g.has(k)) g.set(k, []); g.get(k)!.push(r); }
+  return [...g.entries()].map(([k, rs]) => { const [sym, strategy] = k.split("|"), res = rs.filter((r) => r.status !== "open" && typeof r.r_net === "number"), xs = res.map((r) => r.r_net as number);
+    return { sym, strategy, open: rs.length - res.length, resolved: res.length, wins: res.filter((r) => r.status === "tp1").length, meanNetR: xs.length ? +(xs.reduce((a, b) => a + b, 0) / xs.length).toFixed(3) : null, lo95: xs.length >= PROMOTION.minResolved ? bootLo(xs) : null };
+  }).sort((a, b) => a.sym.localeCompare(b.sym) || b.resolved - a.resolved);
 }
 
 // ─── CALL-1 scoring: each market's directional call checked CALL_HORIZON_H hours later ─────────────
