@@ -31,10 +31,10 @@ test("growth is the account's own number: start, now, percent, including a loss"
   const m = build({ state: { state, last_run: { ...lastRun, upnl: 0 } }, agents: [], trades: [], curve: [{ equity: 350 }, { equity: 340 }], strategies: [] }, now);
   assert.equal(m.growth.now, 340); assert.ok(m.growth.pct < 0); assert.deepEqual(m.growth.points, [350, 340]);
 });
-test("breaker active raises an alert; disabled strategies are off; the open position's desk is marked", () => {
+test("breaker active shows a VETO from a running controller; disabled strategies are off; the open position's desk is marked", () => {
   const m = build({ state: { state: { ...state, cb: { cooldownUntil: now + 3600e3, consec: 3 }, pos: { strategy: "HTF_TREND", dir: "long", stop: 1, plan: [] } }, last_run: lastRun }, agents: [], trades: [], curve: [],
     strategies: [{ id: "HTF_TREND", name: "t", state: "RUNNING", reason: "" }, { id: "SSR", name: "s", state: "DISABLED", reason: "" }] }, now);
-  assert.equal(m.staff.cro.status, "alert"); assert.match(m.staff.cro.line, /^VETO/);
+  assert.equal(m.staff.cro.state, "RUNNING", "a veto is the controller working, not a fault"); assert.match(m.staff.cro.line, /^VETO/);
   const all = m.desks.flatMap((d: any) => d.strategies);
   assert.equal(all.find((t: any) => t.id === "SSR").status, "off"); assert.equal(all.find((t: any) => t.id === "HTF_TREND").position, true);
 });
@@ -49,13 +49,13 @@ test("eight numbered departments, nine workflow steps each owned by a real roste
   assert.equal(m.workflow[5].out, "SKIP", "allocator step reports the reported action");
   assert.equal(m.staff.researcher.status, "off", "offline research is never shown as part of the live loop");
 });
-test("evidence steward fails loudly: stale run, missing feed or a decision-record failure turn it to alert", () => {
+test("evidence steward fails loudly: stale run, missing feed or a decision-record failure turn it DEGRADED (auditor ERROR)", () => {
   const ok = build({ state: { state, last_run: lastRun, integrity: { hash: "abc" } }, agents: [], trades: [], curve: [], strategies: [] }, now);
-  assert.equal(ok.staff.steward.status, "working");
+  assert.equal(ok.staff.steward.state, "UNKNOWN", "no backend worker; clean browser checks prove nothing about a steward"); assert.match(ok.staff.steward.facts.blocker, /no backend/);
   const stale = build({ state: { state, last_run: { ...lastRun, ts: iso(3600e3) }, integrity: { hash: "abc" } }, agents: [], trades: [], curve: [], strategies: [] }, now);
-  assert.equal(stale.staff.steward.status, "alert"); assert.match(stale.staff.steward.line, /last run within 12 min/);
+  assert.equal(stale.staff.steward.state, "DEGRADED"); assert.match(stale.staff.steward.line, /last run within 12 min/);
   const prov = build({ state: { state, last_run: { ...lastRun, provenanceError: "entry rejected" }, integrity: { hash: "abc" } }, agents: [], trades: [], curve: [], strategies: [] }, now);
-  assert.equal(prov.staff.steward.status, "alert"); assert.equal(prov.staff.auditor.status, "alert");
+  assert.equal(prov.staff.steward.state, "DEGRADED"); assert.equal(prov.staff.auditor.state, "ERROR");
 });
 test("allocator says WAIT when there is no candidate; the experiment officer reports the table state truthfully", () => {
   const m = build({ state: { state, last_run: { ...lastRun, decision: { signals: [], rejects: [] } } }, agents: [], trades: [], curve: [], strategies: [], experiment: null }, now);

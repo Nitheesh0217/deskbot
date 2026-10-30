@@ -49,19 +49,29 @@
   }
 
   const ago = (t) => { const s = Math.max(0, (Date.now() - t) / 1000); return s < 90 ? Math.round(s) + 's ago' : s < 5400 ? Math.round(s / 60) + 'm ago' : Math.round(s / 3600) + 'h ago'; };
+  const when = (t) => (t ? `${new Date(t).toISOString().slice(11, 16)} UTC (${ago(t)})` : null);
+  const until = (t) => { const m = Math.round((t - Date.now()) / 60000); return `${new Date(t).toISOString().slice(11, 16)} UTC (in ${Math.max(0, m)} min)`; };
+  /** Worker facts: only what the status payload reports. Absent facts read "not recorded", never a guess. */
+  function factsTable(f) {
+    if (!f) return '';
+    const rows = [['Last attempt', f.lastAttempt ? when(f.lastAttempt) : f.lastAttemptNote ? 'not recorded (' + f.lastAttemptNote + ')' : 'not recorded'], ['Last success', when(f.lastSuccess) || 'none reported'], ['Last output', f.lastOutput || '—'],
+      ['Next run', f.next ? until(f.next) : null], ['Trigger', f.trigger], ['Blocker', f.blocker || 'none'], ['Input freshness', f.freshness], ['Duration', f.durationMs != null ? f.durationMs + ' ms' : null], ['Provider', f.usage], ['Work-log backlog', f.backlog], ['Last flush', f.lastFlush], ['Model calls', f.calls], ['Permissions', f.permissions]]
+      .filter((r) => r[1] != null && r[1] !== '');
+    return `<dl class="wfacts">${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}${f.evidence ? `<dt>Evidence</dt><dd><a href="${esc(f.evidence)}" target="_blank" rel="noopener">source</a></dd>` : ''}</dl>`;
+  }
   function select(id) {
     const e = M && M.staff[id]; if (!e) return; selected = id;
     document.querySelectorAll('.emp').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.emp === id)));
     const f = T.FLOORS.find((x) => x.id === e.floor);
     const auth = e.kind === 'AI' ? 'optional free AI role, advisory only; it cannot place, size or block a trade' : e.kind === 'RULES+AI' ? 'fixed rules, with an optional AI summary' : e.kind === 'OFFLINE' ? 'offline research tooling; not part of the live decision loop' : 'fixed rules in the cloud runner';
     $('drawer').innerHTML = `${avatar(id, e.floor, e.kind)}<h3>${esc(e.name)}</h3><div class="muted">${esc(e.title)} · Floor ${f ? f.n + ' ' + esc(f.name) : ''}</div>
-      <p class="tower-note" style="margin-top:8px;clear:both">Status <b>${esc(e.status)}</b> · ${auth}${e.at ? ' · last log ' + esc(ago(e.at)) : ''}</p>
+      <p class="tower-note" style="margin-top:8px;clear:both">State <b class="wstate ws-${esc(e.state || 'UNKNOWN')}">${esc(e.state || 'UNKNOWN')}</b> · ${auth}${e.at ? ' · last log ' + esc(ago(e.at)) : ''}</p>${factsTable(e.facts)}
       <p style="margin:8px 0 0;font:500 13px/1.5 var(--f-mono)">${esc(e.line)}</p>${(e.detail || []).length || (e.chk || []).length ? `<ul>${[...(e.detail || []), ...(e.chk || [])].map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}`;
   }
 
   function paint() {
     const m = M;
-    Object.entries(m.staff).forEach(([id, e]) => { const el = document.querySelector(`.emp[data-emp="${id}"]`); if (!el) return; el.dataset.status = e.status; el.querySelector('.say').textContent = e.line; });
+    Object.entries(m.staff).forEach(([id, e]) => { const el = document.querySelector(`.emp[data-emp="${id}"]`); if (!el) return; el.dataset.status = e.status; el.dataset.state = e.state || 'UNKNOWN'; el.title = `${e.state || 'UNKNOWN'}${e.facts && e.facts.blocker ? ' · ' + e.facts.blocker : ''}`; el.querySelector('.say').textContent = `${e.state || 'UNKNOWN'} · ${e.line}`; });
     const fd = $('famDesks');
     if (fd) fd.innerHTML = m.desks.map((d) => `<div class="fam"><div class="fam-h"><span class="fam-i" aria-hidden="true">${FAMILY_ICON[d.family] || '·'}</span><b>${esc(d.family)} desk</b><small>${d.strategies.filter((s) => s.status !== 'off').length} of ${d.strategies.length} on</small></div>` +
       (d.strategies.map((s) => `<div class="sdesk ${s.position ? 'pos' : ''} ${s.signal ? 'sig' : ''}" data-status="${s.status}"><b>${esc(s.name)}</b><small>${esc(s.state)}${s.position ? ' · OPEN POSITION' : s.signal ? ' · CANDIDATE ' + esc(String(s.signal.dir).toUpperCase()) : ''}</small><small>${esc(String(s.line).slice(0, 96))}</small></div>`).join('') || '<small class="faint">No strategies loaded</small>') + '</div>').join('');

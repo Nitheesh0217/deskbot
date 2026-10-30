@@ -2,6 +2,8 @@
 // Providers are OpenAI-compatible chat endpoints on free tiers (see PROVIDERS), tried in order as fallbacks. Keys come from Supabase
 // secrets. Missing keys / quota / errors ⇒ returns null and the caller degrades to rules.
 // AI output can never open a trade, size a trade or touch exits — see news.ts.
+// Outbound payloads are allowlisted in egress.ts; decideJSON refuses any request text that still carries an account key.
+import { egressViolations } from "./egress.ts";
 
 export type Provider = { name: string; url: string; model: string; key: string; dailyCap: number };
 export type Usage = Record<string, { day: string; calls: number; fails: number; coolUntil: number }>;
@@ -17,7 +19,9 @@ const dailyCap = (key: string, fallback: number) => {
 // Free-tier, OpenAI-compatible chat endpoints (researched 29 Oct 2026 from github.com/mnfst/awesome-free-llm-apis and provider docs).
 // Each is used only when its key secret exists; the model can be overridden with <NAME>_MODEL (free tiers rename models often:
 // a 404 cools that provider for 30 min and the next one answers). Order = AI_PROVIDER_ORDER (comma list) or the default below.
-// Free tiers may log prompts; nothing sent here contains keys, balances beyond the paper book, or personal data.
+// Free tiers may log prompts and may use them for training. Requests carry only egress.ts payloads (no account data). A provider is used
+// for a feature only with: a key, reviewed terms (TERMS_VERIFIED or the owner's AI_TERMS_VERIFIED), the owner's acceptance of its data
+// use FOR THAT FEATURE (AI_DATA_USE_ACCEPTED), and the feature switched on. A key or a terms record alone never activates a provider.
 export const PROVIDERS = [
   { name: "groq", keyVar: "GROQ_API_KEY", url: "https://api.groq.com/openai/v1/chat/completions", model: "llama-3.3-70b-versatile", cap: 300 },          // ~30 RPM, ~1,000 RPD
   { name: "gemini", keyVar: "GEMINI_API_KEY", url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", model: "gemini-2.5-flash", cap: 200 },
@@ -28,10 +32,42 @@ export const PROVIDERS = [
   { name: "openrouter", keyVar: "OPENROUTER_API_KEY", url: "https://openrouter.ai/api/v1/chat/completions", model: "openrouter/free", cap: 45 },        // ~20 RPM, 50 RPD without credits
 ] as const;
 
-export function providersFromEnv(): Provider[] {
-  const order = String(env("AI_PROVIDER_ORDER") || "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean);
+/** Providers whose official data-use terms were READ and recorded. This is a review record only: it does not accept the data use for any
+ *  payload, does not show the provider is reachable, and enables nothing by itself. */
+export const TERMS_VERIFIED: Record<string, { checked: string; source: string; dataUse: string }> = {
+  gemini: { checked: "2026-10-30", source: "ai.google.dev/pricing; ai.google.dev/gemini-api/docs/billing", dataUse: "free tier: prompts may be used to improve Google products; paid (billing on): not used" },
+};
+/** Advisory features that can send a request. Each needs its own owner acceptance of the provider's data use for that payload. */
+export const AI_FEATURES = ["news", "committee", "chat"] as const;
+export type AiFeature = typeof AI_FEATURES[number];
+const list = (k: string) => String(env(k) || "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean);
+/** AI_DATA_USE_ACCEPTED, the owner's explicit acceptance per provider and feature, e.g. "gemini:news,gemini:committee" ("gemini:*" = all). */
+const accepted = (name: string): AiFeature[] => {
+  const xs = list("AI_DATA_USE_ACCEPTED").filter((x) => x.startsWith(name + ":")).map((x) => x.slice(name.length + 1));
+  return xs.includes("*") ? [...AI_FEATURES] : AI_FEATURES.filter((f) => xs.includes(f));
+};
+/** Per provider, five separate facts. A provider is USED for a feature only when credentials are present, its terms were reviewed, the
+ *  owner accepted its data use for that feature, and the feature is enabled. Reachability is only known after a call (from usage). */
+export function providerPolicy(enabled: Partial<Record<AiFeature, boolean>> = {}, usage: Usage = {}, now = Date.now()) {
+  const own = list("AI_TERMS_VERIFIED");
+  return PROVIDERS.map((p) => {
+    const credentialsPresent = !!env(p.keyVar), termsReviewed = TERMS_VERIFIED[p.name] ? "code" as const : own.includes(p.name) ? "owner" as const : null;
+    const dataUseAccepted = accepted(p.name), u = usage[p.name];
+    const reachable = !u || !u.calls ? "not tested" : u.coolUntil > now ? "failing (cooling down)" : u.calls > u.fails ? "answered today" : "no successful call today";
+    const usableFor = AI_FEATURES.filter((f) => credentialsPresent && termsReviewed && dataUseAccepted.includes(f) && enabled[f] !== false);
+    return { name: p.name, credentialsPresent, termsReviewed, dataUseAccepted, reachable, featuresEnabled: AI_FEATURES.filter((f) => enabled[f] !== false), usableFor };
+  });
+}
+/** Backwards-compatible summary for the status payload. */
+export function providerAvailability() {
+  return providerPolicy().map((x) => ({ name: x.name, configured: x.credentialsPresent, termsVerified: !!x.termsReviewed, verifiedBy: x.termsReviewed }));
+}
+/** Providers that may serve ONE feature, in order. Without credentials, reviewed terms and accepted data use for this feature: none. */
+export function providersFromEnv(feature: AiFeature): Provider[] {
+  const ok = new Set(providerPolicy().filter((a) => a.usableFor.includes(feature)).map((a) => a.name));
+  const order = list("AI_PROVIDER_ORDER");
   const rank = (n: string) => (order.includes(n) ? order.indexOf(n) : order.length + PROVIDERS.findIndex((p) => p.name === n));
-  return PROVIDERS.filter((p) => env(p.keyVar)).sort((a, b) => rank(a.name) - rank(b.name)).map((p) => {
+  return PROVIDERS.filter((p) => ok.has(p.name)).sort((a, b) => rank(a.name) - rank(b.name)).map((p) => {
     const up = p.name.toUpperCase();
     return { name: p.name, url: p.url, model: env(`${up}_MODEL`) || p.model, key: env(p.keyVar), dailyCap: dailyCap(`${up}_DAILY_CAP`, p.cap) };
   });
@@ -52,6 +88,8 @@ export async function decideJSON<T>(
   const f = opts.fetchImpl ?? fetch, sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   const t0 = Date.now(), end = t0 + (opts.deadlineMs ?? 20000), day = new Date(opts.now).toISOString().slice(0, 10);
   const errors: string[] = [];
+  const leaked = egressViolations(system + "\n" + user);
+  if (leaked.length) return { value: null, errors: [`egress blocked: request carries account fields (${leaked.join(", ")})`] };
   for (const p of opts.providers) {
     if (!Number.isSafeInteger(p.dailyCap) || p.dailyCap < 0) { errors.push(`${p.name}: invalid daily cap`); continue; }
     const u = (opts.usage[p.name] ??= { day, calls: 0, fails: 0, coolUntil: 0 });

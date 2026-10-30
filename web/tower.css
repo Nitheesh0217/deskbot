@@ -142,3 +142,11 @@
 .say.fresh { background: color-mix(in srgb, var(--accent) 16%, var(--panel-2)); color: var(--fg); }
 .say .inbox { font: 700 9.5px/1 var(--f-mono); letter-spacing: .05em; text-transform: uppercase; color: var(--accent); margin-right: 4px; }
 .av { transform-origin: 50% 80%; }
+
+/* worker states and facts (truthful-visibility slice) */
+.wstate { font: 700 11px/1 var(--f-mono); letter-spacing: .06em; padding: 2px 6px; border-radius: 4px; background: #eef1f7; }
+.ws-RUNNING { color: #1f9d6b; background: #e3f6ee; } .ws-WAITING { color: #4a5a78; } .ws-BLOCKED, .ws-ERROR { color: #d0414f; background: #fbe6e8; }
+.ws-DEGRADED { color: #b8740e; background: #fdf1de; } .ws-DISABLED, .ws-UNKNOWN { color: #6b7385; }
+.wfacts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; margin: 10px 0 0; font: 500 12px/1.45 var(--f-mono); }
+.wfacts dt { color: var(--fg-3); } .wfacts dd { margin: 0; overflow-wrap: anywhere; }
+.emp[data-state="BLOCKED"] .sdot, .emp[data-state="ERROR"] .sdot { background: #d0414f; } .emp[data-state="UNKNOWN"] .sdot { background: #b7bfcc; }

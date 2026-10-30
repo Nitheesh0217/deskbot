@@ -206,11 +206,35 @@ function renderTower() {
   const strategies = STRATS.map((s) => { const v = stratView(s.id, st), c = v.cov; return { id: s.id, name: s.name, state: OPST[v.state] ? OPST[v.state][1].toUpperCase() : v.state, reason: v.state === "DISABLED" ? (v.offReason || "") : c ? ((c.lastDueCode || c.lastCode || "") + " " + (c.lastDueReason || c.lastReason || "")).trim() : "no evaluation counters yet" }; });
   if (globalThis.DeskMarkets && !$("v-tower").hidden && Date.now() - TOWER_CAL.at > 10 * 60e3) { TOWER_CAL.at = Date.now(); globalThis.DeskMarkets.nextHighImpact().then((e) => { TOWER_CAL.next = e; renderTower(); }).catch(() => {}); }
   globalThis.TowerView.render({ calendarNext: TOWER_CAL.next, state: S, agents: DATA.agents || [], trades: DATA.trades || [], curve: DATA.curve || [], strategies, book: BOOK, bt: DATA.bt || null,
-    experiment: RAW ? (RAW.experiment === undefined ? null : RAW.experiment) : null, config: BOOK === "BTC" && RAW ? RAW.config || null : null, aiProviders: RAW && RAW.chat ? RAW.chat.ai || [] : null });
+    experiment: RAW ? (RAW.experiment === undefined ? null : RAW.experiment) : null, config: BOOK === "BTC" && RAW ? RAW.config || null : null, aiProviders: RAW && RAW.chat ? RAW.chat.ai || [] : null, ai: RAW ? RAW.ai || null : null, scan: RAW ? RAW.scan || null : null, track: RAW ? RAW.track || null : null, chat: RAW ? RAW.chat || null : null, work: RAW ? RAW.work || null : null });
 }
 let strategyFilter = "all";
+let MATRIX = null;
+/** W3 coverage matrix for the selected book (DeskCoverage.strategyMatrix; same code as the edge function). */
+function renderMatrix(S, st) {
+  const el = $("covMatrix"); if (!el || !globalThis.DeskCoverage || !DeskCoverage.strategyMatrix) return;
+  const reg = (RAW && RAW.registry) || { strategies: STRATS.map((x) => x.id), optIn: OPT_IN };
+  const bookCfg = BOOK === "GOLD" ? (RAW && RAW.books && RAW.books.GOLD && RAW.books.GOLD.config) : (RAW && RAW.config);
+  const cfg = bookCfg || { RISK_SCALE: Object.assign({}, DEFAULT_SCALE, (st.cfg || {}).RISK_SCALE || {}), XC_TF: (st.cfg || {}).XC_TF, HSW_TF: (st.cfg || {}).HSW_TF };
+  const lr = S.last_run || {}, riskPct = typeof lr.risk === "number" ? lr.risk : null;
+  const shadow = ((RAW && RAW.track && RAW.track.shadow) || []).filter((x) => x.sym === (BOOK === "GOLD" ? "GOLD" : "BTC"));
+  MATRIX = DeskCoverage.strategyMatrix({ strategies: reg.strategies, optIn: reg.optIn, cfg, st, trades: DATA.trades || [], riskPct, now: Date.now(), shadow });
+  const meta = st.covMeta, hh = (T) => (T == null ? "—" : new Date(T + 1).toISOString().slice(11, 16));
+  const tr = MATRIX.map((m) => `<tr class="${m.openNow ? "open" : ""} ${m.starved ? "warn" : ""}"><td><b>${esc(m.id)}</b>${m.openNow ? ' <span class="chip">OPEN</span>' : ""}<br><small class="faint">${esc(m.requires)}</small></td>
+    <td>${esc(OPST[m.state] ? OPST[m.state][1] : m.state)}${m.disabledReason ? `<br><small class="faint">${esc(m.disabledReason)}</small>` : ""}${m.shadow ? `<br><small title="${esc(m.shadow.basis || '')}">shadow (B, simplified hypothetical, ${esc((m.shadow.cfgIds || [])[0] || 'SHADOW')}): ${m.shadow.resolved} resolved · ${m.shadow.open} open${m.shadow.meanNetR != null ? ` · ${m.shadow.meanNetR >= 0 ? "+" : ""}${m.shadow.meanNetR}R mean` : ""}</small>` : ""}${m.starved ? '<br><small class="down">due bars not evaluated</small>' : ""}</td>
+    <td>${esc(m.cadence)}<br><small class="faint">last due ${hh(m.lastDueT)}</small></td><td class="r">${m.due}<br><small class="faint">${m.completed} done${m.windowClosed ? ` · ${m.windowClosed} outside window` : ""}</small></td>
+    <td class="r">${m.noSetup}</td><td class="r ${m.missingData || m.errors ? "down" : ""}">${m.missingData}${m.errors ? ` / ${m.errors} err` : ""}</td><td class="r">${m.signals}</td>
+    <td>${m.vetoes.length ? m.vetoes.slice(0, 2).map((x) => `${esc(x.reason)} ×${x.n}`).join("<br>") : '<span class="faint">none</span>'}</td>
+    <td class="r">${m.entered} / ${m.notSelected} / ${m.portfolioBlocked}</td><td class="r">${m.closed ? `${m.wins}/${m.closed} · ${m.sumR >= 0 ? "+" : ""}${m.sumR}R` : "—"}</td>
+    <td class="r">${m.eligiblePaper ? m.riskPerTradePct.toFixed(2) + "%" : "0"}</td></tr>`).join("");
+  el.innerHTML = `<div class="section-top"><h2>Coverage matrix · ${BOOK === "GOLD" ? "gold (PAXG)" : "BTC"}</h2><span class="chip">PAPER</span></div>
+    <p class="note">Since ${meta ? esc(new Date(meta.since).toISOString().slice(0, 16).replace("T", " ")) + " UTC" : "—"}: ${meta ? `${meta.evalBars} bars evaluated, ${meta.missedBars} missed, missing due bars 15m ${meta.missingDue["15m"]} / 1H ${meta.missingDue["1h"]} / 4H ${meta.missingDue["4h"]} / 1D ${meta.missingDue["1d"]}` : "no counters"}. Every eligible evaluator is called on every bar before selection; one position per book means a valid signal can be <b>not selected</b> or <b>blocked</b> without the evaluator being starved. Columns are counts of evaluations, not trades.</p>
+    <div class="mx-wrap"><table class="mx"><thead><tr><th>Strategy · needs</th><th>State</th><th>Trigger</th><th class="r">Due bars</th><th class="r">No setup</th><th class="r">Missing data</th><th class="r">Signals (A)</th><th>Vetoes</th><th class="r">Entered / not sel. / blocked</th><th class="r">Closed W/n · ΣR (C)</th><th class="r">Risk/trade</th></tr></thead><tbody>${tr}</tbody></table></div>
+    <p class="note">A = signal frequency; C = portfolio-selected paper outcomes for the closed trades loaded on this page. B (standalone hypothetical outcomes): the scanner's setup tracker on the Board, plus an isolated shadow lane (SHADOW-1 config) for evaluators the book does not run, shown under their state. B outcomes are simplified hypothetical setup outcomes (first of TP1 / stop / max hold), not book returns with partial exits, trailing stops or portfolio constraints; never traded, never counted for promotion. Risk/trade = the runner's reported risk (${riskPct != null ? (riskPct * 100).toFixed(2) + "%" : "not reported"}) × scale. Closed trades before 29 Oct 17:26 UTC have no recorded config identity.</p>`;
+}
 function renderStrategies() {
   const S = DATA.state || {}, st = S.state || {}, lr = S.last_run || {}, hasCov = !!(st.cov && Object.keys(st.cov).length), by = (st.stats && st.stats.by) || {};
+  renderMatrix(S, st);
   const trades = (DATA.trades || []).slice().sort((a, b) => new Date(a.close_t) - new Date(b.close_t));
   const views = STRATS.map((s) => stratView(s.id, st)), on = views.filter((v) => v.state !== "DISABLED").length;
   $("strategyCount").textContent = `${STRATS.length} registered · ${on} on for ${BOOK === "GOLD" ? "gold (PAXG)" : "BTC"}`;
@@ -226,7 +250,9 @@ function renderStrategies() {
     let cum = 0, pk = 0, dd = 0; mine.forEach((t) => { cum += +t.r; pk = Math.max(pk, cum); dd = Math.max(dd, pk - cum); });
     const fees = mine.reduce((a, t) => a + (+t.fees || 0), 0), fund = mine.reduce((a, t) => a + (+t.funding || 0), 0);
     const cadTxt = { "5m": "every 5m bar", "15m": "15m close", "1h": "1H close", "4h": "4H close", "1d": "daily close (00:00 UTC)" }[v.cadence];
-    const sizeTxt = v.state === "DISABLED" ? "none (disabled)" : `${(v.riskScale ?? 1)}× scale${v.probation ? " · probation: half size" : ""}${(v.riskScale ?? 1) >= 1 && !v.probation ? " (full)" : ""}`;
+    // sizing from the authoritative source: the runner's reported risk per trade (last_run.risk) × this strategy's effective scale
+    const mrow = (MATRIX || []).find((m) => m.id === s.id);
+    const sizeTxt = v.state === "DISABLED" ? "none (disabled)" : `${(v.riskScale ?? 1)}× scale${v.probation ? " · probation: half size" : ""}${mrow && mrow.riskPerTradePct ? ` → ${mrow.riskPerTradePct.toFixed(2)}% of equity at risk per trade` : " (risk per trade not reported)"}`;
     const hhmm = (T) => new Date(T + 1).toISOString().slice(11, 16) + " UTC";
     const evalTxt = c && c.lastDueT != null ? `${ago(c.lastDueT + 1)} · data to ${hhmm(c.lastDueT)}` : c && c.lastEvalT != null ? `no due bar yet (last bar ${hhmm(c.lastEvalT)})` : "no data";
     const nextTxt = v.nextDueT != null ? `next due bar closes ${hhmm(v.nextDueT)}` : "";
@@ -361,8 +387,10 @@ $("moreBtn").addEventListener("click", () => setMore(!document.querySelector("na
 document.addEventListener("desk:view", (e) => { const t = document.querySelector(`.tab[data-v="${e.detail.view}"]`); document.getElementById("moreBtn").classList.toggle("has-active", !!(t && t.classList.contains("more"))); if (t && t.classList.contains("more") && matchMedia("(min-width: 1100px)").matches) setMore(true); });
 
 // ── Chart: TradingView Lightweight Charts (Apache-2.0) + the bot's real levels ──
-const CH = { lib: null, chart: null, series: {}, tf: "1h", mode: "bot", timer: null, tvLoaded: false, request: 0, prims: [], zlines: [], layers: { focus: true, trade: true, FVG: true, IFVG: true, OB: true, value: true, pd: true, structure: false, liq: false } };
+const CH = { lib: null, chart: null, series: {}, tf: "1h", mode: "bot", timer: null, tvLoaded: false, request: 0, prims: [], zlines: [], view: "price", layers: { refs: false, trade: true, FVG: true, IFVG: true, OB: true, value: true, pd: true, structure: false, liq: false } };
 try { Object.assign(CH.layers, JSON.parse(localStorage.getItem("deskbot.layers") || "{}")); } catch (_) { /* storage optional */ }
+try { CH.view = localStorage.getItem("deskbot.planView") === "plan" ? "plan" : "price"; } catch (_) { /* optional */ }
+document.querySelectorAll("#planView button").forEach((b) => { b.setAttribute("aria-pressed", String(b.dataset.view === CH.view)); b.addEventListener("click", () => { CH.view = b.dataset.view; CH.fit = null; document.querySelectorAll("#planView button").forEach((x) => x.setAttribute("aria-pressed", String(x === b))); try { localStorage.setItem("deskbot.planView", CH.view); } catch (_) { /* optional */ } chartDraw(); }); });
 document.querySelectorAll("#layers input").forEach((i) => { i.checked = !!CH.layers[i.dataset.layer]; i.addEventListener("change", () => { CH.layers[i.dataset.layer] = i.checked; try { localStorage.setItem("deskbot.layers", JSON.stringify(CH.layers)); } catch (_) { /* optional */ } chartDraw(); }); });
 const zonePal = () => ({ bull: "#4fd1c5", bear: "#d46bd6", obBull: "#5aa9e6", obBear: "#f2a93b", sl: cssVar("--down"), tp: cssVar("--up"), slText: cssVar("--down"), tpText: cssVar("--up"), fg: cssVar("--fg"), muted: cssVar("--fg-3") });
 const TFMS = { "15m": 9e5, "1h": 36e5, "4h": 144e5, "1d": 864e5 };
@@ -474,12 +502,23 @@ async function chartDraw() {
     const h4c = h4.bars.filter((x) => x.t + 144e5 <= Date.now()), dc = donchianPrior(h4c.concat([{ h: NaN, l: NaN }]), 55);
     const last = b[b.length - 1].c, eDnow = eD.length ? eD[eD.length - 1].value : m.ema50D;
     const legend = [];
-    if (dc) { PL(dc.hi, "#5aa9e6", "4H 55-bar high", 1); PL(dc.lo, "#5aa9e6", "4H 55-bar low", 1); }
-    if (m.asian && tf !== "1d" && tf !== "4h") { PL(m.asian.hi, cssVar("--fg-3"), "Asian high", 3); PL(m.asian.lo, cssVar("--fg-3"), "Asian low", 3); }
-    const dl = (((S.last_run || {}).desk || {}).chart || {}).levels || [];
-    dl.filter((x) => x.blocks && Math.abs(x.px - b[b.length - 1].c) / b[b.length - 1].c < 0.04).forEach((x) => PL(x.px, x.side === "support" ? cssVar("--up") : cssVar("--down"), "agent: " + x.name, 2));
-    if (p) { PL(p.entry, cssVar("--fg"), `${p.dir.toUpperCase()} entry`, 0, 2); PL(p.stop, cssVar("--down"), "Stop", 0, 2);
-      [["tp1", "TP1"], ["tp2", "TP2"], ["tp3", "TP3"]].forEach(([k, t]) => PL(p[k], cssVar("--up"), t + (p[k + "Done"] ? " ✓" : ""), p[k + "Done"] ? 2 : 0)); }
+    // reference and advisory levels (not orders) only when asked for: they are context, and their labels crowd the plan
+    if (CH.layers.refs) {
+      if (dc) { PL(dc.hi, "#5aa9e6", "Ref · 4H 55-bar high", 1); PL(dc.lo, "#5aa9e6", "Ref · 4H 55-bar low", 1); }
+      if (m.asian && tf !== "1d" && tf !== "4h") { PL(m.asian.hi, cssVar("--fg-3"), "Ref · Asian high", 3); PL(m.asian.lo, cssVar("--fg-3"), "Ref · Asian low", 3); }
+      const dl = (((S.last_run || {}).desk || {}).chart || {}).levels || [];
+      dl.filter((x) => x.blocks && Math.abs(x.px - b[b.length - 1].c) / b[b.length - 1].c < 0.04).forEach((x) => PL(x.px, x.side === "support" ? cssVar("--up") : cssVar("--down"), "Advisory · " + x.name, 2));
+    }
+    // executable plan levels, labelled with distance from entry, R from the ORIGINAL risk and the exit share (plan.js)
+    const plan = p ? planOf(p, last) : null;
+    if (plan) for (const r of plan.rows) {
+      const tag = `${r.pct > 0 ? "+" : ""}${r.pct.toFixed(2)}% · ${r.r > 0 ? "+" : ""}${r.r.toFixed(2)}R`;
+      if (r.key === "entry") PL(r.price, cssVar("--fg"), `Entry · ${p.dir.toUpperCase()}`, 0, 2);
+      else if (r.key === "stop") PL(r.price, cssVar("--down"), `${r.label} · ${tag}`, 0, 2);
+      else if (r.key === "stop0") PL(r.price, cssVar("--down"), `Original stop · −1R (reference)`, 2, 1);
+      else if (/^tp/.test(r.key)) PL(r.price, cssVar("--up"), `${r.label}${r.status === "hit" ? " ✓" : ""} · ${tag} · exit ${Math.round(r.share * 100)}% of orig.`, r.status === "hit" ? 2 : 0);
+    }
+    renderPlanPanel(plan, last);
     // markers: closed trades + open entry
     const times = b.map((x) => sec(x.t));
     const snapT = (ts) => { let lo = 0, hi = times.length - 1, a = -1; while (lo <= hi) { const md = (lo + hi) >> 1; if (times[md] <= ts) { a = md; lo = md + 1; } else hi = md - 1; } return a < 0 ? null : times[a]; };
@@ -494,15 +533,18 @@ async function chartDraw() {
     CH.zlines.forEach((l) => CH.series.c.removePriceLine(l)); CH.zlines = [];
     const ZL = (price, color, title, style = 2) => { if (isFinite(price)) CH.zlines.push(CH.series.c.createPriceLine({ price, color, lineWidth: 1, lineStyle: style, axisLabelVisible: false, title })); };
     const boxes = DeskSetup.zoneBoxes(read, CH.layers, pal, (t) => snapT(t), t0s);
-    if (CH.layers.trade && p) boxes.push(...DeskSetup.tradeBoxes(p, pal, (ms) => snapT(sec(ms))));
+    if (CH.layers.trade && p) boxes.push(...DeskSetup.tradeBoxes(p, pal, (ms) => snapT(sec(ms)), { labels: false }));
     boxes.forEach((bx) => { const q = new DeskSetup.Box(bx); CH.series.c.attachPrimitive(q); CH.prims.push(q); });
     if (CH.layers.value && read.value) { ZL(read.value.poc, "#e3c14d", "POC", 0); ZL(read.value.vah, "#e3c14d", "VAH", 3); ZL(read.value.val, "#e3c14d", "VAL", 3); }
     if (CH.layers.pd && read.range) { ZL(read.range.eq, cssVar("--fg-3"), `mid · ${read.range.zone}`, 1); }
     if (CH.layers.liq) read.pools.forEach((q) => ZL(q.px, "#b48ef0", q.kind + (q.swept ? " swept" : ""), 3));
     if (CH.layers.structure) read.structure.forEach((e) => mk.push({ time: snapT(e.t), position: e.side === "bull" ? "belowBar" : "aboveBar", color: e.side === "bull" ? "#4fd1c5" : "#d46bd6", shape: "square", text: e.kind + (e.side === "bull" ? "↑" : "↓") }));
     window.__zoneRead = read;
-    const focusOn = !!(CH.layers.focus && p), fitKey = tf + (focusOn ? "+f" : "");
-    if (focusOn) { const rec = b.slice(-80), R0 = Math.abs(p.entry - p.stop0), lo = Math.min(p.stop0 - 0.5 * R0, ...rec.map((x) => x.l)), hi = Math.max(p.tp3 + 0.5 * R0, ...rec.map((x) => x.h)); CH.series.c.applyOptions({ autoscaleInfoProvider: () => ({ priceRange: { minValue: lo, maxValue: hi } }) }); }
+    // Price action: scale to recent candles + entry + stops (far targets stay listed in the plan table, never moved).
+    // Full plan: scale to every executable level, including TP3.
+    const focusOn = !!p, fitKey = tf + "+" + CH.view + (p ? "+p" : "");
+    if (p) { const rec = b.slice(-80), lv = CH.view === "plan" ? [p.entry, p.stop, p.stop0, p.tp1, p.tp2, p.tp3] : [p.entry, p.stop, p.stop0], lo = Math.min(...lv, ...rec.map((x) => x.l)), hi = Math.max(...lv, ...rec.map((x) => x.h)), pad = (hi - lo) * 0.04;
+      CH.series.c.applyOptions({ autoscaleInfoProvider: () => ({ priceRange: { minValue: lo - pad, maxValue: hi + pad } }) }); }
     else CH.series.c.applyOptions({ autoscaleInfoProvider: undefined });
     if (CH.fit !== fitKey) { CH.fit = fitKey; CH.chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, b.length - (focusOn ? 80 : 150)), to: b.length + 12 }); }
     const t0 = sec(b[0].t); CH.series.c.setMarkers(mk.filter((x) => x.time != null && x.time >= t0).sort((a, z) => a.time - z.time));
@@ -521,9 +563,27 @@ async function chartDraw() {
     const nw = (S.last_run || {}).news; if (nw) rd.push(`<div>News risk <b>${esc(nw.risk)}</b> (${esc(String(nw.by || "").startsWith("ai:") ? "AI" : "keyword rules")}, ${esc(nw.mode)} mode): ${esc(nw.reason)}</div>`);
     $("botRead").innerHTML = rd.join("");
     renderSetupCard(p, S);
-  } catch (e) { if (request !== CH.request || book !== BOOK || tf !== CH.tf) return; renderSetupCard(((DATA.state || {}).state || {}).pos, DATA.state); $("lwMsg").hidden = false; $("lwMsg").textContent = "Couldn't load candles here (" + (e && e.message || "network") + "). Retry when the candle source is reachable."; }
+  } catch (e) { if (request !== CH.request || book !== BOOK || tf !== CH.tf) return; renderSetupCard(((DATA.state || {}).state || {}).pos, DATA.state); try { const ps = ((DATA.state || {}).state || {}).pos; renderPlanPanel(ps ? planOf(ps, null) : null, null, "Candles unavailable: the plan below comes from the stored position; current price and its distances are not shown."); } catch (_) { renderPlanPanel(null, null, null, true); } $("lwMsg").hidden = false; $("lwMsg").textContent = "Couldn't load candles here (" + (e && e.message || "network") + "). Retry when the candle source is reachable."; }
 }
 
+/** The plan table for the open position (plan.js), with this book's exit rules and the strategy's trigger timeframe. */
+function planOf(p, price) {
+  if (!globalThis.DeskPlan) return null;
+  const st = ((DATA.state || {}).state) || {}, cfg = Object.assign({}, BOOK === "BTC" && RAW ? RAW.config || {} : {}, st.cfg || {});
+  const cadence = globalThis.DeskCoverage ? DeskCoverage.cadenceFor(p.strategy, cfg) : null;
+  return DeskPlan.planRows(p, { price, cadence, exitMode: cfg.EXIT_MODE, traderParts: cfg.TRADER_PARTS, now: Date.now() });
+}
+function renderPlanPanel(plan, price, warn, failed) {
+  const el = $("planPanel"); if (!el) return;
+  if (failed) { el.innerHTML = '<p class="note down">Plan unavailable: the position data could not be read. Nothing about the position was changed.</p>'; return; }
+  const warnHtml = warn ? `<p class="note warn">${esc(warn)}</p>` : "";
+  if (!plan) { el.innerHTML = '<p class="note faint">No open paper position: the chart shows price action and, if switched on, reference levels only.</p>'; return; }
+  const m = plan.meta, q = (x) => (x == null ? "—" : (+x).toPrecision(6));
+  const row = (r) => `<tr class="pk-${r.kind} ${r.status === "hit" ? "hit" : ""}"><td data-k="Level">${esc(r.label)}${r.kind === "reference" ? ' <small class="faint">not an order</small>' : ""}</td><td data-k="Price" class="r">${fmtPx(r.price)}</td><td data-k="From entry" class="r">${r.pct == null ? "—" : (r.pct > 0 ? "+" : "") + r.pct.toFixed(2) + "%"}</td><td data-k="R (original)" class="r">${r.r == null ? "—" : (r.r > 0 ? "+" : "") + r.r.toFixed(2) + "R"}</td><td data-k="Exit (planned)" class="r">${r.exitText ? esc(r.exitText) + " · " : ""}${q(r.qty)}</td><td data-k="Status">${esc(r.status)}</td></tr>`;
+  el.innerHTML = `${warnHtml}<div class="plan-meta"><b>${esc(nameOf(m.strategy))}</b> · ${esc(m.dir)} · signal on ${esc(m.signalTimeframe || "—")} · max hold ${esc(m.maxHoldText || "—")}${m.heldH != null && m.maxHoldH ? ` (held ${m.heldH.toFixed(0)} h of ${m.maxHoldH} h)` : ""}${m.expiresAt ? ` · time exit ${new Date(m.expiresAt).toISOString().slice(0, 16).replace("T", " ")} UTC` : ""} · 1R = ${fmtPx(m.riskPts)} pts (${m.riskPct.toFixed(2)}%) = ${fmt$(m.riskAmt)}</div>
+    <div class="plan-wrap"><table class="plan-t"><thead><tr><th>Level</th><th class="r">Price</th><th class="r">From entry</th><th class="r">R (original risk)</th><th class="r">Exit size (planned)</th><th>Status</th></tr></thead><tbody>${plan.rows.map(row).join("")}</tbody></table></div>
+    <p class="note faint">Executable levels are the paper engine's orders. Exit rules: ${esc(m.exitRules.join("; ") || "—")}. The chart timeframe you view is not the trade's deadline. Zones, Donchian, Asian range and agent levels are reference or advisory only.</p>`;
+}
 async function renderSetupCard(p, S) {
   const el = $("setupCard"), pal = zonePal(), nm = (BOOK === "GOLD" ? "Gold (PAXG)" : "BTC");
   if (!p) { el.innerHTML = `<div class="setup-head"><h2>Trade setup</h2></div><p class="note" style="margin-top:6px">No open ${nm} trade. When the bot enters, the setup appears here: entry, red stop-loss block, green take-profit blocks and the structure checks that agree with the trade. Reaction areas on the chart below show where the rules would care.</p>`; return; }
@@ -719,7 +779,7 @@ async function chatSend(text) {
   const wait = chatAdd("a", '<span class="muted">Thinking…</span>');
   try {
     const r = await chatCall({ action: "chat", message: text, history: CHAT.hist.slice(-8) });
-    wait.innerHTML = esc(r.reply || r.error || "No answer.") + (r.by ? `<span class="by">${esc(r.by)}</span>` : "");
+    wait.innerHTML = esc(r.reply || r.error || "No answer.") + (r.by ? `<span class="by">${esc(r.by)}${r.accountData === "withheld" ? " · account data withheld (equity, $ P&L, sizes)" : ""}</span>` : "");
     if (r.ok) { CHAT.hist.push({ role: "user", content: text }, { role: "assistant", content: r.reply }); if (r.proposal) propCard(r.proposal); }
     if (r.proposalErrors) chatAdd("sys", "The AI suggested a change that isn't allowed, so it was dropped: " + esc(r.proposalErrors.join("; ")));
   } catch (e) { wait.className = "msg sys"; wait.textContent = chatErr(e); }

@@ -85,7 +85,7 @@ export async function readNews(now: number, usage: Usage, opts: { useAi: boolean
   const base: NewsRead = { t: now, risk: rr.risk, bias: rr.bias, event: rr.hits.length ? "other" : "none", reason: rr.hits[0] ? `rule: ${rr.hits[0]}` : "rule: no flagged headlines", by: "rules", headlines: items.slice(0, 12), ruleRisk: rr.risk, ruleHits: rr.hits };
   if (errors.length) base.aiErrors = errors.map((e) => "feed " + e);
   if (!opts.useAi || !items.length) return base;
-  const providers = providersFromEnv();
+  const providers = providersFromEnv("news");
   if (!providers.length) return base;
   const now3h = items.filter((h) => now - h.t < 6 * 3600_000).slice(0, 20);
   const user = "UTC now: " + new Date(now).toISOString() + "\nHEADLINES (newest first, minutes ago | source | title):\n" +

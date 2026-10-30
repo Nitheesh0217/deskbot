@@ -6,35 +6,68 @@
 // (the engine would not take them). Net R subtracts the round-trip taker fees and slippage. This is a bracket test of the entry
 // signal, not a replay of the full trade manager (partials, trailing): it measures whether the rules see the move first.
 // Pure functions only; index.ts does the I/O.
-import { buildSeries, snapshot, evaluate, initState, ensureState, CFG, type Bar } from "./engine.ts";
+import { buildSeries, snapshot, evaluate, initState, ensureState, applyCfg, resolvedCfg, offReason, STRATEGIES, CFG, type Bar, type StrategyId, type StrategyTrace } from "./engine.ts";
 import type { Frames } from "./scan.ts";
+import { classifyReject } from "./coverage.ts";
 
 // Priority: 1 = trades as a paper book now; 2 = next in line (tracked, shown first); 3 = tracked.
 export const PRIORITY: Record<string, 1 | 2 | 3> = { BTC: 1, GOLD: 1, ETH: 2, SOL: 2, XRP: 3, BNB: 3, DOGE: 3, LINK: 3, AVAX: 3, SUI: 3 };
 export const PROMOTION = { minResolved: 30, rule: "≥30 resolved setups, mean net R > 0 and the 95% bootstrap lower bound > 0. Meeting it makes a market a CANDIDATE for a paper book; the owner decides. Nothing is promoted automatically." };
 
-export type NewSignal = { sym: string; strategy: string; dir: "long" | "short"; bar_t: number; entry: number; stop: number; tp1: number; r_dist: number; cost_r: number; max_hold_h: number; score: number; why: string[] };
+export type NewSignal = { lane?: "book" | "shadow"; cfg_id?: string; sym: string; strategy: string; dir: "long" | "short"; bar_t: number; entry: number; stop: number; tp1: number; r_dist: number; cost_r: number; max_hold_h: number; score: number; why: string[] };
 export type OpenSignal = NewSignal & { id: number; checked_t: number | null };
 export type Resolution = { id: number; status: "open" | "tp1" | "stop" | "time"; checked_t: number; exit_t?: number; exit_px?: number; r_gross?: number; r_net?: number };
 
-/** Setups fired on each of the last `lookback` closed 5m bars (a scan every 15 min sees all three bars since the previous scan). */
-export function signalsOverBars(sym: string, f: Frames, lookback = 3): NewSignal[] {
+/** Setups fired on each of the last `lookback` closed 5m bars (a scan every 15 min sees all three bars since the previous scan).
+ *  opts.only + lane "shadow": the isolated research lane. The caller applies an all-on test config; only the listed evaluators
+ *  (those switched off in the book) are recorded, labelled lane "shadow". Shadow rows never touch a book, its state or its trades. */
+export type LaneTrace = Record<string, { bars: number; evaluated: number; noData: number; errors: number; off: number; signals: number }>;
+export function signalsOverBars(sym: string, f: Frames, lookback = 3, opts: { only?: Set<string>; lane?: "book" | "shadow"; enabled?: Record<string, boolean>; cfgId?: string; trace?: LaneTrace } = {}): NewSignal[] {
   if (f.m5.length < 300 || f.m15.length < 100 || f.h1.length < 60 || f.h4.length < 60) return [];
   const S = buildSeries(f), out: NewSignal[] = [];
   for (let i5 = f.m5.length - lookback; i5 < f.m5.length; i5++) {
     if (i5 < 1) continue;
-    const s = snapshot(S, i5, {}), st = ensureState(initState(1000, s.T));
-    for (const g of evaluate(s, st.enabled, S, st).signals) {
+    const s = snapshot(S, i5, {}), st = ensureState(initState(1000, s.T)), tr: StrategyTrace[] = [];
+    if (opts.enabled) st.enabled = { ...st.enabled, ...opts.enabled };   // the book's own switches (auto-off / manual) apply to the book lane
+    const res = evaluate(s, st.enabled, S, st, tr);
+    if (opts.trace) for (const t of tr) { if (opts.only && !opts.only.has(t.id)) continue; const c = (opts.trace[t.id] ??= { bars: 0, evaluated: 0, noData: 0, errors: 0, off: 0, signals: 0 }); c.bars++; if (t.kind === "OFF") c.off++; else if (t.kind === "WARMUP" || classifyReject(t.reason) === "INSUFFICIENT_DATA") c.noData++; else if (t.kind === "ERROR") c.errors++; else c.evaluated++; if (t.kind === "ADMITTED") c.signals++; }
+    for (const g of res.signals) {
+      if (opts.only && !opts.only.has(g.strategy)) continue;
       const d = g.dir === "long" ? 1 : -1, entry = g.entryRef, minStop = Math.max(CFG.MIN_STOP_PCT, CFG.MIN_STOP_BY[g.strategy] ?? 0);
       let stop = g.stop; if ((stop - entry) * d >= 0) continue;
       if (!g.bodyStop && minStop > 0 && Math.abs(entry - stop) < minStop * entry) stop = entry - d * minStop * entry;
       const R = Math.abs(entry - stop), costR = (entry * (2 * CFG.TAKER_FEE + 2 * CFG.SLIPPAGE)) / R;
       if (!(R > 0) || costR > CFG.MAX_COST_R) continue;
       const T = CFG.TARGETS[g.strategy];
-      out.push({ sym, strategy: g.strategy, dir: g.dir, bar_t: s.T, entry, stop, tp1: entry + d * T.tp1 * R, r_dist: R, cost_r: +costR.toFixed(4), max_hold_h: T.maxHoldH, score: g.score, why: g.why.slice(0, 5) });
+      out.push({ lane: opts.lane ?? "book", ...(opts.cfgId ? { cfg_id: opts.cfgId } : {}), sym, strategy: g.strategy, dir: g.dir, bar_t: s.T, entry, stop, tp1: entry + d * T.tp1 * R, r_dist: R, cost_r: +costR.toFixed(4), max_hold_h: T.maxHoldH, score: g.score, why: g.why.slice(0, 5) });
     }
   }
   return out;
+}
+
+/** The PostgREST request that records setups. laneAware: identity (sym, strategy, bar_t, lane) with lane + cfg_id columns;
+ *  otherwise the pre-migration 3-column key with book rows only. Pure, so the exact request is tested against PostgREST. */
+export function signalInsertRequest(rows: NewSignal[], laneAware: boolean): { path: string; init: { method: string; headers: Record<string, string>; body: string } } {
+  const base = "sym,strategy,dir,bar_t,entry,stop,tp1,r_dist,cost_r,max_hold_h,score,why,checked_t";
+  const keep = laneAware ? rows : rows.filter((x) => x.lane !== "shadow");
+  const body = keep.map((x) => { const { lane, cfg_id, ...rest } = x; return { ...rest, ...(laneAware ? { lane: lane ?? "book", cfg_id: cfg_id ?? null } : {}), checked_t: x.bar_t }; });
+  return { path: `dbv5_scan_signals?columns=${laneAware ? "lane,cfg_id," + base : base}&on_conflict=${laneAware ? "sym,strategy,bar_t,lane" : "sym,strategy,bar_t"}`, init: { method: "POST", headers: { Prefer: "resolution=ignore-duplicates,return=minimal" }, body: JSON.stringify(body) } };
+}
+
+// ─── shadow research lane ───────────────────────────────────────────────────────────────────────────────────────────────
+// SHADOW-1: the book's own config with every evaluator switched on (RISK_SCALE 1 for all, no enabled flags). Only evaluators
+// switched off in the book by ANY mechanism are recorded. The id names the version and a fingerprint of the config used.
+export const SHADOW_VERSION = "SHADOW-1";
+const fp = (o: unknown) => { const s = JSON.stringify(o); let h = 0x811c9dc5; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; } return h.toString(16).padStart(8, "0"); };
+export const bookCfgId = (bookCfg: unknown) => `book:${fp(resolvedCfg(bookCfg as never))}`;
+export const shadowCfg = (bookCfg: Record<string, unknown> | undefined) => ({ ...(bookCfg ?? {}), RISK_SCALE: Object.fromEntries(STRATEGIES.map((id) => [id, 1])) });
+export const shadowCfgId = (bookCfg: Record<string, unknown> | undefined) => `${SHADOW_VERSION}:${fp(resolvedCfg(shadowCfg(bookCfg) as never))}`;
+/** Evaluators the book does not evaluate, by every mechanism (enabled flag, scale 0, opt-in without scale). Book config must be applied. */
+export const offInBook = (enabled: Record<string, boolean> = {}) => new Set<string>(STRATEGIES.filter((id) => offReason(id as StrategyId, enabled) !== null));
+/** Run fn under a temporary config and ALWAYS restore the given book config, even when fn throws. */
+export function withConfig<T>(temp: Record<string, unknown>, restore: Record<string, unknown> | undefined, fn: () => T): T {
+  applyCfg(temp as never);
+  try { return fn(); } finally { applyCfg(restore as never); }
 }
 
 /** Advance one open setup over 5m bars that closed after it was last checked. */
@@ -62,21 +95,31 @@ function bootLo(xs: number[], n = 2000, seed = 20261029): number | null {
   for (let k = 0; k < n; k++) { let t = 0; for (let i = 0; i < xs.length; i++) t += xs[Math.floor(rnd() * xs.length)]; means.push(t / xs.length); }
   means.sort((a, b) => a - b); return +means[Math.floor(0.025 * n)].toFixed(4);
 }
-type Row = { sym: string; strategy: string; status: string; r_net: number | null };
+type Row = { sym: string; strategy: string; status: string; r_net: number | null; lane?: string | null; cfg_id?: string | null };
 /** Per-market forward record from resolved setups, with the promotion check. Descriptive; never feeds the executor. */
 export function trackRecord(rows: Row[]) {
-  const by = new Map<string, Row[]>(); for (const r of rows) { if (!by.has(r.sym)) by.set(r.sym, []); by.get(r.sym)!.push(r); }
+  // the market record and its promotion check use the book lane only; shadow-lane evaluators are reported separately
+  const by = new Map<string, Row[]>(); for (const r of rows) { if (r.lane === "shadow") continue; if (!by.has(r.sym)) by.set(r.sym, []); by.get(r.sym)!.push(r); }
   return Object.keys(PRIORITY).map((sym) => {
     const all = by.get(sym) ?? [], res = all.filter((r) => r.status !== "open" && typeof r.r_net === "number"), xs = res.map((r) => r.r_net as number);
     const mean = xs.length ? +(xs.reduce((a, b) => a + b, 0) / xs.length).toFixed(4) : null, lo = xs.length >= PROMOTION.minResolved ? bootLo(xs) : null;
     const strat = new Map<string, number[]>(); for (const r of res) { if (!strat.has(r.strategy)) strat.set(r.strategy, []); strat.get(r.strategy)!.push(r.r_net as number); }
     return {
-      sym, priority: PRIORITY[sym], open: all.length - res.length, resolved: res.length, wins: res.filter((r) => r.status === "tp1").length,
+      sym, priority: PRIORITY[sym], basis: OUTCOME_BASIS, open: all.length - res.length, resolved: res.length, wins: res.filter((r) => r.status === "tp1").length,
       meanNetR: mean, sumNetR: xs.length ? +xs.reduce((a, b) => a + b, 0).toFixed(3) : 0, lo95: lo,
       verdict: res.length < PROMOTION.minResolved ? `collecting (${res.length}/${PROMOTION.minResolved})` : lo !== null && lo > 0 && (mean ?? 0) > 0 ? "CANDIDATE" : "NOT_YET",
       byStrategy: [...strat.entries()].map(([s, v]) => ({ strategy: s, n: v.length, meanNetR: +(v.reduce((a, b) => a + b, 0) / v.length).toFixed(3) })).sort((a, b) => b.n - a.n),
     };
   }).sort((a, b) => a.priority - b.priority || b.resolved - a.resolved);
+}
+
+/** Shadow lane: standalone hypothetical outcomes (B) of evaluators switched off in a book, per market and strategy. Research only. */
+export const OUTCOME_BASIS = "simplified hypothetical setup outcome: first of TP1 / stop / max hold after costs, from the signal bar's reference price; not a book return (no partial exits, trailing stops, re-entries or portfolio constraints)";
+export function shadowRecord(rows: Row[]) {
+  const g = new Map<string, Row[]>(); for (const r of rows) { if (r.lane !== "shadow") continue; const k = `${r.sym}|${r.strategy}`; if (!g.has(k)) g.set(k, []); g.get(k)!.push(r); }
+  return [...g.entries()].map(([k, rs]) => { const [sym, strategy] = k.split("|"), res = rs.filter((r) => r.status !== "open" && typeof r.r_net === "number"), xs = res.map((r) => r.r_net as number);
+    return { sym, strategy, basis: OUTCOME_BASIS, cfgIds: [...new Set(rs.map((r) => r.cfg_id).filter(Boolean))], open: rs.length - res.length, resolved: res.length, wins: res.filter((r) => r.status === "tp1").length, meanNetR: xs.length ? +(xs.reduce((a, b) => a + b, 0) / xs.length).toFixed(3) : null, lo95: xs.length >= PROMOTION.minResolved ? bootLo(xs) : null };
+  }).sort((a, b) => a.sym.localeCompare(b.sym) || b.resolved - a.resolved);
 }
 
 // ─── CALL-1 scoring: each market's directional call checked CALL_HORIZON_H hours later ─────────────

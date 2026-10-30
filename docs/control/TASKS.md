@@ -53,6 +53,18 @@ Acceptance: record before state; fail closed; replay reproduces; mutation of liv
 Rollback: revert the commit; the two tables are additive and may stay (empty or populated, unused).
 Next: T007 replay-fidelity mismatch report (PAXG first); T008 atomic/recoverable state-ledger transitions and cross-worker fencing; T009 bot_state access control.
 
+## W1 — Current-state audit and truthful roster (DONE 30 Oct 2026; CURRENT_STATE.md)
+
+## W2 — Theo work log and missing worker desks (IN PR #19, revised after review of 33af114; deploy + additive migration need owner approval)
+- Objective: every material management action is recorded exactly once, and every tower state comes from runtime evidence.
+- Identity: exits by bar time; announced trade-manager actions by 5m bar + sequence + kind + text fingerprint; unannounced net field changes by bar + from->to (attributed:false); close; failure by stuck bar.
+- Completeness (narrowed): announced actions and every exit are individual records. Silent TP2/TP3 moves and other unexplained changes are one net record per run. Intermediate values inside one run are not reconstructed.
+- Persistence: records sit in a state outbox saved in the same write as the management, then are inserted with ON CONFLICT (work_key) DO NOTHING. The outbox is cleared only after a confirmed insert; a failed write raises an ERROR event and retries next run. Without the migration the writer falls back to check-then-insert.
+- Acceptance tests: tower_workers_rev.test.ts (issues 1-5), worklog_identity.test.ts (issue 6), desk_handler persistence tests (issue 7), scripts/sql_test/work_key.sh (real PostgreSQL concurrency).
+- Rollback: re-pin the edge entry to 3e25392; Vercel instant-rollback to dpl_2V5vuDPQndNEG94J3mKmCDEYk2U7. The migration is additive and is left in place.
+
+## W3 — Strategy invocation and veto coverage (NEXT, dependency-ready)
+
 ## Next coding-agent prompt
 
 Latest T003 status: local website evidence/disconnection fixes and optional-AI quota fix VERIFIED by 79 tests/typecheck. Deployment BLOCKED by service authorization. See DEPLOYMENT_HANDOFF.md for exact targets, release order, smoke checks and rollback. T002's exact-artifact dependency remains before backend release; a separately reviewed website-only preview does not change trading behavior.

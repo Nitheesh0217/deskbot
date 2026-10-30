@@ -22,7 +22,9 @@ var DeskCoverage = (() => {
   var coverage_view_exports = {};
   __export(coverage_view_exports, {
     CADENCE_MS: () => CADENCE_MS,
+    REQUIRES: () => REQUIRES,
     cadenceFor: () => cadenceFor,
+    strategyMatrix: () => strategyMatrix,
     viewStrategy: () => viewStrategy
   });
   var CADENCE_MS = { "5m": 3e5, "15m": 9e5, "1h": 36e5, "4h": 144e5, "1d": 864e5 };
@@ -65,6 +67,67 @@ var DeskCoverage = (() => {
     const probation = !!(a.stat && a.stat.n >= a.probationMin && a.stat.sumR / a.stat.n < 0);
     const sizing = offReason ? 0 : (typeof scale === "number" ? scale : 1) * (probation ? 0.5 : 1);
     return { id: a.id, state, offReason, cadence: cad, cadenceMs: cms, nextDueT, sizing, riskScale: scale ?? null, probation, lastCompletedAgeMs: c?.lastCompletedT ? a.now - c.lastCompletedT : null, cov: c };
+  }
+  var REQUIRES = {
+    D_BEARTRAP: "complete UTC daily bars (built from 4H), daily engulf + next-day sweep/reclaim",
+    D_THRUST: "recent daily thrust + 1H EMA20 pullback (1H close)",
+    HTF_TREND: "4H ATR, 4H Donchian high/low, 4H EMA50 (4H close)",
+    TREND_MTF: "5m SuperTrend flip, 15m/1H alignment, 4H bias",
+    SWEEP_REV: "15m 20-bar swing sweep + rejection wick, 4H bias",
+    VWAP_REVERT: "15m session VWAP with \u22654 bars of the UTC day, RANGE regime",
+    SESSION_BO: "Asian (or London) range, London/NY open window, 15m close",
+    HTF_SWEEP: "4H (or 1H) high/low and ATR, failed break",
+    EMA_CROSS: "15m (or 1H) EMA20/EMA50 cross, 4H bias",
+    SSR: "Asian range, London 03\u201305 / NY 08\u201311 ET window, 4H EMA50",
+    EMA_PB: "M15 EMA50/200 trend, 5m EMA20 pullback, 08:00\u201311:30 ET weekdays"
+  };
+  function strategyMatrix(a) {
+    const st = a.st || {}, by = st.stats && st.stats.by || {};
+    return a.strategies.map((id) => {
+      const v = viewStrategy({ id, cfg: a.cfg, riskScale: a.cfg.RISK_SCALE?.[id], optIn: a.optIn.includes(id), enabledFlag: st.enabled?.[id], cov: st.cov?.[id] ?? null, stat: by[id], probationMin: a.probationMin ?? 10, now: a.now });
+      const c = v.cov, reasons = Object.entries(c && c.reasons || {});
+      const pick = (code) => reasons.filter(([k]) => k.startsWith(code + ": ")).map(([k, n]) => ({ reason: k.slice(code.length + 2), n })).sort((x, y) => y.n - x.n);
+      const mine = a.trades.filter((t) => t.strategy === id), rs = mine.map((t) => +t.r).filter(Number.isFinite);
+      const riskPerTrade = a.riskPct != null && v.sizing > 0 ? +(a.riskPct * 100 * v.sizing).toFixed(3) : 0;
+      return {
+        id,
+        registered: true,
+        implemented: !!REQUIRES[id],
+        enabledForEval: v.state !== "DISABLED",
+        eligiblePaper: v.state !== "DISABLED" && v.sizing > 0,
+        disabledReason: v.offReason,
+        cadence: v.cadence,
+        requires: REQUIRES[id] ?? "unknown",
+        state: v.state,
+        lastEvalT: c ? c.lastEvalT : null,
+        lastDueT: c?.lastDueT ?? null,
+        lastDueCode: c?.lastDueCode ?? null,
+        lastDueReason: c?.lastDueReason ?? null,
+        bars: c ? c.bars : 0,
+        due: c ? c.due : 0,
+        completed: c ? c.completed : 0,
+        windowClosed: c?.windowClosed ?? 0,
+        missingData: c ? c.skippedData : 0,
+        errors: c ? c.failed : 0,
+        noSetup: c ? c.noSetup : 0,
+        signals: c ? c.setups : 0,
+        gateRejected: c ? c.gateRejected : 0,
+        vetoes: [...pick("GATE_REJECTED"), ...pick("PORTFOLIO_BLOCKED")],
+        portfolioBlocked: c ? c.portfolioBlocked : 0,
+        notSelected: c ? c.notSelected : 0,
+        entered: c ? c.entered : 0,
+        closed: rs.length,
+        wins: rs.filter((r) => r > 0).length,
+        sumR: +rs.reduce((x, y) => x + y, 0).toFixed(3),
+        net: +mine.reduce((x, t) => x + (+t.net || 0), 0).toFixed(2),
+        openNow: !!(st.pos && st.pos.strategy === id),
+        riskScale: v.riskScale,
+        probation: v.probation,
+        riskPerTradePct: riskPerTrade,
+        shadow: (a.shadow || []).find((x) => x.strategy === id) ?? null,
+        starved: v.state === "DATA_BLOCKED" || v.state !== "DISABLED" && !!c && c.bars > 0 && c.due === 0 && c.bars * 3e5 > 1.5 * v.cadenceMs
+      };
+    });
   }
   return __toCommonJS(coverage_view_exports);
 })();

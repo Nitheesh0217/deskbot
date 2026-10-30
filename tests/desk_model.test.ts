@@ -40,7 +40,7 @@ test('only explicitly flat accounts report zero open risk; signals remain separa
   assert.equal(r.state, 'SETUP REPORTED'); assert.match(r.reason, /heuristic/);
 });
 test('agent catalog matches the instrumented source roles rather than claiming eight AI workers', () => {
-  const source = readFileSync(new URL('../supabase/functions/deskbot-v5/agents.ts', import.meta.url), 'utf8');
+  const source = ['agents.ts', 'worklog.ts'].map((f) => readFileSync(new URL('../supabase/functions/deskbot-v5/' + f, import.meta.url), 'utf8')).join('\n');
   const instrumented = [...new Set([...source.matchAll(/agent: "([^"]+)"/g)].map(x => x[1]))].sort();
   assert.deepEqual(Array.from(model.agentRoles, (r: any) => r.id).sort(), instrumented);
   assert.equal(model.agentRoles.filter((r: any) => r.kind === 'Optional AI').length, 1);

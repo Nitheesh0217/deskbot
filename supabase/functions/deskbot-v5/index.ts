@@ -7,20 +7,23 @@
 //  There is NO order-placement code in this function or project.
 // ═══════════════════════════════════════════════════════════════════════════
 import {
-  VERSION, CFG, STRATEGIES, buildSeries, snapshot, evaluate, entryGates, openPosition, managePosition,
+  VERSION, CFG, STRATEGIES, OPT_IN, buildSeries, snapshot, evaluate, entryGates, openPosition, managePosition,
   initState, unrealized, backtest, summarize, rollDay, dynamicRisk, applyCfg, resolvedCfg, ensureState, markEquity, setMlAsset, traderManage, m1View, type State, type Trade, type Bar,
 } from "./engine.ts";
 import { candles, candlesRange, candlesRangeBinance, hlContext, fearGreed, orderFlow, SYMBOLS, isSym, type Sym } from "./data.ts";
 import { readNews, newsBlocks, type NewsRead } from "./news.ts";
-import { providersFromEnv, type Usage } from "./ai.ts";
+import { providersFromEnv, providerPolicy, type Usage, type AiFeature } from "./ai.ts";
+import { chatFacts, pushClose, pushOpen } from "./egress.ts";
 import { chat, validatePatch, mergeCfg, EDITABLE, type ChatTurn } from "./chat.ts";
 import { configIntegrity, serialExecutor } from "./runtime.ts";
 import { runDesk, deskChart, type AgentRow } from "./agents.ts";
 import { preTradeChecks, postTradeReview, runDeskWorkflow, analystReports, lessonsFrom } from "./desk.ts";
 import { verdictsFor, filterReport } from "./experiment.ts";
 import { catchUp } from "./catchup.ts";
+import { managerRows, managerFailure, snapshotPos, workKey, mergeOutbox, type WorkRow } from "./worklog.ts";
+import { makeDb, saveStateCAS, writeAgentRows as writeLog, ackWork, flushOutbox, backlog } from "./persist.ts";
 import { scanMarket, rankScan, derivatives, SCAN_NOTE, CALL_HORIZON_H } from "./scan.ts";
-import { signalsOverBars, resolve, trackRecord, scoreCall, callRecord, PRIORITY, PROMOTION, type NewSignal, type OpenSignal, type Resolution, type OpenCall, type CallScore } from "./track.ts";
+import { signalsOverBars, signalInsertRequest, resolve, trackRecord, shadowRecord, offInBook, withConfig, shadowCfg, shadowCfgId, bookCfgId, SHADOW_VERSION, type LaneTrace, scoreCall, callRecord, PRIORITY, PROMOTION, type NewSignal, type OpenSignal, type Resolution, type OpenCall, type CallScore } from "./track.ts";
 import { captureDecision, pickEntry, decisionIdFor } from "./provenance.ts";
 import { recordCoverage, dispositions, boundaryFlags } from "./coverage.ts";
 import type { StrategyTrace } from "./engine.ts";
@@ -45,23 +48,18 @@ const RISK_ROUNDS = Math.min(2, Math.max(1, +(Deno.env.get("RISK_ROUNDS") ?? 1) 
 const EXPERIMENT_ID = Deno.env.get("DESKBOT_EXPERIMENT_ID") ?? "baseline-paper";
 const CHAT_KEY = Deno.env.get("DESKBOT_CHAT_KEY") ?? "";
 const CHAT_DAILY_CAP = +(Deno.env.get("CHAT_DAILY_CAP") ?? 150);
+// which advisory features are switched on (a provider still needs credentials, reviewed terms and accepted data use per feature)
+const aiFeaturesOf = (): Record<AiFeature, boolean> => ({ news: NEWS_AI && NEWS_MODE !== "off", committee: AGENT_AI && DESK_WORKFLOW, chat: !!CHAT_KEY && CHAT_DAILY_CAP > 0 });
 // Each book is a separate paper account (own equity, position, stats, cfg) in its own dbv5_state row.
 // A non-BTC book only runs once its row exists (created deliberately, with a researched cfg).
 const BOOKS: Sym[] = (Deno.env.get("DESKBOT_BOOKS") ?? "BTC,GOLD").split(",").map((x) => x.trim()).filter(isSym);
 const rowId = (sym: Sym) => (sym === "BTC" ? "main" : sym.toLowerCase());
 const CORS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "content-type, x-deskbot-key, x-chat-key", "Access-Control-Allow-Methods": "GET, POST, OPTIONS" };
 
-// ─── tiny PostgREST client ──────────────────────────────────────────────────
-async function rest(path: string, init: RequestInit = {}) {
-  const r = await fetch(`${SB}/rest/v1/${path}`, {
-    ...init, signal: init.signal ?? AbortSignal.timeout(10000), headers: { apikey: KEY, Authorization: `Bearer ${KEY}`, "Content-Type": "application/json", Prefer: "return=minimal", ...(init.headers ?? {}) },
-  });
-  if (!r.ok) throw new Error(`DB ${path.split("?")[0]} ${r.status}: ${(await r.text()).slice(0, 200)}`);
-  const t = await r.text(); return t ? JSON.parse(t) : null;
-}
-const upsert = (table: string, rows: unknown) => rest(table, { method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify(rows) });
-const insert = (table: string, rows: unknown) => rest(table, { method: "POST", body: JSON.stringify(rows) });
-const select = (q: string) => rest(q, { method: "GET", headers: { Prefer: "" } });
+// ─── PostgREST client and persistence (persist.ts; the same requests are tested against a local PostgREST) ───
+const db = makeDb(`${SB}/rest/v1`, KEY, (u, i) => fetch(u, i));
+const { rest, upsert, insert, select } = db;
+const writeAgentRows = (sym: string, rows: Parameters<typeof writeLog>[2]) => writeLog(db, sym, rows);
 
 // cron key lives in Supabase Vault; read via a service-role-only RPC (env var overrides if set)
 let _key: string | null = null;
@@ -74,8 +72,10 @@ async function cronKey(): Promise<string> {
 async function loadState(sym: Sym = "BTC"): Promise<State | null> {
   const r = await select(`dbv5_state?id=eq.${rowId(sym)}&select=state`); return r?.[0]?.state ?? null;
 }
-async function saveState(st: State, lastRun: Record<string, unknown>, sym: Sym = "BTC") {
-  await rest(`dbv5_state?id=eq.${rowId(sym)}`, { method: "PATCH", body: JSON.stringify({ state: st, last_run: lastRun, updated_at: new Date().toISOString() }) });
+// every book-state write is a compare-and-set on state._rev (persist.ts): a run whose loaded revision is no longer current
+// (e.g. an expired-lease worker) gets StateConflict and writes nothing
+async function saveState(st: State, lastRun: Record<string, unknown> | null, sym: Sym = "BTC") {
+  await saveStateCAS(db, rowId(sym), st as unknown as Record<string, unknown>, lastRun);
 }
 type Ev = { kind: string; strategy?: string | null; msg: string; data?: unknown; symbol?: Sym };
 async function events(evs: Ev[]) { if (evs.length) await insert("dbv5_events", evs.map(e => ({ kind: e.kind, strategy: e.strategy ?? null, msg: e.msg, data: e.data ?? null, symbol: e.symbol ?? "BTC" }))); }
@@ -94,7 +94,7 @@ async function recordDecision(c: Awaited<ReturnType<typeof captureDecision>>) {
   if (ok !== true && ok !== false) throw new Error("decision record not acknowledged");
 }
 async function push(title: string, body: string) {
-  if (!NTFY) return; try { await fetch(`https://ntfy.sh/${NTFY}`, { method: "POST", headers: { Title: title }, body }); } catch { /* optional */ }
+  if (!NTFY) return; try { await fetch(`https://ntfy.sh/${NTFY}`, { method: "POST", headers: { Title: title }, body, signal: AbortSignal.timeout(3000) }); } catch { /* optional, bounded to 3 s */ }
 }
 
 // v3 carry-over: start v5 from the cloud v3 equity so the run is continuous
@@ -114,16 +114,24 @@ async function runLocked() {
   const got = await rest("rpc/dbv5_lease", { method: "POST", headers: { Prefer: "" }, body: JSON.stringify({ owner, seconds: 120 }) });
   if (got !== true) return { ok: true, skipped: "another run holds the lease" };
   try {
-    const out: Record<string, unknown> = {};
+    const out: Record<string, unknown> = {}, later: { sym: Sym; fn: () => Promise<void> }[] = [];
+    // phase 1, per book: data, position management, entries, durable state save, equity and events. Phase 2 (below) holds only the
+    // advisory and recoverable work (work-log flush, desk / LLM review, agent rows), so one book's advisory work never delays another
+    // book's management, and a failure in one book's phase 1 does not stop the next book.
     for (const sym of BOOKS) {
-      try { out[sym] = await runOnce(sym); }
+      try { out[sym] = await runOnce(sym, (fn) => later.push({ sym, fn })); }
       catch (e) { const msg = `${sym} book: ${(e as Error).message}`.slice(0, 300); out[sym] = { ok: false, error: msg }; try { await events([{ kind: "ERROR", msg, symbol: sym }]); } catch { /* ignore */ } }
+    }
+    for (const { sym, fn } of later) {
+      try { await fn(); }
+      catch (e) { try { await events([{ kind: "ERROR", msg: `${sym} advisory phase: ${(e as Error).message}`.slice(0, 300), symbol: sym }]); } catch { /* the work stays pending in the book state */ } }
     }
     return { ok: true, version: VERSION, books: out };
   } finally { try { await rest("rpc/dbv5_release", { method: "POST", body: JSON.stringify({ owner }) }); } catch { /* lease expires anyway */ } }
 }
 
-async function runOnce(sym: Sym = "BTC") {
+async function runOnce(sym: Sym = "BTC", scheduler?: (fn: () => Promise<void>) => void) {
+  const pending: (() => Promise<void>)[] = [], defer = scheduler ?? ((fn: () => Promise<void>) => { pending.push(fn); });
   const now = Date.now(); const evs: Ev[] = []; const notes: string[] = [];
   const isCrypto = sym !== "GOLD", tag = sym === "BTC" ? "" : `${sym} `;
   let st = await loadState(sym);
@@ -144,7 +152,8 @@ async function runOnce(sym: Sym = "BTC") {
 
   // 1) manage an open position on the 1m path since the last processed bar
   const closed: Trade[] = [];
-  if (st.pos) {
+  const posBefore = snapshotPos(st.pos);   // Theo's work log compares against this (worklog.ts); observational only
+  if (st.pos) try {
     const since = Math.max(st.lastBarT, st.pos.openT);
     const mins = Math.min(1000, Math.ceil((now - since) / 60_000) + 2);
     const m1 = (await candles("1m", mins, now, "hyperliquid", sym)).bars.filter((b: Bar) => b.ct > since);
@@ -152,11 +161,16 @@ async function runOnce(sym: Sym = "BTC") {
     if (m1.length) st.lastBarT = m1[m1.length - 1].ct;
     for (const t of closed) {
       const msg = `${t.strategy} ${t.dir.toUpperCase()} closed ${t.reason} · net $${t.net.toFixed(2)} (${t.r >= 0 ? "+" : ""}${t.r.toFixed(2)}R)`;
-      evs.push({ kind: t.net > 0 ? "WIN" : "LOSS", strategy: t.strategy, msg: tag + msg, data: { r: t.r, net: t.net, decisionId: decisionIdFor(t.id) }, symbol: sym });
-      await push(`DeskBot ${tag}${t.net > 0 ? "WIN" : "LOSS"}`, `${msg} · Eq $${st.equity.toFixed(2)}`);
+      evs.push({ kind: t.net > 0 ? "WIN" : "LOSS", strategy: t.strategy, msg: tag + msg, data: { r: t.r, net: t.net, decisionId: decisionIdFor(t.id), work: workKey(t.id, "close", "final") }, symbol: sym });
+      await push(`DeskBot ${tag}${t.net > 0 ? "WIN" : "LOSS"}`, pushClose("", t));   // public relay: R only (egress.ts)
     }
-    if (st.pos) for (const e of st.pos.exits) if (e.t > since && e.kind !== "stop") evs.push({ kind: e.kind.toUpperCase(), strategy: st.pos.strategy, symbol: sym, msg: `${tag}${e.kind.toUpperCase()} filled @ ${e.px.toFixed(1)} · stop → ${st.pos.stop.toFixed(1)}`, data: { decisionId: decisionIdFor(st.pos.id), px: e.px, qty: e.qty, stop: st.pos.stop } });
-  } else st.lastBarT = now;
+    if (st.pos) for (const e of st.pos.exits) if (e.t > since && e.kind !== "stop") evs.push({ kind: e.kind.toUpperCase(), strategy: st.pos.strategy, symbol: sym, msg: `${tag}${e.kind.toUpperCase()} filled @ ${e.px.toFixed(1)} · stop → ${st.pos.stop.toFixed(1)}`, data: { decisionId: decisionIdFor(st.pos.id), px: e.px, qty: e.qty, stop: st.pos.stop, work: workKey(st.pos.id, e.kind.startsWith("tp") ? "target_fill" : "exit", `${e.kind}:${e.t}`) } });
+  } catch (e) {
+    // record the failure once per position and stuck bar, then fail the run exactly as before
+    if (posBefore) await writeAgentRows(sym, [managerFailure(sym, posBefore, st.lastBarT, e, decisionIdFor)]).catch(() => {});   // best effort; the run's ERROR event is the primary record
+    throw e;
+  }
+  else st.lastBarT = now;
 
   // 1b) news read (every NEWS_EVERY_MIN). Failure here never stops position management above.
   const sx = st as State & { _news?: NewsRead; _aiUsage?: Usage };
@@ -184,7 +198,7 @@ async function runOnce(sym: Sym = "BTC") {
   if (st.pos) {
     const r = traderManage(st, snap, S, m1, snap.price, now); traderActs = r.acts;
     for (const a of r.acts) evs.push({ kind: "MANAGE", strategy: st.pos?.strategy ?? r.closed?.strategy ?? null, msg: tag + a, symbol: sym, data: { decisionId: decisionIdFor((st.pos?.id ?? r.closed?.id)!), stop: st.pos?.stop ?? null } });
-    if (r.closed) { closed.push(r.closed); const t = r.closed; evs.push({ kind: t.net > 0 ? "WIN" : "LOSS", strategy: t.strategy, msg: `${tag}${t.strategy} ${t.dir.toUpperCase()} closed by trade manager · net $${t.net.toFixed(2)} (${t.r >= 0 ? "+" : ""}${t.r.toFixed(2)}R)`, data: { r: t.r, net: t.net, decisionId: decisionIdFor(t.id) }, symbol: sym }); }
+    if (r.closed) { closed.push(r.closed); const t = r.closed; evs.push({ kind: t.net > 0 ? "WIN" : "LOSS", strategy: t.strategy, msg: `${tag}${t.strategy} ${t.dir.toUpperCase()} closed by trade manager · net $${t.net.toFixed(2)} (${t.r >= 0 ? "+" : ""}${t.r.toFixed(2)}R)`, data: { r: t.r, net: t.net, decisionId: decisionIdFor(t.id), work: workKey(t.id, "close", "final") }, symbol: sym }); }
   }
   let action = st.pos ? "HOLD" : "SKIP"; let decision: unknown = null;
   let deskSignals: Awaited<ReturnType<typeof evaluate>>["signals"] = []; let deskRejects: Awaited<ReturnType<typeof evaluate>>["rejects"] = [];
@@ -242,7 +256,7 @@ async function runOnce(sym: Sym = "BTC") {
         opened = { strategy: sig.strategy, dir: sig.dir, entry: p.entry, stop: p.stop, reentry: !!sig.reentry, why: sig.why }; action = `OPEN_${sig.dir.toUpperCase()}`;
         const msg = `${sig.strategy} ${sig.dir.toUpperCase()} @ ${p.entry.toFixed(1)} · stop ${p.stop.toFixed(1)} · TP ${p.tp1.toFixed(0)}/${p.tp2.toFixed(0)}/${p.tp3.toFixed(0)} · risk $${p.riskAmt.toFixed(2)} · score ${sig.score}`;
         evs.push({ kind: "OPEN", strategy: sig.strategy, msg: tag + msg, data: { why: sig.why, regime: sig.regime, qty: p.originalQty, flow, decisionId: decisionIdFor(p.id) }, symbol: sym });
-        await push(`DeskBot ${tag}${action}`, msg);
+        await push(`DeskBot ${tag}${action}`, pushOpen("", sig, p));   // public relay: no risk dollars (egress.ts)
       }
       if (!opened) {
         const top = rejects.filter(r => !/Waits for 15m close/.test(r.reason)).slice(0, 4).map(r => `${r.strategy}: ${r.reason}`);
@@ -272,38 +286,65 @@ async function runOnce(sym: Sym = "BTC") {
   // desk agents: chart read + validator/risk/re-entry views, persisted to dbv5_agent_log (never allowed to break a run)
   const desk = runDesk({ snap, S, m1, st, signals: deskSignals, rejects: deskRejects, traderActs, opened, closedNow: closed.length, ms: Date.now() - now });
   const rows: AgentRow[] = [...desk.rows];
-  const ai = { providers: providersFromEnv().map((p) => p.name), usage: sx._aiUsage ?? {} };
+  // Theo's records go into an outbox inside the book state, so they persist in the SAME write as the management they describe;
+  // they are removed only after the work log confirms them (flushWork below), so a failed log write is retried next run.
+  const wx = st as State & { _workOutbox?: WorkRow[] };
+  wx._workOutbox = mergeOutbox(wx._workOutbox, managerRows(sym, posBefore, snapshotPos(st.pos), closed, decisionIdFor, { snapT: posBefore ? snap.T : null, acts: traderActs }));
+  if (!wx._workOutbox.length) delete wx._workOutbox;
+  // providers = names usable for the desk committee (the tower seats); policy = the five separate facts per provider and feature
+  const ai = { providers: providersFromEnv("committee").map((p) => p.name), policy: providerPolicy(aiFeaturesOf(), sx._aiUsage ?? {}, now), usage: sx._aiUsage ?? {} };
   const lastRun = { ts: new Date(now).toISOString(), sym, action, trader: { acts: traderActs, plan: st.pos?.plan ?? [] }, source, integrity, news, ai, upnl: +upnl.toFixed(2), market, decision, risk: dynamicRisk(st.equity), desk: desk.summary, coverage: covNow, catchup, provenanceError, ms: Date.now() - now };
   st.version = VERSION;
   await saveState(st, lastRun, sym);
   await upsert("dbv5_equity", [{ symbol: sym, ts: new Date(now).toISOString(), equity: +st.equity.toFixed(4), upnl: +upnl.toFixed(4), price: snap.price }]);
   await events(evs);
-  // Desk review layer (advisory). Runs AFTER state and ledger are saved so slow or failing providers can never cost a persisted trade.
-  // Post-trade reviews are deterministic and free; the LLM roles run only for a trade opened this run and only when a provider is configured.
-  if (DESK_WORKFLOW) {
-    try {
-      for (const t of closed) rows.push({ agent: "desk-postmortem", input_summary: `${t.id} ${t.strategy} ${t.dir}`, output: { ref: t.id, authority: "advisory", ...postTradeReview({ ...t, why: t.why }) } });
-      const p = opened ? st.pos : null;
-      if (p) {
-        const checks = preTradeChecks({ plan: { dir: p.dir, entry: p.entry, stop0: p.stop0, tp1: p.tp1, maxHoldH: p.maxHoldH, strategy: p.strategy }, atr15: snap.atr15, hour: snap.hour, funding: ctx?.funding ?? null, costs: { taker: CFG.TAKER_FEE, slippage: CFG.SLIPPAGE }, newsRisk: sx._news?.risk ?? null, levels: desk.chart.levels });
-        const usageBefore = JSON.stringify(sx._aiUsage ?? {});
-        const analysts = analystReports({ price: snap.price, regime: snap.regime, bias: desk.chart.bias ?? null, trend: { "5m": snap.st5, "15m": snap.st15, "1h": snap.st1h, "4h": snap.st4h }, rsi15: snap.rsi15, rsi1h: snap.rsi1h, chop15: snap.chop15, vwapDev: snap.vwapDev, atr15: snap.atr15,
-          support: desk.chart.support ?? null, resistance: desk.chart.resistance ?? null, funding: ctx?.funding ?? null, oi: ctx?.oi ?? null, fng: fng?.value ?? null, flow24: flow?.imb24 ?? null,
-          newsRisk: sx._news?.risk ?? null, newsReason: sx._news?.reason ?? null, headlines: (sx._news?.headlines ?? []).map((h) => h.title) });
-        // memory: the last closed trades of this strategy on this book (TradingAgents' reflection memory, kept deterministic)
-        let lessons: string[] = [];
-        try { lessons = lessonsFrom(await select(`dbv5_trades?select=strategy,dir,r,reason,close_t&symbol=eq.${sym}&strategy=eq.${encodeURIComponent(p.strategy)}&order=close_t.desc&limit=8`)); } catch { /* memory is optional */ }
-        const wf = await runDeskWorkflow({ ref: p.id, sym, strategy: p.strategy, dir: p.dir, regime: p.regime, why: p.why, newsRisk: sx._news?.risk ?? null, chart: deskChart(desk.chart), checks, analysts, lessons,
-          plan: { dir: p.dir, entry: p.entry, stop0: p.stop0, tp1: p.tp1, tp2: p.tp2, tp3: p.tp3, maxHoldH: p.maxHoldH, strategy: p.strategy, riskAmt: p.riskAmt } },
-          { providers: AGENT_AI ? providersFromEnv() : [], usage: (sx._aiUsage ??= {}), now, debateRounds: DEBATE_ROUNDS, riskRounds: RISK_ROUNDS });
-        rows.push(...wf.rows);
-        // FILTER-1 shadow verdicts: recorded now, before this trade has an outcome. Append-only; a failure here is visible and changes nothing else.
-        try { await insert("dbv5_filter_verdicts", verdictsFor(p.id, sym, p.strategy, checks, wf.rows)); } catch (e) { notes.push(`filter verdicts: ${(e as Error).message}`.slice(0, 120)); }
-        if (JSON.stringify(sx._aiUsage ?? {}) !== usageBefore) await saveState(st, lastRun, sym);   // persist the provider call counters (daily caps) after the LLM stages
+  // phase 2 (advisory, recoverable): runs after EVERY book's phase 1 (runLocked). The global CFG belongs to whichever book ran last, so
+  // this book's own configuration is applied again first.
+  defer(async () => {
+    applyCfg(st.cfg); setMlAsset(sym === "GOLD");
+    // flush Theo's outbox (persist.ts flushOutbox): batches of conflict-safe inserts, each acknowledged by a scoped RPC that removes
+    // exactly its keys. Pending records are never dropped; a failure is an ERROR event and the rest stays for the next run.
+    if (wx._workOutbox?.length) {
+      try {
+        const f = await flushOutbox(wx, { insert: (rs) => writeAgentRows(sym, rs), ack: (keys) => ackWork(db, rowId(sym), keys) });
+        if (f.error) await events([{ kind: "ERROR", msg: `${tag}work log write failed; ${f.pending} record(s) pending (${f.delivered} delivered this run): ${f.error}`.slice(0, 280), symbol: sym }]);
+        // last flush result for status / Theo's desk (an event, so it is recorded even when the work log itself is unavailable)
+        await events([{ kind: "WORKLOG", symbol: sym, msg: `${tag}work log flush: ${f.delivered} delivered, ${f.pending} pending${f.budgetExhausted ? " (per-run budget reached; continues next run)" : ""}${f.error ? " · failed" : ""}`.slice(0, 280), data: { delivered: f.delivered, pending: f.pending, batches: f.batches, ms: f.ms, budgetExhausted: f.budgetExhausted, error: f.error } }]).catch(() => {});
+        if (f.needsStateSave) await saveState(st, lastRun, sym);   // RPC not migrated: persist the trimmed outbox by compare-and-set
+        if (f.mode === "check-then-insert") notes.push("work log: work_key column missing; deduplicated by check-then-insert");
+      } catch (e) {
+        try { await events([{ kind: "ERROR", msg: `${tag}work log flush: ${(e as Error).message}`.slice(0, 280), symbol: sym }]); } catch { /* the outbox is still saved */ }
       }
-    } catch (e) { notes.push(`desk review: ${(e as Error).message}`.slice(0, 120)); }
-  }
-  if (rows.length) { try { await insert("dbv5_agent_log", rows.map((r) => ({ symbol: sym, agent: r.agent, input_summary: r.input_summary, output: r.output, provider: r.provider ?? null, ms: r.ms ?? null, error: r.error ?? null }))); } catch (e) { notes.push(`agent log: ${(e as Error).message}`.slice(0, 120)); } }
+    }
+    // Desk review layer (advisory). Runs AFTER state and ledger are saved so slow or failing providers can never cost a persisted trade.
+    // Post-trade reviews are deterministic and free; the LLM roles run only for a trade opened this run and only when a provider is configured.
+    if (DESK_WORKFLOW) {
+      try {
+        for (const t of closed) rows.push({ agent: "desk-postmortem", input_summary: `${t.id} ${t.strategy} ${t.dir}`, output: { ref: t.id, authority: "advisory", ...postTradeReview({ ...t, why: t.why }) } });
+        const p = opened ? st.pos : null;
+        if (p) {
+          const checks = preTradeChecks({ plan: { dir: p.dir, entry: p.entry, stop0: p.stop0, tp1: p.tp1, maxHoldH: p.maxHoldH, strategy: p.strategy }, atr15: snap.atr15, hour: snap.hour, funding: ctx?.funding ?? null, costs: { taker: CFG.TAKER_FEE, slippage: CFG.SLIPPAGE }, newsRisk: sx._news?.risk ?? null, levels: desk.chart.levels });
+          const usageBefore = JSON.stringify(sx._aiUsage ?? {});
+          const analysts = analystReports({ price: snap.price, regime: snap.regime, bias: desk.chart.bias ?? null, trend: { "5m": snap.st5, "15m": snap.st15, "1h": snap.st1h, "4h": snap.st4h }, rsi15: snap.rsi15, rsi1h: snap.rsi1h, chop15: snap.chop15, vwapDev: snap.vwapDev, atr15: snap.atr15,
+            support: desk.chart.support ?? null, resistance: desk.chart.resistance ?? null, funding: ctx?.funding ?? null, oi: ctx?.oi ?? null, fng: fng?.value ?? null, flow24: flow?.imb24 ?? null,
+            newsRisk: sx._news?.risk ?? null, newsReason: sx._news?.reason ?? null, headlines: (sx._news?.headlines ?? []).map((h) => h.title) });
+          // memory: the last closed trades of this strategy on this book (TradingAgents' reflection memory, kept deterministic)
+          let lessons: string[] = [];
+          try { lessons = lessonsFrom(await select(`dbv5_trades?select=strategy,dir,r,reason,close_t&symbol=eq.${sym}&strategy=eq.${encodeURIComponent(p.strategy)}&order=close_t.desc&limit=8`)); } catch { /* memory is optional */ }
+          const wf = await runDeskWorkflow({ ref: p.id, sym, strategy: p.strategy, dir: p.dir, regime: p.regime, why: p.why, newsRisk: sx._news?.risk ?? null, chart: deskChart(desk.chart), checks, analysts, lessons,
+            plan: { dir: p.dir, entry: p.entry, stop0: p.stop0, tp1: p.tp1, tp2: p.tp2, tp3: p.tp3, maxHoldH: p.maxHoldH, strategy: p.strategy } },
+            { providers: AGENT_AI ? providersFromEnv("committee") : [], usage: (sx._aiUsage ??= {}), now, debateRounds: DEBATE_ROUNDS, riskRounds: RISK_ROUNDS });
+          rows.push(...wf.rows);
+          // FILTER-1 shadow verdicts: recorded now, before this trade has an outcome. Append-only; a failure here is visible and changes nothing else.
+          try { await insert("dbv5_filter_verdicts", verdictsFor(p.id, sym, p.strategy, checks, wf.rows)); } catch (e) { notes.push(`filter verdicts: ${(e as Error).message}`.slice(0, 120)); }
+          // persist the provider call counters (daily caps) after the LLM stages; compare-and-set like every other write
+          if (JSON.stringify(sx._aiUsage ?? {}) !== usageBefore) await saveState(st, lastRun, sym).catch(async (e) => { await events([{ kind: "ERROR", msg: `${tag}provider counters not saved: ${(e as Error).message}`.slice(0, 280), symbol: sym }]).catch(() => {}); });
+        }
+      } catch (e) { notes.push(`desk review: ${(e as Error).message}`.slice(0, 120)); }
+    }
+    if (rows.length) { try { await writeAgentRows(sym, rows); } catch (e) { try { await events([{ kind: "ERROR", msg: `${tag}agent log write failed: ${(e as Error).message}`.slice(0, 280), symbol: sym }]); } catch { /* ignore */ } } }
+  });
+  for (const fn of pending) await fn();   // direct callers without a scheduler keep the old inline order
   return { ok: true, sym, version: VERSION, integrity, action, equity: +st.equity.toFixed(2), upnl: +upnl.toFixed(2), pos: st.pos ? { strategy: st.pos.strategy, dir: st.pos.dir, entry: st.pos.entry, stop: st.pos.stop, tp1: st.pos.tp1 } : null, trader: traderActs, closed: closed.length, source, news: news ? { risk: news.risk, by: news.by } : null, provenanceError, ms: Date.now() - now };
 }
 
@@ -360,8 +401,11 @@ async function experimentStatus() {
 // ─── multi-market scan (read-only; every 15 min by pg_cron). Runs the bot's own rules on each market with a fresh state. ──
 async function runScan() {
   const now = Date.now(), t0 = now;
-  const cfgOf = async (sym: Sym) => (await select(`dbv5_state?id=eq.${rowId(sym)}&select=state->cfg`).catch(() => []))?.[0]?.cfg ?? undefined;
-  const [btcCfg, goldCfg] = await Promise.all([cfgOf("BTC"), cfgOf("GOLD")]);
+  // each book's config AND its per-strategy switches: both decide what the book evaluates (engine.offReason)
+  const bookOf = async (sym: Sym) => { const r = (await select(`dbv5_state?id=eq.${rowId(sym)}&select=cfg:state->cfg,enabled:state->enabled`).catch(() => []))?.[0]; return { cfg: r?.cfg ?? undefined, enabled: (r?.enabled ?? {}) as Record<string, boolean> }; };
+  const [btcBook, goldBook] = await Promise.all([bookOf("BTC"), bookOf("GOLD")]);
+  const btcCfg = btcBook.cfg, goldCfg = goldBook.cfg;
+  const laneTrace: Record<string, { book: LaneTrace; shadow: LaneTrace; bookCfgId: string; shadowCfgId: string | null; shadowIds: string[] }> = {};
   const syms = (Object.keys(SYMBOLS) as Sym[]).sort((a, b) => (PRIORITY[a] ?? 3) - (PRIORITY[b] ?? 3)), markets: unknown[] = [];
   // forward tracking (track.ts): best-effort; a failure here is reported and never stops the scan
   const trackErrors: string[] = [];
@@ -382,14 +426,33 @@ async function runScan() {
             const c = (row as { call?: { lean: string; votes: number; source: string; cautions: string[]; t: number; px: number; atr: number } }).call;
             if (c && c.lean !== "NONE" && mine.every((x) => scored.some((y) => y.id === x.id))) newCalls.push({ sym, t: c.t, horizon_h: CALL_HORIZON_H, lean: c.lean, votes: c.votes, source: c.source, cautions: c.cautions, px: c.px, atr: c.atr });
           } catch (e) { trackErrors.push(`${sym} call: ${(e as Error).message}`.slice(0, 120)); }
-          try { fresh.push(...signalsOverBars(sym, frames)); for (const o of open.filter((x) => x.sym === sym)) { const u = resolve(o, m5.bars); if (u.status !== "open" || u.checked_t !== o.checked_t) updates.push(u); } }
+          try {
+            // book lane: the book's config and its own switches (P1 books); other markets use the BTC config, untested there
+            const book = sym === "GOLD" ? goldBook : btcBook, isBook = PRIORITY[sym] === 1;
+            laneTrace[sym] = { book: {}, shadow: {}, bookCfgId: bookCfgId(book.cfg), shadowCfgId: null, shadowIds: [] }; const lt = laneTrace[sym];
+            fresh.push(...signalsOverBars(sym, frames, 3, { enabled: isBook ? book.enabled : undefined, cfgId: lt.bookCfgId, trace: lt.book }));
+            // shadow lane (P1 books only): every evaluator the book does not evaluate, by any mechanism, under SHADOW-1; book config
+            // restored by withConfig even if evaluation throws. Never traded, no book state, no promotion credit.
+            if (isBook) {
+              const off = offInBook(book.enabled);
+              if (off.size) { lt.shadowCfgId = shadowCfgId(book.cfg); lt.shadowIds = [...off];
+                fresh.push(...withConfig(shadowCfg(book.cfg), book.cfg, () => signalsOverBars(sym, frames, 3, { only: off, lane: "shadow", cfgId: lt.shadowCfgId!, trace: lt.shadow }))); }
+            } for (const o of open.filter((x) => x.sym === sym)) { const u = resolve(o, m5.bars); if (u.status !== "open" || u.checked_t !== o.checked_t) updates.push(u); } }
           catch (e) { trackErrors.push(`${sym}: ${(e as Error).message}`.slice(0, 120)); }
           return { ...row, name: SYMBOLS[sym].name, book: PRIORITY[sym] === 1, priority: PRIORITY[sym] ?? 3, source: m5.source };
         } catch (e) { return { sym, ok: false, error: (e as Error).message.slice(0, 120), priority: PRIORITY[sym] ?? 3 }; }
       })));
     }
   } finally { applyCfg(); setMlAsset(false); }
-  if (fresh.length) await rest("dbv5_scan_signals?on_conflict=sym,strategy,bar_t", { method: "POST", headers: { Prefer: "resolution=ignore-duplicates,return=minimal" }, body: JSON.stringify(fresh.map((x) => ({ ...x, checked_t: x.bar_t }))) }).catch((e) => trackErrors.push(`insert: ${(e as Error).message}`.slice(0, 120)));
+  // older schema without the lane column: keep the book rows, drop the shadow rows, and say so
+  // identity is (sym, strategy, bar_t, lane): the same strategy and bar can exist once per lane, so a config transition can
+  // never let one lane suppress the other. Before the migration (no lane / old 3-column key) only book rows are written.
+  const sigInsert = (laneAware: boolean) => { const q = signalInsertRequest(fresh, laneAware); return rest(q.path, q.init); };
+  if (fresh.length) await sigInsert(true).catch(async (e) => {
+    if (!/lane|cfg_id|ON CONFLICT|unique or exclusion constraint/i.test(String((e as Error).message))) throw e;
+    trackErrors.push("shadow lane skipped: lane identity not migrated (book rows written with the old key)");
+    if (fresh.some((x) => x.lane !== "shadow")) await sigInsert(false);
+  }).catch((e) => trackErrors.push(`insert: ${(e as Error).message}`.slice(0, 120)));
   for (const u of updates) {
     const body = u.status === "open" ? { checked_t: u.checked_t } : { status: u.status, checked_t: u.checked_t, exit_t: u.exit_t, exit_px: u.exit_px, r_gross: u.r_gross, r_net: u.r_net, resolved_at: new Date().toISOString() };
     await rest(`dbv5_scan_signals?id=eq.${u.id}&status=eq.open`, { method: "PATCH", body: JSON.stringify(body) }).catch((e) => trackErrors.push(`update ${u.id}: ${(e as Error).message}`.slice(0, 120)));
@@ -398,16 +461,19 @@ async function runScan() {
   if (newCalls.length) await rest("dbv5_calls?on_conflict=sym,t", { method: "POST", headers: { Prefer: "resolution=ignore-duplicates,return=minimal" }, body: JSON.stringify(newCalls) }).catch((e) => trackErrors.push(`calls insert: ${(e as Error).message}`.slice(0, 120)));
   const deriv = await Promise.all((["BTC", "ETH"] as const).map((c) => derivatives(c, now).catch((e) => ({ currency: c, errors: [(e as Error).message.slice(0, 80)] }))));
   const row = { markets: rankScan(markets as never), deriv, note: SCAN_NOTE, ms: Date.now() - t0 };
-  await insert("dbv5_scans", [row]);
+  // per-worker telemetry for the tower (call maker / setup tracker / options reader) and lane telemetry (which evaluators
+  // each lane invoked, under which config id, with inputs present); additive column, older schema tolerated
+  const work = { lanes: laneTrace, shadowVersion: SHADOW_VERSION, calls: { new: newCalls.length, scored: scored.length, open: openCalls.length }, tracker: { new: fresh.length, resolved: updates.filter((u) => u.status !== "open").length, open: open.length }, errors: trackErrors, derivErrors: deriv.flatMap((d) => ((d as { errors?: string[] }).errors ?? []).map((x) => `${(d as { currency: string }).currency}: ${x}`)) };
+  await insert("dbv5_scans", [{ ...row, work }]).catch(async (e) => { if (!/work/.test(String((e as Error).message))) throw e; await insert("dbv5_scans", [row]); });
   return { ok: true, markets: markets.length, setups: (row.markets as { setups?: unknown[] }[]).reduce((a, m) => a + (m.setups?.length ?? 0), 0), calls: { new: newCalls.length, scored: scored.length }, tracked: { new: fresh.length, resolved: updates.filter((u) => u.status !== "open").length, open: open.length, errors: trackErrors }, ms: row.ms };
 }
 
 // forward record per market for the status payload (null until the table exists)
 async function trackStatus() {
   try {
-    const rows = await select("dbv5_scan_signals?select=sym,strategy,dir,bar_t,entry,stop,tp1,status,r_net,exit_t,score&order=id.desc&limit=5000");
+    const rows = await select("dbv5_scan_signals?select=sym,strategy,dir,bar_t,entry,stop,tp1,status,r_net,exit_t,score,lane,cfg_id&order=id.desc&limit=5000").catch(() => select("dbv5_scan_signals?select=sym,strategy,dir,bar_t,entry,stop,tp1,status,r_net,exit_t,score&order=id.desc&limit=5000"));
     const calls = await select("dbv5_calls?select=sym,t,lean,votes,source,cautions,px,status,hit,move_pct,move_atr&order=id.desc&limit=5000").catch(() => []);
-    return { markets: trackRecord(rows ?? []), recent: (rows ?? []).slice(0, 25), promotion: PROMOTION.rule, calls: callRecord(calls ?? []), recentCalls: (calls ?? []).slice(0, 40) };
+    return { markets: trackRecord(rows ?? []), shadow: shadowRecord(rows ?? []), recent: (rows ?? []).slice(0, 25), promotion: PROMOTION.rule, calls: callRecord(calls ?? []), recentCalls: (calls ?? []).slice(0, 40) };
   } catch { return null; }
 }
 
@@ -420,13 +486,16 @@ async function status() {
     select("dbv5_backtests?select=ran_at,days,results&results->>label=like.LIVE_CONFIG*&order=id.desc&limit=1"),
     select("dbv5_agent_log?select=ts,symbol,agent,input_summary,output,provider,error&order=id.desc&limit=200").catch(() => []),
   ]);
-  const [scanRows, track] = await Promise.all([select("dbv5_scans?select=ts,markets,deriv,note,ms&order=id.desc&limit=1").catch(() => []), trackStatus()]);
+  const [scanRows, track] = await Promise.all([select("dbv5_scans?select=ts,markets,deriv,note,ms,work&order=id.desc&limit=1").catch(() => select("dbv5_scans?select=ts,markets,deriv,note,ms&order=id.desc&limit=1")).catch(() => []), trackStatus()]);
   const scan = scanRows?.[0] ?? null;
+  const flushFails = await select(`dbv5_events?select=ts,symbol,msg&kind=eq.ERROR&msg=ilike.*work%20log*&ts=gte.${new Date(Date.now() - 86400_000).toISOString()}&order=id.desc&limit=50`).catch(() => null);
+  const lastFlush = await select("dbv5_events?select=ts,symbol,data&kind=eq.WORKLOG&order=id.desc&limit=4").catch(() => null);
   const st = s?.[0]?.state ?? null;
   const experiment = await experimentStatus();
   const config = resolvedCfg(st?.cfg);
   const integrity = await integrityFor("BTC", config);
-  if (st) { delete st._aiUsage; }
+  const workBacklog: Record<string, unknown> = { BTC: backlog(st) };
+  if (st) { delete st._aiUsage; delete st._workOutbox; }
   const books: Record<string, unknown> = {};
   for (const sym of BOOKS.filter((b) => b !== "BTC")) {
     const [r, eqb] = await Promise.all([
@@ -434,32 +503,27 @@ async function status() {
       select(`dbv5_equity?select=ts,equity,upnl,price&symbol=eq.${sym}&ts=gte.${new Date(Date.now() - 14 * 86400_000).toISOString()}&order=ts.asc`),
     ]);
     const c = (eqb ?? []).filter((_: unknown, i: number, a: unknown[]) => a.length < 400 || i % Math.ceil(a.length / 400) === 0 || i === a.length - 1);
-    books[sym] = r?.[0] ? { name: SYMBOLS[sym].name, hl: SYMBOLS[sym].hl, integrity: await integrityFor(sym, resolvedCfg(r[0].state?.cfg)), state: r[0].state, lastRun: r[0].last_run, updated: r[0].updated_at, curve: c } : { name: SYMBOLS[sym].name, hl: SYMBOLS[sym].hl, state: null };
+    books[sym] = r?.[0] ? { name: SYMBOLS[sym].name, hl: SYMBOLS[sym].hl, integrity: await integrityFor(sym, resolvedCfg(r[0].state?.cfg)), config: (({ RISK_SCALE, XC_TF, HSW_TF }) => ({ RISK_SCALE, XC_TF, HSW_TF }))(resolvedCfg(r[0].state?.cfg)), state: (({ _workOutbox, _aiUsage, ...rest }) => rest)(r[0].state ?? {}), work: backlog(r[0].state), lastRun: r[0].last_run, updated: r[0].updated_at, curve: c } : { name: SYMBOLS[sym].name, hl: SYMBOLS[sym].hl, state: null };
   }
+  for (const [k, b] of Object.entries(books)) if ((b as { work?: unknown }).work) workBacklog[k] = (b as { work?: unknown }).work;
   const curve = (eq ?? []).filter((_: unknown, i: number, a: unknown[]) => a.length < 600 || i % Math.ceil(a.length / 600) === 0 || i === a.length - 1);
-  return { version: VERSION, mode: "PAPER", now: new Date().toISOString(), updated: s?.[0]?.updated_at ?? null, integrity, state: st, lastRun: s?.[0]?.last_run ?? null, events: ev, agents: agents ?? [], trades: tr, curve, books, backtest: bt?.[0] ?? null, experiment, config, scan, track, chat: { enabled: !!CHAT_KEY, ai: providersFromEnv().map((p) => p.name) } };
+  return { version: VERSION, mode: "PAPER", now: new Date().toISOString(), updated: s?.[0]?.updated_at ?? null, integrity, state: st, lastRun: s?.[0]?.last_run ?? null, events: ev, agents: agents ?? [], trades: tr, curve, books, backtest: bt?.[0] ?? null, experiment, config, registry: { strategies: STRATEGIES, optIn: OPT_IN }, scan, track, work: { backlog: workBacklog, lastFlush: Array.isArray(lastFlush) ? lastFlush : null, flushFailures24h: Array.isArray(flushFails) ? flushFails.length : null, lastFlushFailure: Array.isArray(flushFails) && flushFails[0] ? flushFails[0] : null }, chat: { enabled: !!CHAT_KEY, ai: providersFromEnv("chat").map((p) => p.name) }, ai: { policy: providerPolicy(aiFeaturesOf(), (st as { _aiUsage?: Usage } | null)?._aiUsage ?? {}), providers: providersFromEnv("committee").map((p) => p.name), byFeature: { news: providersFromEnv("news").map((p) => p.name), committee: providersFromEnv("committee").map((p) => p.name), chat: providersFromEnv("chat").map((p) => p.name) }, agentAi: AGENT_AI, deskWorkflow: DESK_WORKFLOW, newsAi: NEWS_AI, newsMode: NEWS_MODE },
+    // real-account preparation: the registry/adapter contract (accounts.ts) exists, no broker is connected, funded orders are disabled
+    brokers: { connected: [] as string[], contract: "read-only (accounts.ts)", fundedOrders: "disabled" as const } };
 }
 
 // ─── AI assistant (owner only; password = DESKBOT_CHAT_KEY secret) ─────────
 const chatUsage: Usage = {};
 async function chatContext() {
+  // raw rows are read locally; only the allowlisted view (egress.ts chatFacts: R, counts, prices, %, config, market data) leaves the system
   const [s, tr, bt, nw] = await Promise.all([
     select("dbv5_state?id=eq.main&select=state,last_run,updated_at"),
-    select("dbv5_trades?select=symbol,strategy,dir,entry,exit_avg,net,r,reason,open_t,close_t&order=close_t.desc&limit=20"),
-    select("dbv5_backtests?select=ran_at,results->label,results->combined->all,results->combined->maxDD,results->combined->endEquity,results->from,results->to&order=id.desc&limit=4"),
+    select("dbv5_trades?select=symbol,strategy,dir,entry,exit_avg,r,reason,open_t,close_t&order=close_t.desc&limit=20"),
+    select("dbv5_backtests?select=ran_at,label:results->label,all:results->combined->all,maxDD:results->combined->maxDD,from:results->from,to:results->to&order=id.desc&limit=4"),
     select("dbv5_news?select=ts,risk,bias,reason,by&order=id.desc&limit=3"),
   ]);
-  const others = await select("dbv5_state?id=neq.main&select=id,state->equity,state->startEquity,state->pos,state->stats->all,state->cfg,last_run->action,last_run->market->price");
-  const st = s?.[0]?.state ?? {}, lr = s?.[0]?.last_run ?? {};
-  return {
-    version: VERSION, mode: "PAPER", updated: s?.[0]?.updated_at,
-    equity: st.equity, startEquity: st.startEquity, maxDD: st.maxDD, openPosition: st.pos ? { strategy: st.pos.strategy, dir: st.pos.dir, entry: st.pos.entry, stop: st.pos.stop, tp1: st.pos.tp1, tp2: st.pos.tp2, tp3: st.pos.tp3, tp1Done: st.pos.tp1Done } : null,
-    stats: st.stats, enabled: st.enabled, circuitBreaker: st.cb, liveConfig: st.cfg ?? {},
-    market: lr.market, lastAction: lr.action, lastDecision: lr.decision, news: lr.news,
-    recentTrades: tr, recentBacktests: bt, newsHistory: nw, editableKeys: Object.keys(EDITABLE),
-    note: "All fields above describe the BTC book. Other paper books (gold via PAXG) are in otherBooks. Chat proposals only change the BTC book.",
-    otherBooks: others,
-  };
+  const others = await select("dbv5_state?id=neq.main&select=id,pos:state->pos,all:state->stats->all,cfg:state->cfg,action:last_run->action,price:last_run->market->price");
+  return chatFacts({ version: VERSION, updated: s?.[0]?.updated_at, state: s?.[0]?.state ?? {}, lastRun: s?.[0]?.last_run ?? {}, trades: tr ?? [], backtests: bt ?? [], news: nw ?? [], others: others ?? [], editableKeys: Object.keys(EDITABLE) });
 }
 async function chatRoute(body: Record<string, unknown>) {
   const now = Date.now();
@@ -501,7 +565,7 @@ async function chatRoute(body: Record<string, unknown>) {
         const prev = sx.cfgHistory.pop(); if (!prev) return { ok: false, error: "nothing_to_undo" };
         st.cfg = prev.cfg as State["cfg"]; msg = `Owner undid last config change (back to ${new Date(prev.t).toISOString().slice(0, 16)} UTC)`;
       }
-      await rest("dbv5_state?id=eq.main", { method: "PATCH", body: JSON.stringify({ state: st }) });
+      await saveState(st, null, "BTC");   // compare-and-set: a run that advanced the book since loadState wins; the owner retries
       await events([{ kind: "CONFIG", msg }]);
       return { ok: true, cfg: st.cfg, history: sx.cfgHistory.length };
     } finally { try { await rest("rpc/dbv5_release", { method: "POST", body: JSON.stringify({ owner }) }); } catch { /* expires */ } }

@@ -68,3 +68,104 @@ Access this time worked: Supabase project inventory, SQL, logs and edge-function
 
 ## 29 Oct 2026 - PR #3 corrective revision (review of aeac165)
 Findings reproduced by the reviewer and fixed: (1) a failed replacement-entry evidence write discarded an already completed closure (fixed with a pre-entry state boundary; regression test fails when the entry is made to throw again); (2) replay could pass against different source (now binding: exit 3, never verified); (3) outcome reconciliation trusted stored pnl (now rebuilt independently; tampering tests); (4) SQL writer did not enforce input identity (now validated, locked, atomic; tested on real PostgreSQL 16 incl. concurrency and injected failure); (5) timing mislabeled run start as data receipt (now separate fields; unknown = null); (6) docs corrected, manager-close event now carries decisionId, committed .pyc removed and bytecode ignored. See the PR for exact test counts. No production migration or deployment was performed.
+
+## 30 Oct 2026 - W1 audit and W2 truthful-visibility slice (sandbox evidence; NOT deployed)
+- Identity: edge v24 pinned to 3e25392; Vercel production dpl_2V5vuDPQndNEG94J3mKmCDEYk2U7 from 3e25392 (tool read-back).
+- Runtime queries (Supabase SQL, read-only): 288/288 equity rows per book in 24 h; cron 0/408 failed; 25 scans since 17:46; ERROR events 0/7d; providers [] on both books; dbv5_decisions 0 (no entry since the provenance release); manager agent rows 1 vs 53 exit events in 7 d.
+- Tests run locally on the W2 branch: `npm run typecheck` pass; `npm test` 223/223 pass (new: tests/worklog.test.ts 5, tests/tower_workers.test.ts 5, desk_handler retry test 1). Browser smokes (Playwright, mocked network, SYNTHETIC status): tower, markets, scanner, workers: 0 page/console errors on desktop 1360×900 and mobile 390×844.
+- Pre-flight: the W2 bundle against the 29 Oct live book snapshots gives the same positions and equity as the v19 bundle on the same input (BTC 339.2622633013888, GOLD 319.00746503674634). The scan action writes only dbv5_scans.
+
+## 30 Oct 2026 - PR #19 revision after review of 33af114 (sandbox evidence; NOT deployed)
+- Reproduction before the fix:
+  - tests/tower_workers_rev.test.ts: 5/5 failed on 33af114, 5/5 pass now.
+  - worklog_identity scenarios: 3/5 failed against the 33af114 worklog (destination-keyed); both retry tests passed there too.
+  - Persistence handler test: failed on a 33af114 worktree (the outage lost the records); passes now.
+- Suite: `npm run typecheck` pass; `npm test` 235/235; `git diff --check` clean. Browser smokes tower/markets/scanner/workers: 0 errors at 1360x900 and 390x844.
+- Real PostgreSQL 16 (scripts/sql_test/work_key.sh): migration applied twice (idempotent). 16 concurrent `insert ... on conflict (work_key) do nothing` with the same key gave 1 row; 3 NULL-key rows coexist.
+- Not verified here: PostgREST's handling of `?columns=...&on_conflict=work_key` against the production schema (no PostgREST locally). It must be checked by a post-migration smoke before release is called verified.
+## 30 Oct 2026 - production observations (read-only SQL), 00:11 UTC
+- First entry since the provenance and committee releases: BTC HTF_TREND SHORT opened 00:00 UTC (V5-1793318461202) @ 77822.4, stop 80065.9, risk $6.85.
+  - dbv5_decisions 1 and dbv5_decision_inputs 4: decision provenance VERIFIED in production.
+  - desk-checks and desk-analysts rows written: deterministic committee stages VERIFIED.
+  - FILTER-1 first verdicts: rules arm skip (warning present), AI arm no_provider (abstain).
+- Coverage counters since 29 Oct 17:31: 81 bars per book, 0 missed bars, 0 missing due bars.
+  - BTC: HTF_TREND entered 1/2 due; SWEEP_REV 1 setup vetoed (score 60 < 72); TREND_MTF 81/81 no flip; VWAP_REVERT 27/27 regime-vetoed; SESSION_BO 27/27 outside window; 4 evaluators off.
+  - Gold: TREND_MTF 4 gate vetoes; VWAP_REVERT 27/27 regime-vetoed; EMA_CROSS 27/27 no cross; 3 evaluators off.
+- Closed paper trades by strategy (all history; no config identity before 29 Oct 17:26):
+  - BTC SWEEP_REV 15 (8 W, −0.84R); BTC SESSION_BO 5 (2 W, −0.48R)
+  - GOLD EMA_CROSS 7 (0 W, −6.12R); GOLD SWEEP_REV 5 (1 W, −2.38R); GOLD SESSION_BO 1 (−0.63R); GOLD TREND_MTF 1 (−0.05R)
+
+## 30 Oct 2026 - W3 branch evidence (sandbox; NOT deployed)
+- `npm run typecheck` pass; `npm test` 220/220; `git diff --check` clean.
+- Strategies smoke (SYNTHETIC counters, banner on screenshots): 11 matrix rows, no "(full)" label, risk shown as "2.00% of equity at risk per trade", 0 page errors, no horizontal scroll at 1360×900 and 390×844.
+- scripts/sql_test/shadow_lane.sh (real PostgreSQL 16):
+  - Existing row defaults to lane 'book'; an invalid lane is rejected; the lane cannot change.
+  - An outcome update on an open shadow row works; re-applying the migration is a no-op.
+- Pre-flight against the live book snapshots: same positions and equity as the v19 bundle; a scan writes only dbv5_scans.
+
+## 30 Oct 2026 - release corrections for PR #19 / #20 and integration candidate 0326916 (sandbox; NOT deployed)
+- PR #19 head 85a5f1b:
+  - The outbox cap reproduced as a failing test (260 records → 200 kept); fixed: unbounded, merged by key.
+  - Stale-ack race test: A saves its outbox, B advances the book, A acks. B's equity, stop and newer pending record survive, `_rev` is unchanged by the ack, and A's later save is rejected with StateConflict.
+  - Handler test: 250 pending records + outage + recovery deliver each distinct key once.
+  - All state writes are compare-and-set.
+- PR #20 head cb7c553:
+  - Reproduced on bc2ff1e: shadow discovery ignored the enabled flag; the conflict target omitted the lane. (The book lane could not receive book flags at all — structural, shown by code.)
+  - Fixed: offReason (flag / scale / opt-in); withConfig restores the config after a throw (tested); SHADOW-1 and book config ids; lane-aware key; outcome labels.
+- Integration candidate 032691665a56b9ec62d2923bee0f7eca6c22f956 (merge of both heads):
+  - typecheck pass; npm test 254/254; git diff --check clean; build:web:check and build-info:check current.
+  - Browser smokes tower/markets/scanner/workers/strategies: 0 errors.
+  - scripts/sql_test/postgrest.sh (the application's own requests over HTTP; PostgREST 12.2.3 + PostgreSQL 16.15, both migrations): 11/11 PASS — conflict-safe insert, 12 concurrent same-key → 1 row, legacy CAS, stale CAS rejected, 10 concurrent CAS → 1 winner, ack RPC scoped, 230-record batched flush, lane-aware setup insert.
+  - work_key.sh: 16 concurrent → 1 row. shadow_lane.sh: both lanes kept, old key dropped, lane/cfg_id immutable.
+  - Pre-flight against the live book snapshots: same positions and equity as the v19 bundle; a scan writes only dbv5_scans.
+  - Vercel preview dpl_xcmgiZ9oco2GAsB1siziLgo4Wwou READY from 0326916.
+- Not verified: Supabase's hosted gateway / PostgREST version and the production RLS configuration (local PostgREST is stock 12.2.3, schema reconstructed). Step 2–6 production checks in RELEASE_W2_W3.md cover this after approval.
+
+## 30 Oct 2026 - release readiness round 2 (candidate 5662f80dee237c6e30513ce0e3e681c5382b7473; sandbox, NOT deployed)
+- Reconciled first: main 3e25392, PR #19 85a5f1b, PR #20 cb7c553, release head 45d37d9 (source = 0326916), edge v24 → 3e25392. Nothing changed since the previous report except market data (gold EMA_CROSS TP1 filled 01:24 UTC).
+- Ack versus a stale writer, real PostgREST 12.2.3 + PostgreSQL 16.15, unmodified 0326916 code:
+  - B read revision N with pending X, A inserted and acknowledged X, B saved its copy with guard N. Result: stored outbox `[X,Y]`, so X reappeared.
+  - Fix: trigger `dbv5_state_outbox_guard` removes already-logged keys in the same write. After: `[Y]`; B's equity, stop and Y kept; X logged once.
+  - Retried insert/ack changes nothing; an older revision still gets StateConflict; 30 concurrent interleavings: resurrected=0, lost=0 (`RACE=1 scripts/sql_test/postgrest.sh`, 6/6).
+- Bounded recovery: 1,200 pending records with 1.5 s writes drained over 4 runs (≤3 batches / ≤4 s each); fast writes stop at 5 batches (500); failing writes resume next run; nothing lost (`tests/outbox_durability.test.ts`).
+- Rollback compatibility (`ROLLBACK=1 scripts/sql_test/postgrest.sh`, 4/4):
+  - Plain v24's setup insert fails after the lane migration (42P10).
+  - Artifact afdf44a writes a book row beside an existing shadow row, reads book rows only, and discards no shadow record.
+  - Artifact trading pre-flight against the live snapshots equals v19/v24 (BTC 339.26977461902817, GOLD 319.01317097612525 at that time).
+- Candidate 5662f80, all run here:
+  - typecheck pass; npm test 256/256; diff check clean; build:web:check and build-info:check current
+  - postgrest.sh 11/11; race 6/6; rollback 4/4; work_key.sh and shadow_lane.sh pass
+  - smokes tower/markets/scanner/workers/strategies: 0 errors (strategies: 11 matrix rows, no horizontal scroll on mobile).
+
+## 2026-10-30 · Integrated paper release: acceptance on the exact candidate
+Candidate `4262f7f50618f61ab412858d496e35f2cc5d16e3` (tree `7a8e2edf61db105dd0b4fd7738aba57eb0511a56`). Run in a clean detached worktree at that SHA by `accept.sh`. Later commits are `docs/` only.
+
+**Local checks**
+- build_info current (`2b76b76b…`); web build current.
+- Typecheck OK.
+- `npm test`: **277/277**. This includes the cross-book scheduling regression (3 tests), egress (8), provider policy, account registry (6) and chart plan.
+- Diff check OK.
+
+**Database checks**
+- PostgREST 12.2.3 + PostgreSQL 16: application requests: all checks passed.
+- `RACE=1`: retried insert/ack, stale revision and 30 interleavings all pass (resurrected=0, lostY=0).
+- `ROLLBACK=1` with `afdf44a`: book row beside the shadow row; book-only reads; no shadow record discarded.
+- `outbox_guard.sh`:
+  - scale: 100 → 3.2 ms, 1k → 13.7 ms, 10k → 90.5 ms, 50k → 436 ms
+  - preservation ok
+  - retention: suppression ends with the 14-day log row; re-delivery after pruning is accepted as a new row
+- `work_key.sh`: pass.
+- `shadow_lane.sh`: pass.
+
+**Browser smokes** (SYNTHETIC / MOCK fixture, mocked network, desktop and phone)
+- tower, markets, scanner, workers, strategies: 0 problems.
+- chart_plan: loading placeholder present; no horizontal scroll; 6 plan rows (5 in the candle-error state).
+
+**Negative control**
+The cross-book regression fails on the previous scheduler: GOLD is saved after BTC's 8 LLM calls.
+
+**Not verified against hosted services**
+- The deployed edge function, migrations and Vercel build of this candidate: not deployed.
+- Live provider reachability: no provider is configured.
+- Broker connectivity: none exists.
+- Hyperliquid instrument metadata: the host is not reachable from this session.

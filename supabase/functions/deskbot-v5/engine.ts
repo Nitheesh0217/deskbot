@@ -753,15 +753,20 @@ function sReentry(s: Snap, S: Series, st: State, rej: Reject[]): Signal | null {
   return { strategy: id, dir: r.dir, entryRef: s.price, stop, score, why, regime: s.regime, barT: s.T, reentry: true };
 }
 
+/** Why a strategy is switched off under the CURRENT config and these per-book flags, or null when it is evaluated. Every
+ *  disabling mechanism: the book's enabled flag (auto-off / manual), a risk scale of 0, an opt-in strategy without a positive scale. */
+export function offReason(id: StrategyId, enabled: Record<string, boolean> = {}): "flag" | "scale" | "opt-in" | null {
+  return enabled[id] === false ? "flag" : CFG.RISK_SCALE[id] === 0 ? "scale" : (OPT_IN.includes(id) && !(CFG.RISK_SCALE[id] > 0)) ? "opt-in" : null;
+}
 export function evaluate(s: Snap, enabled: Record<string, boolean> = {}, S?: Series, st?: State, trace?: StrategyTrace[]): { signals: Signal[]; rejects: Reject[] } {
   const signals: Signal[] = [], rejects: Reject[] = [];
-  const offWhy = (id: StrategyId): "flag" | "scale" | "opt-in" | null => enabled[id] === false ? "flag" : CFG.RISK_SCALE[id] === 0 ? "scale" : (OPT_IN.includes(id) && !(CFG.RISK_SCALE[id] > 0)) ? "opt-in" : null;
+  const offWhy = (id: StrategyId) => offReason(id, enabled);
   if (!isFinite(s.atr5) || !isFinite(s.atr15) || !isFinite(s.chop15) || !isFinite(s.price)) {
     rejects.push({ strategy: "TREND_MTF", reason: "Indicators warming up" });
     if (trace) for (const id of STRATEGIES) { const w = offWhy(id); trace.push(w ? { id, kind: "OFF", reason: "Strategy switched off", offWhy: w } : { id, kind: "WARMUP", reason: "Indicators warming up (shared 5m/15m indicators not ready)" }); }
     return { signals, rejects };
   }
-  const off = (id: StrategyId) => enabled[id] === false || CFG.RISK_SCALE[id] === 0 || (OPT_IN.includes(id) && !(CFG.RISK_SCALE[id] > 0));
+  const off = (id: StrategyId) => offReason(id, enabled) !== null;
   // shared pipeline for every candidate: regime gate → AI filter → risk agent (body stop) → validator agent
   const admit = (id: StrategyId, sig: Signal) => {
     const gate = CFG.REGIME_GATE[id];
