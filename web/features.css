@@ -22,3 +22,21 @@
 .checks li.met span:first-child { color: var(--up); } .checks li.no span:first-child { color: var(--fg-3); }
 .checks small { color: var(--fg-3); font-family: var(--f-mono); font-size: 11.5px; }
 .setup-svg { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 6px; }
+/* chart plan: view switch, plan table */
+.plan-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 10px; }
+.plan-panel { margin-top: 10px; }
+.plan-meta { font: 500 12.5px/1.5 var(--f-mono); color: var(--fg-2); }
+.plan-wrap { overflow-x: auto; margin-top: 6px; border: 1px solid var(--line); border-radius: 10px; }
+.plan-t { width: 100%; border-collapse: collapse; font: 500 12.5px/1.35 var(--f-mono); min-width: 560px; }
+.plan-t th { text-align: left; font: 600 10px/1.2 var(--f-mono); letter-spacing: .06em; color: var(--fg-3); padding: 7px 8px; border-bottom: 1px solid var(--line); background: #f7f9fd; }
+.plan-t td { padding: 7px 8px; border-bottom: 1px solid var(--line); } .plan-t .r { text-align: right; }
+.plan-t tr.pk-market td { color: var(--fg-2); } .plan-t tr.pk-reference td { color: var(--fg-3); font-style: italic; } .plan-t tr.hit td { opacity: .6; }
+.plan-panel .note.warn { color: var(--warn); } .plan-panel .note.down { color: var(--down); }
+@media (max-width: 520px) {
+  .plan-t, .plan-t tbody { display: block; min-width: 0; width: 100%; } .plan-t thead { display: none; }
+  .plan-wrap { overflow-x: visible; padding: 0 10px; }
+  .plan-t tr { display: grid; grid-template-columns: 1.3fr 1fr 1fr; gap: 2px 8px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .plan-t td, .plan-t td.r { display: block; padding: 0; border: 0; text-align: left; min-width: 0; overflow-wrap: anywhere; }
+  .plan-t td::before { content: attr(data-k); display: block; font-size: 10px; color: var(--fg-3); text-transform: uppercase; letter-spacing: .03em; }
+  .plan-t td[data-k="Level"] { grid-row: span 2; font-weight: 600; } .plan-t td[data-k="Exit (planned)"] { grid-column: 2 / span 2; }
+}
