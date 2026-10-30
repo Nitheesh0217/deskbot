@@ -22,6 +22,11 @@ export const SYMBOLS = {
 export type Sym = keyof typeof SYMBOLS;
 export const isSym = (x: unknown): x is Sym => typeof x === "string" && x in SYMBOLS;
 
+// Per-book identity in ONE place, so no caller re-derives it from a "BTC"/"GOLD" literal.
+// rowId: its dbv5_state row; mlGold: the ML model's gold flag (engine.setMlAsset); isCrypto: crypto sentiment (Fear & Greed)
+// applies; news: the crypto news layer applies (BTC only today).
+export const bookOf = (sym: Sym) => ({ rowId: sym === "BTC" ? "main" : sym.toLowerCase(), mlGold: sym === "GOLD", isCrypto: sym !== "GOLD", news: sym === "BTC" });
+
 // The whole request INCLUDING the body read runs inside the deadline: `p` must read the body itself. Clearing the timer when
 // fetch resolved (headers only) left res.json() unbounded on a stalled stream. The race also bounds a body that ignores the abort.
 export async function withTimeout<T>(p: (s: AbortSignal) => Promise<T>, ms = 8000): Promise<T> {

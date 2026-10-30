@@ -10,7 +10,7 @@ import {
   VERSION, CFG, STRATEGIES, OPT_IN, buildSeries, snapshot, evaluate, entryGates, openPosition, managePosition,
   initState, unrealized, backtest, summarize, rollDay, dynamicRisk, applyCfg, resolvedCfg, ensureState, markEquity, setMlAsset, traderManage, m1View, type State, type Trade, type Bar,
 } from "./engine.ts";
-import { candles, candlesRange, candlesRangeBinance, hlContext, fearGreed, orderFlow, SYMBOLS, isSym, type Sym } from "./data.ts";
+import { candles, candlesRange, candlesRangeBinance, hlContext, fearGreed, orderFlow, SYMBOLS, isSym, bookOf, type Sym } from "./data.ts";
 import { readNews, newsBlocks, type NewsRead } from "./news.ts";
 import { providersFromEnv, providerPolicy, type Usage, type AiFeature } from "./ai.ts";
 import { chatFacts, pushClose, pushOpen } from "./egress.ts";
@@ -53,7 +53,7 @@ const aiFeaturesOf = (): Record<AiFeature, boolean> => ({ news: NEWS_AI && NEWS_
 // Each book is a separate paper account (own equity, position, stats, cfg) in its own dbv5_state row.
 // A non-BTC book only runs once its row exists (created deliberately, with a researched cfg).
 const BOOKS: Sym[] = (Deno.env.get("DESKBOT_BOOKS") ?? "BTC,GOLD").split(",").map((x) => x.trim()).filter(isSym);
-const rowId = (sym: Sym) => (sym === "BTC" ? "main" : sym.toLowerCase());
+const rowId = (sym: Sym) => bookOf(sym).rowId;
 const CORS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "content-type, x-deskbot-key, x-chat-key", "Access-Control-Allow-Methods": "GET, POST, OPTIONS" };
 
 // ─── PostgREST client and persistence (persist.ts; the same requests are tested against a local PostgREST) ───
@@ -133,11 +133,11 @@ async function runLocked() {
 async function runOnce(sym: Sym = "BTC", scheduler?: (fn: () => Promise<void>) => void) {
   const pending: (() => Promise<void>)[] = [], defer = scheduler ?? ((fn: () => Promise<void>) => { pending.push(fn); });
   const now = Date.now(); const evs: Ev[] = []; const notes: string[] = [];
-  const isCrypto = sym !== "GOLD", tag = sym === "BTC" ? "" : `${sym} `;
+  const bk = bookOf(sym), isCrypto = bk.isCrypto, tag = sym === "BTC" ? "" : `${sym} `;
   let st = await loadState(sym);
   if (!st && sym !== "BTC") return { ok: true, sym, skipped: "book not initialised" };
   if (!st) { st = await carryFromV3(now); evs.push({ kind: "INIT", msg: `DeskBot ${VERSION} initialised at $${st.equity.toFixed(2)} (carried from v3)`, data: st.carried }); }
-  ensureState(st); applyCfg(st.cfg); setMlAsset(sym === "GOLD");
+  ensureState(st); applyCfg(st.cfg); setMlAsset(bk.mlGold);
   const integrity = await integrityFor(sym, resolvedCfg(st.cfg));
 
   // actual receipt time of each input (ms), kept for the decision record; unknown stays undefined
@@ -174,7 +174,7 @@ async function runOnce(sym: Sym = "BTC", scheduler?: (fn: () => Promise<void>) =
 
   // 1b) news read (every NEWS_EVERY_MIN). Failure here never stops position management above.
   const sx = st as State & { _news?: NewsRead; _aiUsage?: Usage };
-  if (sym === "BTC" && NEWS_MODE !== "off" && (!sx._news || now - sx._news.t >= NEWS_EVERY_MIN * 60_000)) {
+  if (bk.news && NEWS_MODE !== "off" && (!sx._news || now - sx._news.t >= NEWS_EVERY_MIN * 60_000)) {
     try {
       const prev = sx._news?.risk;
       const nr = await readNews(now, (sx._aiUsage ??= {}), { useAi: NEWS_AI });
@@ -184,8 +184,8 @@ async function runOnce(sym: Sym = "BTC", scheduler?: (fn: () => Promise<void>) =
       if (nr.risk === "HIGH" && prev !== "HIGH") await push("DeskBot news: HIGH risk", `${nr.event}: ${nr.reason}`);
     } catch (e) { evs.push({ kind: "ERROR", msg: `news layer: ${(e as Error).message}`.slice(0, 200) }); }
   }
-  const newsBlock = sym === "BTC" ? newsBlocks(sx._news, NEWS_MODE, now) : null;
-  const newsShadow = sym === "BTC" && NEWS_MODE === "shadow" ? newsBlocks(sx._news, "gate", now) : null;
+  const newsBlock = bk.news ? newsBlocks(sx._news, NEWS_MODE, now) : null;
+  const newsShadow = bk.news && NEWS_MODE === "shadow" ? newsBlocks(sx._news, "gate", now) : null;
 
   // 2) evaluate on the newest closed 5m bar (once per bar)
   const S = buildSeries({ m5: m5.bars, m15: m15.bars, h1: h1.bars, h4: h4.bars });
@@ -301,7 +301,7 @@ async function runOnce(sym: Sym = "BTC", scheduler?: (fn: () => Promise<void>) =
   // phase 2 (advisory, recoverable): runs after EVERY book's phase 1 (runLocked). The global CFG belongs to whichever book ran last, so
   // this book's own configuration is applied again first.
   defer(async () => {
-    applyCfg(st.cfg); setMlAsset(sym === "GOLD");
+    applyCfg(st.cfg); setMlAsset(bk.mlGold);
     // flush Theo's outbox (persist.ts flushOutbox): batches of conflict-safe inserts, each acknowledged by a scoped RPC that removes
     // exactly its keys. Pending records are never dropped; a failure is an ERROR event and the rest stays for the next run.
     if (wx._workOutbox?.length) {
@@ -360,7 +360,7 @@ async function runBacktest(o: BtOpts) {
     get("5m", start5, end), get("15m", start5 - 30 * 86400_000, end), get("1h", start5 - 40 * 86400_000, end), get("4h", start5 - 120 * 86400_000, end),
   ]);
   if (m5.length < 2000) throw new Error(`${sym}: only ${m5.length} 5m bars from ${source}`);
-  applyCfg(); setMlAsset(sym === "GOLD"); const t0 = Date.now(); const frames = { m5, m15, h1, h4 }; const cfg = o.cfg ?? {};
+  applyCfg(); setMlAsset(bookOf(sym).mlGold); const t0 = Date.now(); const frames = { m5, m15, h1, h4 }; const cfg = o.cfg ?? {};
   const fingerprint = await configIntegrity(VERSION, sym, resolvedCfg(cfg), "");
   const only = STRATEGIES.find(x => x === o.only);
   const all = backtest(frames, { startEquity: 1000, cfg, only });
@@ -401,10 +401,15 @@ async function experimentStatus() {
 // ─── multi-market scan (read-only; every 15 min by pg_cron). Runs the bot's own rules on each market with a fresh state. ──
 async function runScan() {
   const now = Date.now(), t0 = now;
-  // each book's config AND its per-strategy switches: both decide what the book evaluates (engine.offReason)
-  const bookOf = async (sym: Sym) => { const r = (await select(`dbv5_state?id=eq.${rowId(sym)}&select=cfg:state->cfg,enabled:state->enabled`).catch(() => []))?.[0]; return { cfg: r?.cfg ?? undefined, enabled: (r?.enabled ?? {}) as Record<string, boolean> }; };
-  const [btcBook, goldBook] = await Promise.all([bookOf("BTC"), bookOf("GOLD")]);
-  const btcCfg = btcBook.cfg, goldCfg = goldBook.cfg;
+  // each book's config AND its per-strategy switches: both decide what the book evaluates (engine.offReason). Every book in BOOKS is
+  // loaded; a book whose state cannot be read gets error set and its lanes are skipped (never evaluated on the default config
+  // under that book's label).
+  type Book = { cfg?: Record<string, unknown>; enabled: Record<string, boolean>; error?: string };
+  const loadBook = async (sym: Sym): Promise<Book> => {
+    try { const r = (await select(`dbv5_state?id=eq.${rowId(sym)}&select=cfg:state->cfg,enabled:state->enabled`))?.[0]; return r ? { cfg: r.cfg ?? undefined, enabled: r.enabled ?? {} } : { enabled: {}, error: "no state row" }; }
+    catch (e) { return { enabled: {}, error: String((e as Error).message).slice(0, 100) }; }
+  };
+  const books: Partial<Record<Sym, Book>> = Object.fromEntries(await Promise.all(BOOKS.map(async (b) => [b, await loadBook(b)] as const)));
   const laneTrace: Record<string, { book: LaneTrace; shadow: LaneTrace; bookCfgId: string; shadowCfgId: string | null; shadowIds: string[] }> = {};
   const syms = (Object.keys(SYMBOLS) as Sym[]).sort((a, b) => (PRIORITY[a] ?? 3) - (PRIORITY[b] ?? 3)), markets: unknown[] = [];
   // forward tracking (track.ts): best-effort; a failure here is reported and never stops the scan
@@ -418,7 +423,8 @@ async function runScan() {
         try {
           const [m5, m15, h1, h4, ctx] = await Promise.all([candles("5m", 400, now, "hyperliquid", sym), candles("15m", 400, now, "hyperliquid", sym), candles("1h", 300, now, "hyperliquid", sym), candles("4h", 700, now, "hyperliquid", sym), hlContext(sym).catch(() => null)]);
           const frames = { m5: m5.bars, m15: m15.bars, h1: h1.bars, h4: h4.bars };
-          applyCfg(sym === "GOLD" ? goldCfg : btcCfg); setMlAsset(sym === "GOLD");
+          // a book's config applies only to that book's own symbol; other markets (and a book that failed to load) use the default config
+          const book = books[sym]; applyCfg(book && !book.error ? book.cfg as Partial<typeof CFG> : undefined); setMlAsset(bookOf(sym).mlGold);
           const row = scanMarket(sym, frames, ctx, now);
           try {
             // CALL-1: score this market's open call once its horizon has passed; open a new one only when none is open
@@ -427,16 +433,18 @@ async function runScan() {
             if (c && c.lean !== "NONE" && mine.every((x) => scored.some((y) => y.id === x.id))) newCalls.push({ sym, t: c.t, horizon_h: CALL_HORIZON_H, lean: c.lean, votes: c.votes, source: c.source, cautions: c.cautions, px: c.px, atr: c.atr });
           } catch (e) { trackErrors.push(`${sym} call: ${(e as Error).message}`.slice(0, 120)); }
           try {
-            // book lane: the book's config and its own switches (P1 books); other markets use the BTC config, untested there
-            const book = sym === "GOLD" ? goldBook : btcBook, isBook = PRIORITY[sym] === 1;
-            laneTrace[sym] = { book: {}, shadow: {}, bookCfgId: bookCfgId(book.cfg), shadowCfgId: null, shadowIds: [] }; const lt = laneTrace[sym];
-            fresh.push(...signalsOverBars(sym, frames, 3, { enabled: isBook ? book.enabled : undefined, cfgId: lt.bookCfgId, trace: lt.book }));
-            // shadow lane (P1 books only): every evaluator the book does not evaluate, by any mechanism, under SHADOW-1; book config
-            // restored by withConfig even if evaluation throws. Never traded, no book state, no promotion credit.
-            if (isBook) {
-              const off = offInBook(book.enabled);
-              if (off.size) { lt.shadowCfgId = shadowCfgId(book.cfg); lt.shadowIds = [...off];
-                fresh.push(...withConfig(shadowCfg(book.cfg), book.cfg, () => signalsOverBars(sym, frames, 3, { only: off, lane: "shadow", cfgId: lt.shadowCfgId!, trace: lt.shadow }))); }
+            // book lane: the book's config and its own switches (books in BOOKS); other markets use the default config, untested there
+            if (book?.error) trackErrors.push(`${sym} book state not loaded (${book.error}): book and shadow lanes skipped this scan`.slice(0, 160));
+            else {
+              laneTrace[sym] = { book: {}, shadow: {}, bookCfgId: bookCfgId(book?.cfg), shadowCfgId: null, shadowIds: [] }; const lt = laneTrace[sym];
+              fresh.push(...signalsOverBars(sym, frames, 3, { enabled: book?.enabled, cfgId: lt.bookCfgId, trace: lt.book }));
+              // shadow lane (books only): every evaluator the book does not evaluate, by any mechanism, under SHADOW-1; book config
+              // restored by withConfig even if evaluation throws. Never traded, no book state, no promotion credit.
+              if (book) {
+                const off = offInBook(book.enabled);
+                if (off.size) { lt.shadowCfgId = shadowCfgId(book.cfg); lt.shadowIds = [...off];
+                  fresh.push(...withConfig(shadowCfg(book.cfg), book.cfg, () => signalsOverBars(sym, frames, 3, { only: off, lane: "shadow", cfgId: lt.shadowCfgId!, trace: lt.shadow }))); }
+              }
             } for (const o of open.filter((x) => x.sym === sym)) { const u = resolve(o, m5.bars); if (u.status !== "open" || u.checked_t !== o.checked_t) updates.push(u); } }
           catch (e) { trackErrors.push(`${sym}: ${(e as Error).message}`.slice(0, 120)); }
           return { ...row, name: SYMBOLS[sym].name, book: PRIORITY[sym] === 1, priority: PRIORITY[sym] ?? 3, source: m5.source };
