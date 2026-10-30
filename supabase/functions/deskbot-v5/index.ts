@@ -376,13 +376,15 @@ async function runBacktest(o: BtOpts) {
     per[id] = { ...summarize(r.trades, 1000), maxDD: r.state.maxDD, inSample: summarize(r.trades.filter(t => t.openT < cut), 1000).all, outSample: summarize(r.trades.filter(t => t.openT >= cut), 1000).all, signals: r.signalsSeen[id] ?? 0 };
   }
   const unseenFrom = Date.parse("2026-09-01T00:00:00Z");
+  // the costs the run actually used: backtest() has already restored the global CFG, so read them from the resolved overlay
+  const used = resolvedCfg(cfg);
   const res = {
     version: VERSION, sym, configHash: fingerprint.hash, drawdownBasis: "sampled marked equity at bar closes", label: o.label ?? "default", source, cfg, from: new Date(all.from ?? start5).toISOString(), to: new Date(all.to).toISOString(), splitAt: new Date(cut).toISOString(), bars5m: m5.length,
     combined: { ...summarize(all.trades, 1000), maxDD: all.state.maxDD }, combinedIn: summarize(all.trades.filter(t => t.openT < cut), 1000).all, combinedOut: summarize(all.trades.filter(t => t.openT >= cut), 1000).all,
     unseenSep2026: summarize(all.trades.filter(t => t.openT >= unseenFrom), 1000).all,
     perStrategy: per, curve: all.curve.filter((_, i) => i % Math.max(1, Math.round(days / 4)) === 0),
     trades: all.trades.slice(-80).map(t => ({ s: t.strategy, d: t.dir, r: +t.r.toFixed(2), net: +t.net.toFixed(2), o: t.openT, c: t.closeT, why: t.reason })),
-    assumptions: `${source === "binance" ? "Binance spot " + SYMBOLS[sym].bn : "Hyperliquid " + SYMBOLS[sym].hl + " perp"} candles. Start $1000. Entries at next 5m open, taker ${CFG.TAKER_FEE * 100}% + ${CFG.SLIPPAGE * 100}% slippage; TPs maker ${CFG.MAKER_FEE * 100}%; funding ${CFG.BT_FUNDING_PER_HOUR * 100}%/h charged as cost. Moved stop first on ambiguous bars.`,
+    assumptions: `${source === "binance" ? "Binance spot " + SYMBOLS[sym].bn : "Hyperliquid " + SYMBOLS[sym].hl + " perp"} candles. Start $1000. Entries at next 5m open, taker ${used.TAKER_FEE * 100}% + ${used.SLIPPAGE * 100}% slippage; TPs maker ${used.MAKER_FEE * 100}%; funding ${used.BT_FUNDING_PER_HOUR * 100}%/h charged as cost. Moved stop first on ambiguous bars.`,
     cpuMs: Date.now() - t0,
   };
   if (o.save !== false) {

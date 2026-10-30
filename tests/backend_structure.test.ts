@@ -90,6 +90,16 @@ test("scan: a book whose state cannot be loaded is skipped (no default-config la
   assert.ok(r.scanRow.markets.some((m: any) => m.sym === "GOLD" && m.ok !== false), "the GOLD market row itself is still scanned");
 });
 
+// ─── fix 3: backtest assumptions describe the costs the run used ────────────
+test("backtest: the assumptions text reports the overridden costs, not the restored defaults", async () => {
+  const bt = (cfg?: Record<string, unknown>) => call({ i5: 34000, body: { action: "backtest", sym: "BTC", days: 7, save: false, combinedOnly: true, ...(cfg ? { cfg } : {}) } });
+  const over = (await bt({ TAKER_FEE: 0.0009, SLIPPAGE: 0.0004, MAKER_FEE: 0.0002, BT_FUNDING_PER_HOUR: 0.00003 })).res, base = (await bt()).res;
+  assert.ok(over.bars5m >= 2000, "fixture: enough bars to run");
+  assert.match(over.assumptions, /taker 0\.09\d*% \+ 0\.04\d*% slippage; TPs maker 0\.02\d*%; funding 0\.003\d*%\/h/, over.assumptions);
+  assert.match(base.assumptions, /taker 0\.045\d*% \+ 0\.02\d*% slippage; TPs maker 0\.015\d*%; funding 0\.00125\d*%\/h/, base.assumptions);
+  assert.ok(over.combined.all.n === 0 || over.combined.all.expR !== base.combined.all.expR || over.combined.endEquity !== base.combined.endEquity, "the override really changed the run");
+});
+
 // ─── fix 1: one feed per evaluation ─────────────────────────────────────────
 test("run: frames from different feeds are recorded per frame and block NEW entries (same bars from one feed open a position)", async () => {
   const i = firstEntryBar(), states = { main: fresh(LOOSE) };
