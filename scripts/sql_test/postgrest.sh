@@ -37,4 +37,5 @@ for i in $(seq 1 50); do curl -s -o /dev/null http://127.0.0.1:54399/ && break; 
 JWT=$(node -e 'const c=require("crypto"),b=(o)=>Buffer.from(JSON.stringify(o)).toString("base64url");const h=b({alg:"HS256",typ:"JWT"}),p=b({role:"service_role",exp:Math.floor(Date.now()/1e3)+600});console.log(h+"."+p+"."+c.createHmac("sha256",process.argv[1]).update(h+"."+p).digest("base64url"))' "$SECRET")
 echo "PostgREST: $("$PGRST" --version | head -1); PostgreSQL: $($P -c 'show server_version')"
 cd "$ROOT"
-if [ "${RACE:-0}" = 1 ]; then node --import tsx scripts/sql_test/postgrest_race.ts http://127.0.0.1:54399 "$JWT"; else node --import tsx scripts/sql_test/postgrest_check.ts http://127.0.0.1:54399 "$JWT"; fi
+if [ "${ROLLBACK:-0}" = 1 ]; then git show 3e253929b282b903f6842ed9ab0716f7123e9647:supabase/functions/deskbot-v5/index.ts > "$D/v24.ts"; git show "${ROLLBACK_SHA:-origin/rollback/v24-lane-compat}":supabase/functions/deskbot-v5/index.ts > "$D/compat.ts"; node --import tsx scripts/sql_test/rollback_compat.ts http://127.0.0.1:54399 "$JWT" "$D/v24.ts" "$D/compat.ts"
+elif [ "${RACE:-0}" = 1 ]; then node --import tsx scripts/sql_test/postgrest_race.ts http://127.0.0.1:54399 "$JWT"; else node --import tsx scripts/sql_test/postgrest_check.ts http://127.0.0.1:54399 "$JWT"; fi
