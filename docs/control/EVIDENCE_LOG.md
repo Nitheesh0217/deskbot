@@ -102,3 +102,21 @@ Findings reproduced by the reviewer and fixed: (1) a failed replacement-entry ev
   - Existing row defaults to lane 'book'; an invalid lane is rejected; the lane cannot change.
   - An outcome update on an open shadow row works; re-applying the migration is a no-op.
 - Pre-flight against the live book snapshots: same positions and equity as the v19 bundle; a scan writes only dbv5_scans.
+
+## 30 Oct 2026 - release corrections for PR #19 / #20 and integration candidate 0326916 (sandbox; NOT deployed)
+- PR #19 head 85a5f1b:
+  - The outbox cap reproduced as a failing test (260 records → 200 kept); fixed: unbounded, merged by key.
+  - Stale-ack race test: A saves its outbox, B advances the book, A acks. B's equity, stop and newer pending record survive, `_rev` is unchanged by the ack, and A's later save is rejected with StateConflict.
+  - Handler test: 250 pending records + outage + recovery deliver each distinct key once.
+  - All state writes are compare-and-set.
+- PR #20 head cb7c553:
+  - Reproduced on bc2ff1e: shadow discovery ignored the enabled flag; the conflict target omitted the lane. (The book lane could not receive book flags at all — structural, shown by code.)
+  - Fixed: offReason (flag / scale / opt-in); withConfig restores the config after a throw (tested); SHADOW-1 and book config ids; lane-aware key; outcome labels.
+- Integration candidate 032691665a56b9ec62d2923bee0f7eca6c22f956 (merge of both heads):
+  - typecheck pass; npm test 254/254; git diff --check clean; build:web:check and build-info:check current.
+  - Browser smokes tower/markets/scanner/workers/strategies: 0 errors.
+  - scripts/sql_test/postgrest.sh (the application's own requests over HTTP; PostgREST 12.2.3 + PostgreSQL 16.15, both migrations): 11/11 PASS — conflict-safe insert, 12 concurrent same-key → 1 row, legacy CAS, stale CAS rejected, 10 concurrent CAS → 1 winner, ack RPC scoped, 230-record batched flush, lane-aware setup insert.
+  - work_key.sh: 16 concurrent → 1 row. shadow_lane.sh: both lanes kept, old key dropped, lane/cfg_id immutable.
+  - Pre-flight against the live book snapshots: same positions and equity as the v19 bundle; a scan writes only dbv5_scans.
+  - Vercel preview dpl_xcmgiZ9oco2GAsB1siziLgo4Wwou READY from 0326916.
+- Not verified: Supabase's hosted gateway / PostgREST version and the production RLS configuration (local PostgREST is stock 12.2.3, schema reconstructed). Step 2–6 production checks in RELEASE_W2_W3.md cover this after approval.
