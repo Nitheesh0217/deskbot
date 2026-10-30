@@ -15,7 +15,8 @@ const MS = { "1m": 60e3, "5m": 3e5, "15m": 9e5, "1h": H, "4h": 4 * H, "1d": 24 *
 const srv = http.createServer((q, r) => { const f = path.join(web, q.url === "/" ? "index.html" : q.url.split("?")[0]); fs.readFile(f, (e, d) => { if (e) { r.writeHead(404); r.end(); } else { r.writeHead(200, { "Content-Type": f.endsWith(".js") ? "text/javascript" : f.endsWith(".css") ? "text/css" : f.endsWith(".svg") ? "image/svg+xml" : "text/html" }); r.end(d); } }); });
 (async () => {
   await new Promise((r) => srv.listen(0, r)); const base = `http://127.0.0.1:${srv.address().port}/`;
-  const loading = /Loading the position plan/.test(fs.readFileSync(path.join(web, "index.html"), "utf8"));   // initial (pre-script) state const browser = await chromium.launch(); const problems = [], result = {};
+  const loading = /Loading the position plan/.test(fs.readFileSync(path.join(web, "index.html"), "utf8"));
+  const browser = await chromium.launch(); const problems = [], result = {};
   for (const [name, vp] of [["desktop", { width: 1360, height: 900 }], ["mobile", { width: 390, height: 844 }]]) {
     const page = await (await browser.newContext({ viewport: vp, reducedMotion: "reduce" })).newPage();
     page.on("console", (m) => { if (m.type() === "error") problems.push(`${name} console: ${m.text()}`); }); page.on("pageerror", (e) => problems.push(`${name} pageerror: ${e.message}`));
