@@ -209,8 +209,32 @@ function renderTower() {
     experiment: RAW ? (RAW.experiment === undefined ? null : RAW.experiment) : null, config: BOOK === "BTC" && RAW ? RAW.config || null : null, aiProviders: RAW && RAW.chat ? RAW.chat.ai || [] : null, ai: RAW ? RAW.ai || null : null, scan: RAW ? RAW.scan || null : null, track: RAW ? RAW.track || null : null, chat: RAW ? RAW.chat || null : null, work: RAW ? RAW.work || null : null });
 }
 let strategyFilter = "all";
+let MATRIX = null;
+/** W3 coverage matrix for the selected book (DeskCoverage.strategyMatrix; same code as the edge function). */
+function renderMatrix(S, st) {
+  const el = $("covMatrix"); if (!el || !globalThis.DeskCoverage || !DeskCoverage.strategyMatrix) return;
+  const reg = (RAW && RAW.registry) || { strategies: STRATS.map((x) => x.id), optIn: OPT_IN };
+  const bookCfg = BOOK === "GOLD" ? (RAW && RAW.books && RAW.books.GOLD && RAW.books.GOLD.config) : (RAW && RAW.config);
+  const cfg = bookCfg || { RISK_SCALE: Object.assign({}, DEFAULT_SCALE, (st.cfg || {}).RISK_SCALE || {}), XC_TF: (st.cfg || {}).XC_TF, HSW_TF: (st.cfg || {}).HSW_TF };
+  const lr = S.last_run || {}, riskPct = typeof lr.risk === "number" ? lr.risk : null;
+  const shadow = ((RAW && RAW.track && RAW.track.shadow) || []).filter((x) => x.sym === (BOOK === "GOLD" ? "GOLD" : "BTC"));
+  MATRIX = DeskCoverage.strategyMatrix({ strategies: reg.strategies, optIn: reg.optIn, cfg, st, trades: DATA.trades || [], riskPct, now: Date.now(), shadow });
+  const meta = st.covMeta, hh = (T) => (T == null ? "—" : new Date(T + 1).toISOString().slice(11, 16));
+  const tr = MATRIX.map((m) => `<tr class="${m.openNow ? "open" : ""} ${m.starved ? "warn" : ""}"><td><b>${esc(m.id)}</b>${m.openNow ? ' <span class="chip">OPEN</span>' : ""}<br><small class="faint">${esc(m.requires)}</small></td>
+    <td>${esc(OPST[m.state] ? OPST[m.state][1] : m.state)}${m.disabledReason ? `<br><small class="faint">${esc(m.disabledReason)}</small>` : ""}${m.shadow ? `<br><small title="${esc(m.shadow.basis || '')}">shadow (B, simplified hypothetical, ${esc((m.shadow.cfgIds || [])[0] || 'SHADOW')}): ${m.shadow.resolved} resolved · ${m.shadow.open} open${m.shadow.meanNetR != null ? ` · ${m.shadow.meanNetR >= 0 ? "+" : ""}${m.shadow.meanNetR}R mean` : ""}</small>` : ""}${m.starved ? '<br><small class="down">due bars not evaluated</small>' : ""}</td>
+    <td>${esc(m.cadence)}<br><small class="faint">last due ${hh(m.lastDueT)}</small></td><td class="r">${m.due}<br><small class="faint">${m.completed} done${m.windowClosed ? ` · ${m.windowClosed} outside window` : ""}</small></td>
+    <td class="r">${m.noSetup}</td><td class="r ${m.missingData || m.errors ? "down" : ""}">${m.missingData}${m.errors ? ` / ${m.errors} err` : ""}</td><td class="r">${m.signals}</td>
+    <td>${m.vetoes.length ? m.vetoes.slice(0, 2).map((x) => `${esc(x.reason)} ×${x.n}`).join("<br>") : '<span class="faint">none</span>'}</td>
+    <td class="r">${m.entered} / ${m.notSelected} / ${m.portfolioBlocked}</td><td class="r">${m.closed ? `${m.wins}/${m.closed} · ${m.sumR >= 0 ? "+" : ""}${m.sumR}R` : "—"}</td>
+    <td class="r">${m.eligiblePaper ? m.riskPerTradePct.toFixed(2) + "%" : "0"}</td></tr>`).join("");
+  el.innerHTML = `<div class="section-top"><h2>Coverage matrix · ${BOOK === "GOLD" ? "gold (PAXG)" : "BTC"}</h2><span class="chip">PAPER</span></div>
+    <p class="note">Since ${meta ? esc(new Date(meta.since).toISOString().slice(0, 16).replace("T", " ")) + " UTC" : "—"}: ${meta ? `${meta.evalBars} bars evaluated, ${meta.missedBars} missed, missing due bars 15m ${meta.missingDue["15m"]} / 1H ${meta.missingDue["1h"]} / 4H ${meta.missingDue["4h"]} / 1D ${meta.missingDue["1d"]}` : "no counters"}. Every eligible evaluator is called on every bar before selection; one position per book means a valid signal can be <b>not selected</b> or <b>blocked</b> without the evaluator being starved. Columns are counts of evaluations, not trades.</p>
+    <div class="mx-wrap"><table class="mx"><thead><tr><th>Strategy · needs</th><th>State</th><th>Trigger</th><th class="r">Due bars</th><th class="r">No setup</th><th class="r">Missing data</th><th class="r">Signals (A)</th><th>Vetoes</th><th class="r">Entered / not sel. / blocked</th><th class="r">Closed W/n · ΣR (C)</th><th class="r">Risk/trade</th></tr></thead><tbody>${tr}</tbody></table></div>
+    <p class="note">A = signal frequency; C = portfolio-selected paper outcomes for the closed trades loaded on this page. B (standalone hypothetical outcomes): the scanner's setup tracker on the Board, plus an isolated shadow lane (SHADOW-1 config) for evaluators the book does not run, shown under their state. B outcomes are simplified hypothetical setup outcomes (first of TP1 / stop / max hold), not book returns with partial exits, trailing stops or portfolio constraints; never traded, never counted for promotion. Risk/trade = the runner's reported risk (${riskPct != null ? (riskPct * 100).toFixed(2) + "%" : "not reported"}) × scale. Closed trades before 29 Oct 17:26 UTC have no recorded config identity.</p>`;
+}
 function renderStrategies() {
   const S = DATA.state || {}, st = S.state || {}, lr = S.last_run || {}, hasCov = !!(st.cov && Object.keys(st.cov).length), by = (st.stats && st.stats.by) || {};
+  renderMatrix(S, st);
   const trades = (DATA.trades || []).slice().sort((a, b) => new Date(a.close_t) - new Date(b.close_t));
   const views = STRATS.map((s) => stratView(s.id, st)), on = views.filter((v) => v.state !== "DISABLED").length;
   $("strategyCount").textContent = `${STRATS.length} registered · ${on} on for ${BOOK === "GOLD" ? "gold (PAXG)" : "BTC"}`;
@@ -226,7 +250,9 @@ function renderStrategies() {
     let cum = 0, pk = 0, dd = 0; mine.forEach((t) => { cum += +t.r; pk = Math.max(pk, cum); dd = Math.max(dd, pk - cum); });
     const fees = mine.reduce((a, t) => a + (+t.fees || 0), 0), fund = mine.reduce((a, t) => a + (+t.funding || 0), 0);
     const cadTxt = { "5m": "every 5m bar", "15m": "15m close", "1h": "1H close", "4h": "4H close", "1d": "daily close (00:00 UTC)" }[v.cadence];
-    const sizeTxt = v.state === "DISABLED" ? "none (disabled)" : `${(v.riskScale ?? 1)}× scale${v.probation ? " · probation: half size" : ""}${(v.riskScale ?? 1) >= 1 && !v.probation ? " (full)" : ""}`;
+    // sizing from the authoritative source: the runner's reported risk per trade (last_run.risk) × this strategy's effective scale
+    const mrow = (MATRIX || []).find((m) => m.id === s.id);
+    const sizeTxt = v.state === "DISABLED" ? "none (disabled)" : `${(v.riskScale ?? 1)}× scale${v.probation ? " · probation: half size" : ""}${mrow && mrow.riskPerTradePct ? ` → ${mrow.riskPerTradePct.toFixed(2)}% of equity at risk per trade` : " (risk per trade not reported)"}`;
     const hhmm = (T) => new Date(T + 1).toISOString().slice(11, 16) + " UTC";
     const evalTxt = c && c.lastDueT != null ? `${ago(c.lastDueT + 1)} · data to ${hhmm(c.lastDueT)}` : c && c.lastEvalT != null ? `no due bar yet (last bar ${hhmm(c.lastEvalT)})` : "no data";
     const nextTxt = v.nextDueT != null ? `next due bar closes ${hhmm(v.nextDueT)}` : "";

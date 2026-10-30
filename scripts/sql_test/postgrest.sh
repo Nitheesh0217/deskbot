@@ -3,7 +3,7 @@
 # Needs: /usr/lib/postgresql/16/bin and a postgrest binary (POSTGREST=/path/to/postgrest). Throwaway cluster, removed on exit.
 set -euo pipefail
 BIN=/usr/lib/postgresql/16/bin; ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; PGRST="${POSTGREST:?set POSTGREST to the postgrest binary}"
-D="$(mktemp -d /tmp/deskbot_pg.XXXXXX)"; mkdir -p "$D/pg"; cp "$ROOT/supabase/migrations/20261030_scan_work.sql" "$D/mig.sql"; chown -R postgres "$D" 2>/dev/null || true; chmod a+r "$D/mig.sql"
+D="$(mktemp -d /tmp/deskbot_pg.XXXXXX)"; mkdir -p "$D/pg"; cp "$ROOT/supabase/migrations/20261030_scan_work.sql" "$D/mig.sql"; cp "$ROOT/supabase/migrations/20261029_scan_signals.sql" "$D/sig.sql"; [ -f "$ROOT/supabase/migrations/20261030_shadow_lane.sql" ] && cp "$ROOT/supabase/migrations/20261030_shadow_lane.sql" "$D/lane.sql"; chown -R postgres "$D" 2>/dev/null || true; chmod a+r "$D"/*.sql
 run() { if [ "$(id -u)" = 0 ]; then su postgres -c "$*"; else bash -c "$*"; fi; }
 run "$BIN/initdb -D $D/pg/data -A trust -U postgres >/dev/null"
 run "$BIN/pg_ctl -D $D/pg/data -o '-k $D/pg -p 54331 -c listen_addresses=' -l $D/pg/log -w start >/dev/null"
@@ -21,6 +21,8 @@ grant select, insert, update on public.dbv5_state, public.dbv5_agent_log, public
 grant usage on all sequences in schema public to service_role;
 SQL
 $P -f "$D/mig.sql"
+$P -f "$D/sig.sql" >/dev/null; [ -f "$D/lane.sql" ] && $P -f "$D/lane.sql" >/dev/null
+$P -c "grant select, insert, update on public.dbv5_scan_signals to service_role; grant usage on all sequences in schema public to service_role"
 SECRET="local-test-secret-not-used-anywhere-else-0123456789"
 cat > "$D/pgrst.conf" <<CONF
 db-uri = "postgres://authenticator@/postgres?host=$D/pg&port=54331"

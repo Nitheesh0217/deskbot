@@ -83,3 +83,22 @@ Findings reproduced by the reviewer and fixed: (1) a failed replacement-entry ev
 - Suite: `npm run typecheck` pass; `npm test` 235/235; `git diff --check` clean. Browser smokes tower/markets/scanner/workers: 0 errors at 1360x900 and 390x844.
 - Real PostgreSQL 16 (scripts/sql_test/work_key.sh): migration applied twice (idempotent). 16 concurrent `insert ... on conflict (work_key) do nothing` with the same key gave 1 row; 3 NULL-key rows coexist.
 - Not verified here: PostgREST's handling of `?columns=...&on_conflict=work_key` against the production schema (no PostgREST locally). It must be checked by a post-migration smoke before release is called verified.
+## 30 Oct 2026 - production observations (read-only SQL), 00:11 UTC
+- First entry since the provenance and committee releases: BTC HTF_TREND SHORT opened 00:00 UTC (V5-1793318461202) @ 77822.4, stop 80065.9, risk $6.85.
+  - dbv5_decisions 1 and dbv5_decision_inputs 4: decision provenance VERIFIED in production.
+  - desk-checks and desk-analysts rows written: deterministic committee stages VERIFIED.
+  - FILTER-1 first verdicts: rules arm skip (warning present), AI arm no_provider (abstain).
+- Coverage counters since 29 Oct 17:31: 81 bars per book, 0 missed bars, 0 missing due bars.
+  - BTC: HTF_TREND entered 1/2 due; SWEEP_REV 1 setup vetoed (score 60 < 72); TREND_MTF 81/81 no flip; VWAP_REVERT 27/27 regime-vetoed; SESSION_BO 27/27 outside window; 4 evaluators off.
+  - Gold: TREND_MTF 4 gate vetoes; VWAP_REVERT 27/27 regime-vetoed; EMA_CROSS 27/27 no cross; 3 evaluators off.
+- Closed paper trades by strategy (all history; no config identity before 29 Oct 17:26):
+  - BTC SWEEP_REV 15 (8 W, −0.84R); BTC SESSION_BO 5 (2 W, −0.48R)
+  - GOLD EMA_CROSS 7 (0 W, −6.12R); GOLD SWEEP_REV 5 (1 W, −2.38R); GOLD SESSION_BO 1 (−0.63R); GOLD TREND_MTF 1 (−0.05R)
+
+## 30 Oct 2026 - W3 branch evidence (sandbox; NOT deployed)
+- `npm run typecheck` pass; `npm test` 220/220; `git diff --check` clean.
+- Strategies smoke (SYNTHETIC counters, banner on screenshots): 11 matrix rows, no "(full)" label, risk shown as "2.00% of equity at risk per trade", 0 page errors, no horizontal scroll at 1360×900 and 390×844.
+- scripts/sql_test/shadow_lane.sh (real PostgreSQL 16):
+  - Existing row defaults to lane 'book'; an invalid lane is rejected; the lane cannot change.
+  - An outcome update on an open shadow row works; re-applying the migration is a no-op.
+- Pre-flight against the live book snapshots: same positions and equity as the v19 bundle; a scan writes only dbv5_scans.

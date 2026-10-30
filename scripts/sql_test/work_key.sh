@@ -12,7 +12,8 @@ run "$BIN/pg_ctl -D $D/pg/data -o '-k $D/pg -p 54329 -c listen_addresses=' -l $D
 trap 'run "$BIN/pg_ctl -D $D/pg/data -m fast stop >/dev/null"; rm -rf "$D"' EXIT
 P="psql -h $D/pg -p 54329 -U postgres -v ON_ERROR_STOP=1 -qAt"
 $P -c "create table public.dbv5_agent_log (id bigserial primary key, ts timestamptz default now(), symbol text, agent text, input_summary text, output jsonb, provider text, ms int, error text);
-       create table public.dbv5_scans (id bigserial primary key, ts timestamptz default now(), markets jsonb not null, deriv jsonb, note text, ms int);"
+       create table public.dbv5_scans (id bigserial primary key, ts timestamptz default now(), markets jsonb not null, deriv jsonb, note text, ms int);
+       create table public.dbv5_state (id text primary key, state jsonb, last_run jsonb, updated_at timestamptz default now()); create role service_role; create role anon; create role authenticated;"
 $P -f "$MIG"; $P -f "$MIG"    # idempotent
 for i in $(seq 1 16); do $P -c "insert into dbv5_agent_log (agent, output, work_key) values ('manager', '{\"key\":\"V5-1:close:final\"}', 'V5-1:close:final') on conflict (work_key) do nothing" & done; wait
 for i in 1 2 3; do $P -c "insert into dbv5_agent_log (agent, output) values ('chart', '{}')"; done

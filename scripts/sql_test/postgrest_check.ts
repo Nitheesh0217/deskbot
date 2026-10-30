@@ -45,5 +45,14 @@ const f = await flushOutbox(st, { insert: (rs) => writeAgentRows(db, "BTC", rs),
 let all = true; for (let i = 0; i < 230; i++) if ((await count(`flush:${i}`)) !== 1) all = false;
 check("flush delivers 230 records in batches, each exactly once in the table", f.delivered === 230 && f.pending === 0 && all);
 
+// 5) scanner setups: the lane-aware insert request (track.ts signalInsertRequest) — both lanes kept for one strategy and bar
+try {
+  const { signalInsertRequest } = await import("../../supabase/functions/deskbot-v5/track.ts");
+  const sig = (lane: "book" | "shadow") => ({ lane, cfg_id: lane === "book" ? "book:aaaa0000" : "SHADOW-1:bbbb0000", sym: "BTC", strategy: "SSR", dir: "long" as const, bar_t: 777, entry: 100, stop: 99, tp1: 101, r_dist: 1, cost_r: 0.1, max_hold_h: 8, score: 1, why: ["x"] });
+  for (let i = 0; i < 2; i++) { const q = signalInsertRequest([sig("book"), sig("shadow")], true); await db.rest(q.path, q.init); }
+  const got = await db.select("dbv5_scan_signals?select=lane,cfg_id&bar_t=eq.777&order=lane");
+  check("lane-aware setup insert: book and shadow rows coexist, repeats suppressed", got.length === 2 && got[0].lane === "book" && got[1].lane === "shadow" && got[1].cfg_id === "SHADOW-1:bbbb0000", JSON.stringify(got));
+} catch (e) { check("lane-aware setup insert", false, String((e as Error).message).slice(0, 160)); }
+
 console.log(fails ? `${fails} check(s) failed` : "all checks passed");
 process.exit(fails ? 1 : 0);
