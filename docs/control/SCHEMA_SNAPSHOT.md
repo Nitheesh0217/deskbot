@@ -1,3 +1,5 @@
+> **Superseded** — see `docs/README.md` for the current authoritative document.
+
 # Actual database schema (read from project xevymbzgpcsdhygswxlk, 28 Oct 2026)
 
 Read-only inspection. The repo's `supabase/migrations/` holds 2 DeskBot files; the project has 7 DeskBot migrations. The rest of this schema (lease, watchdog, news, per-symbol columns, vault key RPC) exists only in the database, so **do not run the repo migrations against production** and treat this file as the reference until a replayable migration is written and tested against a scratch project.

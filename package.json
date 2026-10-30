@@ -11,9 +11,11 @@
     "build-info": "node scripts/gen_build_info.mjs",
     "build-info:check": "node scripts/gen_build_info.mjs --check",
     "build:web": "node scripts/build_web.mjs",
-    "build:web:check": "node scripts/build_web.mjs --check"
+    "build:web:check": "node scripts/build_web.mjs --check",
+    "check": "npm run typecheck && npm test && npm run build:web:check && npm run build-info:check"
   },
   "devDependencies": {
+    "esbuild": "0.23.1",
     "tsx": "4.19.0",
     "typescript": "5.6.3"
   }
