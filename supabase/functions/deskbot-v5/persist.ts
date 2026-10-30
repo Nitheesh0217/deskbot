@@ -69,23 +69,33 @@ export async function ackWork(db: Db, rowId: string, keys: string[]): Promise<bo
 }
 
 export type FlushIO = { insert: (rows: WorkRow[]) => Promise<string>; ack: (keys: string[]) => Promise<boolean> };
-export type FlushResult = { delivered: number; pending: number; mode: string | null; needsStateSave: boolean; error: string | null };
+export type FlushBudget = { maxBatches: number; maxMs: number; clock?: () => number };
+/** Default per-run recovery budget: a large backlog drains over several runs instead of holding the trading loop and its lease. */
+export const FLUSH_BUDGET: FlushBudget = { maxBatches: 5, maxMs: 4000 };
+export type FlushResult = { delivered: number; pending: number; batches: number; ms: number; budgetExhausted: boolean; mode: string | null; needsStateSave: boolean; error: string | null };
 /**
- * Deliver the outbox in batches. After each inserted batch, acknowledge exactly its keys (scoped RPC) and drop them from the
- * local copy so a later save cannot resurrect them. If the RPC is missing, the local copy is still trimmed and the caller must
- * persist it with a compare-and-set save. An insert failure stops the flush; everything not yet acknowledged stays pending.
+ * Deliver the outbox in batches within a budget. After each inserted batch, acknowledge exactly its keys (scoped RPC) and drop them
+ * from the local copy so a later save cannot resurrect them (the database trigger dbv5_state_outbox_guard covers other writers'
+ * copies). If the RPC is missing, the local copy is still trimmed and the caller must persist it with a compare-and-set save.
+ * An insert failure stops the flush. When the budget (batches or time) runs out, the rest stays pending for the next run.
  */
-export async function flushOutbox(st: { _workOutbox?: WorkRow[] }, io: FlushIO, batchSize = 100): Promise<FlushResult> {
-  let delivered = 0, mode: string | null = null, needsStateSave = false;
+export async function flushOutbox(st: { _workOutbox?: WorkRow[] }, io: FlushIO, batchSize = 100, budget: FlushBudget = FLUSH_BUDGET): Promise<FlushResult> {
+  const clock = budget.clock ?? Date.now, t0 = clock();
+  let delivered = 0, batches = 0, mode: string | null = null, needsStateSave = false;
+  const done = (error: string | null, budgetExhausted = false): FlushResult => {
+    if (st._workOutbox && !st._workOutbox.length) delete st._workOutbox;
+    return { delivered, pending: st._workOutbox?.length ?? 0, batches, ms: clock() - t0, budgetExhausted, mode, needsStateSave, error };
+  };
   while (st._workOutbox?.length) {
+    if (batches >= budget.maxBatches || clock() - t0 >= budget.maxMs) return done(null, true);
     const batch = st._workOutbox.slice(0, batchSize), keys = batch.map((r) => r.output.key);
-    try { mode = await io.insert(batch); } catch (e) { return { delivered, pending: st._workOutbox.length, mode, needsStateSave, error: String((e as Error).message ?? e).slice(0, 200) }; }
+    try { mode = await io.insert(batch); } catch (e) { return done(String((e as Error).message ?? e).slice(0, 200)); }
+    batches++;
     const scoped = await io.ack(keys).catch(() => false);
     if (!scoped) needsStateSave = true;
-    const done = new Set(keys); st._workOutbox = st._workOutbox.filter((r) => !done.has(r.output.key)); delivered += batch.length;
+    const acked = new Set(keys); st._workOutbox = st._workOutbox.filter((r) => !acked.has(r.output.key)); delivered += batch.length;
   }
-  if (st._workOutbox && !st._workOutbox.length) delete st._workOutbox;
-  return { delivered, pending: st._workOutbox?.length ?? 0, mode, needsStateSave, error: null };
+  return done(null);
 }
 
 /** Backlog for the status payload: count and oldest queued time (no record contents). */

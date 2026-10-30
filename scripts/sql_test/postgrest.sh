@@ -36,4 +36,5 @@ CONF
 for i in $(seq 1 50); do curl -s -o /dev/null http://127.0.0.1:54399/ && break; sleep 0.2; done
 JWT=$(node -e 'const c=require("crypto"),b=(o)=>Buffer.from(JSON.stringify(o)).toString("base64url");const h=b({alg:"HS256",typ:"JWT"}),p=b({role:"service_role",exp:Math.floor(Date.now()/1e3)+600});console.log(h+"."+p+"."+c.createHmac("sha256",process.argv[1]).update(h+"."+p).digest("base64url"))' "$SECRET")
 echo "PostgREST: $("$PGRST" --version | head -1); PostgreSQL: $($P -c 'show server_version')"
-cd "$ROOT" && node --import tsx scripts/sql_test/postgrest_check.ts http://127.0.0.1:54399 "$JWT"
+cd "$ROOT"
+if [ "${RACE:-0}" = 1 ]; then node --import tsx scripts/sql_test/postgrest_race.ts http://127.0.0.1:54399 "$JWT"; else node --import tsx scripts/sql_test/postgrest_check.ts http://127.0.0.1:54399 "$JWT"; fi

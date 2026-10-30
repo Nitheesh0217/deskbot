@@ -70,3 +70,21 @@ test("CAS: first write of a legacy state (no _rev) uses the null guard; a stale 
   const x: any = structuredClone(db.state); x.equity = 2; await saveStateCAS(dbClient, "main", x); assert.equal(db.state._rev, 1);
   const stale: any = { equity: 9 }; await assert.rejects(saveStateCAS(dbClient, "main", stale), StateConflict); assert.equal(db.state.equity, 2);
 });
+
+test("bounded recovery: a 1,200-record backlog with slow writes is drained over several runs within the per-run budget; nothing is lost", async () => {
+  const { db, io } = store({ _rev: 1 }); const st: any = { _workOutbox: Array.from({ length: 1200 }, (_, i) => row(`b${i}`)) };
+  let t = 0; const clock = () => t, slow = { ...io("A"), insert: async (rows: WorkRow[]) => { t += 1500; return io("A").insert(rows); } };   // each batch takes 1.5 s
+  const runs: any[] = [];
+  while (st._workOutbox?.length && runs.length < 20) { t = 0; runs.push(await flushOutbox(st, slow, 100, { maxBatches: 5, maxMs: 4000, clock })); }
+  assert.ok(runs.every((r) => r.batches <= 3 && r.ms <= 4000 + 1500), "each run stops at the time budget (3 batches of 1.5 s)"); assert.ok(runs[0].budgetExhausted);
+  assert.equal(runs.length, 4, "1,200 records at 300 per run"); assert.equal(db.log.size, 1200); assert.ok([...db.log.values()].every((n) => n === 1));
+  const fast = { _workOutbox: Array.from({ length: 1200 }, (_, i) => row(`f${i}`)) } as any; const r = await flushOutbox(fast, io("A"), 100, { maxBatches: 5, maxMs: 4000 });
+  assert.equal(r.delivered, 500); assert.equal(r.pending, 700); assert.equal(r.budgetExhausted, true, "batch budget limits a fast run too");
+});
+
+test("bounded recovery with failing writes: a failure stops the run immediately, keeps everything unacknowledged, and the next run resumes", async () => {
+  const { db, io } = store({ _rev: 1 }); const st: any = { _workOutbox: Array.from({ length: 700 }, (_, i) => row(`c${i}`)) };
+  let n = 0; const flaky = { ...io("A"), insert: async (rows: WorkRow[]) => { if (++n % 3 === 0) throw new Error("503"); return io("A").insert(rows); } };
+  const results: any[] = []; for (let i = 0; i < 12 && st._workOutbox?.length; i++) results.push(await flushOutbox(st, flaky, 100, { maxBatches: 5, maxMs: 4000 }));
+  assert.ok(results.some((r) => r.error === "503" && !r.budgetExhausted)); assert.equal(st._workOutbox, undefined); assert.equal(db.log.size, 700);
+});

@@ -19,3 +19,20 @@ language sql security definer set search_path = public as $$
 $$;
 revoke all on function public.dbv5_ack_work(text, text[]) from public, anon, authenticated;
 grant execute on function public.dbv5_ack_work(text, text[]) to service_role;
+-- 4) Outbox guard on every write of a book row. The acknowledgement above does not change state._rev, so a run that loaded
+--    the state before an acknowledgement can still pass its compare-and-set and write the acknowledged record back.
+--    This trigger removes, inside that same write, every outbox entry whose key is already in the work log, so a delivered
+--    record can never reappear in any interleaving (a record delivered after the write is removed by its own acknowledgement).
+--    Nothing else in the state is touched; order of the remaining entries is preserved.
+create or replace function public.dbv5_state_outbox_guard() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if jsonb_typeof(new.state->'_workOutbox') = 'array' and jsonb_array_length(new.state->'_workOutbox') > 0 then
+    new.state := jsonb_set(new.state, '{_workOutbox}', coalesce((
+      select jsonb_agg(e.v order by e.i) from jsonb_array_elements(new.state->'_workOutbox') with ordinality as e(v, i)
+       where not exists (select 1 from public.dbv5_agent_log l where l.work_key = e.v->'output'->>'key')), '[]'::jsonb));
+  end if;
+  return new;
+end $$;
+create or replace trigger dbv5_state_outbox_guard before insert or update of state on public.dbv5_state
+  for each row execute function public.dbv5_state_outbox_guard();

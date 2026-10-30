@@ -292,6 +292,8 @@ async function runOnce(sym: Sym = "BTC") {
     try {
       const f = await flushOutbox(wx, { insert: (rs) => writeAgentRows(sym, rs), ack: (keys) => ackWork(db, rowId(sym), keys) });
       if (f.error) await events([{ kind: "ERROR", msg: `${tag}work log write failed; ${f.pending} record(s) pending (${f.delivered} delivered this run): ${f.error}`.slice(0, 280), symbol: sym }]);
+      // last flush result for status / Theo's desk (an event, so it is recorded even when the work log itself is unavailable)
+      await events([{ kind: "WORKLOG", symbol: sym, msg: `${tag}work log flush: ${f.delivered} delivered, ${f.pending} pending${f.budgetExhausted ? " (per-run budget reached; continues next run)" : ""}${f.error ? " · failed" : ""}`.slice(0, 280), data: { delivered: f.delivered, pending: f.pending, batches: f.batches, ms: f.ms, budgetExhausted: f.budgetExhausted, error: f.error } }]).catch(() => {});
       if (f.needsStateSave) await saveState(st, lastRun, sym);   // RPC not migrated: persist the trimmed outbox by compare-and-set
       if (f.mode === "check-then-insert") notes.push("work log: work_key column missing; deduplicated by check-then-insert");
     } catch (e) {
@@ -469,6 +471,7 @@ async function status() {
   const [scanRows, track] = await Promise.all([select("dbv5_scans?select=ts,markets,deriv,note,ms,work&order=id.desc&limit=1").catch(() => select("dbv5_scans?select=ts,markets,deriv,note,ms&order=id.desc&limit=1")).catch(() => []), trackStatus()]);
   const scan = scanRows?.[0] ?? null;
   const flushFails = await select(`dbv5_events?select=ts,symbol,msg&kind=eq.ERROR&msg=ilike.*work%20log*&ts=gte.${new Date(Date.now() - 86400_000).toISOString()}&order=id.desc&limit=50`).catch(() => null);
+  const lastFlush = await select("dbv5_events?select=ts,symbol,data&kind=eq.WORKLOG&order=id.desc&limit=4").catch(() => null);
   const st = s?.[0]?.state ?? null;
   const experiment = await experimentStatus();
   const config = resolvedCfg(st?.cfg);
@@ -486,7 +489,7 @@ async function status() {
   }
   for (const [k, b] of Object.entries(books)) if ((b as { work?: unknown }).work) workBacklog[k] = (b as { work?: unknown }).work;
   const curve = (eq ?? []).filter((_: unknown, i: number, a: unknown[]) => a.length < 600 || i % Math.ceil(a.length / 600) === 0 || i === a.length - 1);
-  return { version: VERSION, mode: "PAPER", now: new Date().toISOString(), updated: s?.[0]?.updated_at ?? null, integrity, state: st, lastRun: s?.[0]?.last_run ?? null, events: ev, agents: agents ?? [], trades: tr, curve, books, backtest: bt?.[0] ?? null, experiment, config, registry: { strategies: STRATEGIES, optIn: OPT_IN }, scan, track, work: { backlog: workBacklog, flushFailures24h: Array.isArray(flushFails) ? flushFails.length : null, lastFlushFailure: Array.isArray(flushFails) && flushFails[0] ? flushFails[0] : null }, chat: { enabled: !!CHAT_KEY, ai: providersFromEnv().map((p) => p.name) }, ai: { providers: providersFromEnv().map((p) => p.name), agentAi: AGENT_AI, deskWorkflow: DESK_WORKFLOW, newsAi: NEWS_AI, newsMode: NEWS_MODE } };
+  return { version: VERSION, mode: "PAPER", now: new Date().toISOString(), updated: s?.[0]?.updated_at ?? null, integrity, state: st, lastRun: s?.[0]?.last_run ?? null, events: ev, agents: agents ?? [], trades: tr, curve, books, backtest: bt?.[0] ?? null, experiment, config, registry: { strategies: STRATEGIES, optIn: OPT_IN }, scan, track, work: { backlog: workBacklog, lastFlush: Array.isArray(lastFlush) ? lastFlush : null, flushFailures24h: Array.isArray(flushFails) ? flushFails.length : null, lastFlushFailure: Array.isArray(flushFails) && flushFails[0] ? flushFails[0] : null }, chat: { enabled: !!CHAT_KEY, ai: providersFromEnv().map((p) => p.name) }, ai: { providers: providersFromEnv().map((p) => p.name), agentAi: AGENT_AI, deskWorkflow: DESK_WORKFLOW, newsAi: NEWS_AI, newsMode: NEWS_MODE } };
 }
 
 // ─── AI assistant (owner only; password = DESKBOT_CHAT_KEY secret) ─────────
