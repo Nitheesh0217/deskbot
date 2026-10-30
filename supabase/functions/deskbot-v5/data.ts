@@ -22,25 +22,32 @@ export const SYMBOLS = {
 export type Sym = keyof typeof SYMBOLS;
 export const isSym = (x: unknown): x is Sym => typeof x === "string" && x in SYMBOLS;
 
-async function withTimeout<T>(p: (s: AbortSignal) => Promise<T>, ms = 8000): Promise<T> {
-  const c = new AbortController(); const id = setTimeout(() => c.abort(), ms);
-  try { return await p(c.signal); } finally { clearTimeout(id); }
+// The whole request INCLUDING the body read runs inside the deadline: `p` must read the body itself. Clearing the timer when
+// fetch resolved (headers only) left res.json() unbounded on a stalled stream. The race also bounds a body that ignores the abort.
+export async function withTimeout<T>(p: (s: AbortSignal) => Promise<T>, ms = 8000): Promise<T> {
+  const c = new AbortController(); let id: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<never>((_, no) => { id = setTimeout(() => { c.abort(); no(new Error(`timed out after ${ms} ms`)); }, ms); });
+  try { return await Promise.race([p(c.signal), late]); } finally { clearTimeout(id); }
 }
 
 async function hlCandles(interval: string, startTime: number, endTime: number, sym: Sym = "BTC"): Promise<Bar[]> {
-  const res = await withTimeout(s => fetch(HL, {
-    method: "POST", signal: s, headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ type: "candleSnapshot", req: { coin: SYMBOLS[sym].hl, interval, startTime, endTime } }),
-  }));
-  if (!res.ok) throw new Error(`HL ${interval} HTTP ${res.status}`);
-  const j = await res.json() as Array<{ t: number; T: number; o: string; h: string; l: string; c: string; v: string }>;
+  const j = await withTimeout(async s => {
+    const res = await fetch(HL, {
+      method: "POST", signal: s, headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: "candleSnapshot", req: { coin: SYMBOLS[sym].hl, interval, startTime, endTime } }),
+    });
+    if (!res.ok) throw new Error(`HL ${interval} HTTP ${res.status}`);
+    return await res.json() as Array<{ t: number; T: number; o: string; h: string; l: string; c: string; v: string }>;
+  });
   return j.map(k => ({ t: +k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.v, ct: +k.t + TF_MS[interval] - 1 }));
 }
 
 async function bnCandles(interval: string, limit: number, sym: Sym = "BTC"): Promise<Bar[]> {
-  const res = await withTimeout(s => fetch(`${BN}/klines?symbol=${SYMBOLS[sym].bn}&interval=${interval}&limit=${Math.min(limit, 1000)}`, { signal: s }));
-  if (!res.ok) throw new Error(`Binance ${interval} HTTP ${res.status}`);
-  const j = await res.json() as unknown[][];
+  const j = await withTimeout(async s => {
+    const res = await fetch(`${BN}/klines?symbol=${SYMBOLS[sym].bn}&interval=${interval}&limit=${Math.min(limit, 1000)}`, { signal: s });
+    if (!res.ok) throw new Error(`Binance ${interval} HTTP ${res.status}`);
+    return await res.json() as unknown[][];
+  });
   return j.map(k => ({ t: +k[0]!, o: +k[1]!, h: +k[2]!, l: +k[3]!, c: +k[4]!, v: +k[5]!, ct: +k[6]! }));
 }
 
@@ -72,9 +79,12 @@ export async function candlesRange(interval: string, startTime: number, endTime:
 export async function candlesRangeBinance(interval: string, startTime: number, endTime: number, sym: Sym = "BTC"): Promise<Bar[]> {
   const out: Bar[] = []; let s = startTime;
   for (let guard = 0; s < endTime && guard < 130; guard++) {
-    const res = await withTimeout(sig => fetch(`${BN}/klines?symbol=${SYMBOLS[sym].bn}&interval=${interval}&startTime=${s}&endTime=${endTime}&limit=1000`, { signal: sig }), 12000);
-    if (!res.ok) throw new Error(`Binance ${interval} HTTP ${res.status}`);
-    const j = await res.json() as unknown[][]; if (!j.length) break;
+    const j = await withTimeout(async sig => {
+      const res = await fetch(`${BN}/klines?symbol=${SYMBOLS[sym].bn}&interval=${interval}&startTime=${s}&endTime=${endTime}&limit=1000`, { signal: sig });
+      if (!res.ok) throw new Error(`Binance ${interval} HTTP ${res.status}`);
+      return await res.json() as unknown[][];
+    }, 12000);
+    if (!j.length) break;
     for (const k of j) out.push({ t: +k[0]!, o: +k[1]!, h: +k[2]!, l: +k[3]!, c: +k[4]!, v: +k[5]!, ct: +k[6]! });
     s = +j[j.length - 1][0]! + TF_MS[interval]; if (j.length < 1000) break;
   }
@@ -83,9 +93,9 @@ export async function candlesRangeBinance(interval: string, startTime: number, e
 
 export async function hlContext(sym: Sym = "BTC"): Promise<{ funding: number; oi: number; markPx: number; premium: number } | null> {
   try {
-    const res = await withTimeout(s => fetch(HL, { method: "POST", signal: s, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: "metaAndAssetCtxs" }) }));
-    if (!res.ok) return null;
-    const [meta, ctxs] = await res.json();
+    const r = await withTimeout(async s => { const res = await fetch(HL, { method: "POST", signal: s, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: "metaAndAssetCtxs" }) }); return res.ok ? await res.json() : null; });
+    if (!r) return null;
+    const [meta, ctxs] = r;
     const i = meta.universe.findIndex((u: { name: string }) => u.name === SYMBOLS[sym].hl); if (i < 0) return null;
     const c = ctxs[i];
     return { funding: +c.funding, oi: +c.openInterest, markPx: +c.markPx, premium: +(c.premium ?? 0) };
@@ -94,8 +104,8 @@ export async function hlContext(sym: Sym = "BTC"): Promise<{ funding: number; oi
 
 export async function fearGreed(): Promise<{ value: number; label: string } | null> {
   try {
-    const res = await withTimeout(s => fetch("https://api.alternative.me/fng/?limit=1", { signal: s }));
-    if (!res.ok) return null; const j = await res.json();
+    const j = await withTimeout(async s => { const res = await fetch("https://api.alternative.me/fng/?limit=1", { signal: s }); return res.ok ? await res.json() : null; });
+    if (!j) return null;
     return { value: +j.data[0].value, label: j.data[0].value_classification };
   } catch { return null; }
 }
@@ -106,9 +116,9 @@ export async function fearGreed(): Promise<{ value: number; label: string } | nu
 // so it is logged (shadow), not used to gate entries.
 export async function orderFlow(now = Date.now(), sym: Sym = "BTC"): Promise<{ imb4: number; imb24: number; bars: number } | null> {
   try {
-    const res = await withTimeout(s => fetch(`${BN}/klines?symbol=${SYMBOLS[sym].bn}&interval=1h&limit=26`, { signal: s }));
-    if (!res.ok) return null;
-    const j = (await res.json() as unknown[][]).filter(k => +k[6]! < now);
+    const raw = await withTimeout(async s => { const res = await fetch(`${BN}/klines?symbol=${SYMBOLS[sym].bn}&interval=1h&limit=26`, { signal: s }); return res.ok ? await res.json() as unknown[][] : null; });
+    if (!raw) return null;
+    const j = raw.filter(k => +k[6]! < now);
     const imb = (n: number) => { const w = j.slice(-n); const v = w.reduce((a, k) => a + +k[5]!, 0); return v > 0 ? w.reduce((a, k) => a + 2 * +k[9]! - +k[5]!, 0) / v : NaN; };
     return { imb4: +imb(4).toFixed(4), imb24: +imb(24).toFixed(4), bars: j.length };
   } catch { return null; }
