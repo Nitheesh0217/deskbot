@@ -82,3 +82,14 @@ Studies and articles:
 - Day-trader base rate: repositorio.fgv.br (Chague, De-Losso and Giovannetti)
 - UI: linear.app/now/how-we-redesigned-the-linear-ui; github.com/Myndex/SAPC-APCA
 - Hummingbot position executor: hummingbot.org/v2-strategies/executors/positionexecutor (search snippet only)
+
+## 4. ATS repositories (studied 2026-10-31 from source)
+| Repo | License | Borrowable pattern | DeskBot status |
+|---|---|---|---|
+| lhc5407/ATS | **unverified**: the repo returns 404 and the user has no public repos | Regime switch (mean-reversion vs trend); AI approval before entry | Regime gating exists (engine.ts); the AI stays advisory on purpose |
+| anouarac/ATS (C++) | MIT | Strategies emit order intents to a queue; one abstract exchange interface per venue; unit tests on order and position managers | The read-only adapter contract exists (accounts.ts). A paper order-intent layer is a later candidate, and needs replay parity first |
+| hamed65kz/ATS (Python) | **none**, so all rights reserved: ideas only | Broker-neutral interface; logging the same asset's price from two venues side by side. **Anti-pattern:** commits a plaintext API key | Secret handling is already guarded. Cross-venue divergence: **observe-only check added** |
+| memarc/jsystemtrader (Java, archived) | BSD-3-Clause | A trading schedule that blocks entries and closes at a set time; validating data and indicators before trading; one code path for backtest and live; several report formats | Data validity: **observe-only missing-bar check added**. A PAXG weekend schedule changes trading, so it needs **owner approval, shadow first**. Backtest/live parity already exists (lanes) |
+
+Rejected: optimizer ranking by in-sample profit (overfitting risk).
+Sources: github.com/anouarac/ATS, github.com/hamed65kz/ATS, github.com/memarc/jsystemtrader, github.com/lhc5407 (no public repositories).
