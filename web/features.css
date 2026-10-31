@@ -32,7 +32,20 @@
 .plan-t td { padding: 7px 8px; border-bottom: 1px solid var(--line); } .plan-t .r { text-align: right; }
 .plan-t tr.pk-market td { color: var(--fg-2); } .plan-t tr.pk-reference td { color: var(--fg-3); font-style: italic; } .plan-t tr.hit td { opacity: .6; }
 .plan-panel .note.warn { color: var(--warn); } .plan-panel .note.down { color: var(--down); }
+/* trade status chips (chart header + plan panel): live R (unrealised), time in trade vs max hold, last recorded exit */
+.chart-chips, .plan-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.chart-chips:empty, .plan-chips:empty { display: none; }
+.plan-chips { margin-bottom: 8px; }
+.pchip { display: inline-flex; align-items: baseline; gap: 5px; max-width: 100%; font: 600 12px/1.25 var(--f-mono); font-variant-numeric: tabular-nums; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--line-2); color: var(--fg-2); background: var(--panel-2); white-space: normal; overflow-wrap: anywhere; }
+.pchip small { font: 500 10px/1 var(--f-mono); color: var(--fg-3); letter-spacing: .02em; }
+.pchip.up { color: var(--up); border-color: color-mix(in srgb, var(--up) 40%, transparent); background: var(--up-soft); }
+.pchip.down { color: var(--down); border-color: color-mix(in srgb, var(--down) 40%, transparent); background: var(--down-soft); }
+.pchip-clock[data-state="amber"] { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 50%, transparent); background: color-mix(in srgb, var(--warn) 8%, transparent); }
+.pchip-clock[data-state="red"] { color: var(--down); border-color: color-mix(in srgb, var(--down) 50%, transparent); background: var(--down-soft); }
+.pchip-exit b { font-weight: 700; }
 @media (max-width: 520px) {
+  .chart-chips { order: 3; flex-basis: 100%; }
+  .pchip { font-size: 11px; }
   .plan-t, .plan-t tbody { display: block; min-width: 0; width: 100%; } .plan-t thead { display: none; }
   .plan-wrap { overflow-x: visible; padding: 0 10px; }
   .plan-t tr { display: grid; grid-template-columns: 1.3fr 1fr 1fr; gap: 2px 8px; padding: 8px 0; border-bottom: 1px solid var(--line); }

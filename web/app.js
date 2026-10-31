@@ -537,30 +537,31 @@ async function chartDraw() {
     const h4c = h4.bars.filter((x) => x.t + 144e5 <= Date.now()), dc = donchianPrior(h4c.concat([{ h: NaN, l: NaN }]), 55);
     const last = b[b.length - 1].c, eDnow = eD.length ? eD[eD.length - 1].value : m.ema50D;
     const legend = [];
-    // reference and advisory levels (not orders) only when asked for: they are context, and their labels crowd the plan
-    if (CH.layers.refs) {
-      if (dc) { PL(dc.hi, "#5aa9e6", "Ref · 4H 55-bar high", 1); PL(dc.lo, "#5aa9e6", "Ref · 4H 55-bar low", 1); }
-      if (m.asian && tf !== "1d" && tf !== "4h") { PL(m.asian.hi, cssVar("--fg-3"), "Ref · Asian high", 3); PL(m.asian.lo, cssVar("--fg-3"), "Ref · Asian low", 3); }
-      const dl = (((S.last_run || {}).desk || {}).chart || {}).levels || [];
-      dl.filter((x) => x.blocks && Math.abs(x.px - b[b.length - 1].c) / b[b.length - 1].c < 0.04).forEach((x) => PL(x.px, x.side === "support" ? cssVar("--up") : cssVar("--down"), "Advisory · " + x.name, 2));
+    // context levels (not orders) only when asked for: at most 5, nearest to price first, near-duplicates dropped (plan.js
+    // pickRefs), all grey dashed with a "Ref ·" label. Prior UTC day = the last CLOSED daily candle.
+    CH.refs = [];
+    if (CH.layers.refs && globalThis.DeskPlan) {
+      const pd = dClosed[dClosed.length - 1], cands = [];
+      if (pd) cands.push({ name: "prior day high", px: pd.h }, { name: "prior day low", px: pd.l });
+      if (m.asian && tf !== "1d" && tf !== "4h") cands.push({ name: "Asian high", px: m.asian.hi }, { name: "Asian low", px: m.asian.lo });
+      if (dc) cands.push({ name: "4H 55-bar high", px: dc.hi }, { name: "4H 55-bar low", px: dc.lo });
+      cands.push(DeskPlan.roundLevel(last));
+      CH.refs = DeskPlan.pickRefs(cands, last, { cap: 5 });
+      CH.refs.forEach((x) => CH.lines.push(CH.series.c.createPriceLine({ price: x.px, color: cssVar("--fg-3"), lineWidth: 1, lineStyle: 2, axisLabelVisible: false, title: x.label })));
     }
-    // executable plan levels, labelled with distance from entry, R from the ORIGINAL risk and the exit share (plan.js)
-    const plan = p ? planOf(p, last) : null;
-    if (plan) for (const r of plan.rows) {
-      const tag = `${r.pct > 0 ? "+" : ""}${r.pct.toFixed(2)}% · ${r.r > 0 ? "+" : ""}${r.r.toFixed(2)}R`;
-      if (r.key === "entry") PL(r.price, cssVar("--fg"), `Entry · ${p.dir.toUpperCase()}`, 0, 2);
-      else if (r.key === "stop") PL(r.price, cssVar("--down"), `${r.label} · ${tag}`, 0, 2);
-      else if (r.key === "stop0") PL(r.price, cssVar("--down"), `Original stop · −1R (reference)`, 2, 1);
-      else if (/^tp/.test(r.key)) PL(r.price, cssVar("--up"), `${r.label}${r.status === "hit" ? " ✓" : ""} · ${tag} · exit ${Math.round(r.share * 100)}% of orig.`, r.status === "hit" ? 2 : 0);
-    }
+    // executable plan levels: short right-edge labels with R from the ORIGINAL risk and % from entry (plan.js levelLabels)
+    const plan = p ? planOf(p, last) : null, roleColor = { entry: cssVar("--fg"), stop: cssVar("--down"), target: cssVar("--up") };
+    if (plan) for (const l of DeskPlan.levelLabels(plan)) PL(l.price, roleColor[l.role], l.title, l.style, l.width);
     renderPlanPanel(plan, last);
     // markers: closed trades + open entry
     const times = b.map((x) => sec(x.t));
     const snapT = (ts) => { let lo = 0, hi = times.length - 1, a = -1; while (lo <= hi) { const md = (lo + hi) >> 1; if (times[md] <= ts) { a = md; lo = md + 1; } else hi = md - 1; } return a < 0 ? null : times[a]; };
     const mk = [];
-    (DATA.trades || []).forEach((t) => { const o = sec(Date.parse(t.open_t)), c = sec(Date.parse(t.close_t)), L = t.dir === "long";
+    const lastT = lastClosed();
+    (DATA.trades || []).forEach((t) => { const o = sec(Date.parse(t.open_t)), c = sec(Date.parse(t.close_t)), L = t.dir === "long", ex = t === lastT && globalThis.DeskPlan ? DeskPlan.exitTag(t) : null;
       mk.push({ time: snapT(o), position: L ? "belowBar" : "aboveBar", color: L ? cssVar("--up") : cssVar("--down"), shape: L ? "arrowUp" : "arrowDown", text: `${t.strategy}` });
-      mk.push({ time: snapT(c), position: "inBar", color: +t.net >= 0 ? cssVar("--up") : cssVar("--down"), shape: "circle", text: sgnR(+t.r) }); });
+      // the last closed trade carries its RECORDED exit reason (plan.js exitTag), never one inferred from prices
+      mk.push({ time: snapT(c), position: ex ? (L ? "aboveBar" : "belowBar") : "inBar", color: +t.net >= 0 ? cssVar("--up") : cssVar("--down"), shape: ex ? "square" : "circle", text: ex ? `Exit · ${ex.text} · ${sgnR(+t.r)}` : sgnR(+t.r) }); });
     if (p) { const o = sec(p.openT); mk.push({ time: snapT(o), position: p.dir === "long" ? "belowBar" : "aboveBar", color: cssVar("--accent"), shape: p.dir === "long" ? "arrowUp" : "arrowDown", text: "OPEN " + p.strategy }); }
     // price-structure layers (fixed rules on closed candles, same module the edge function uses). Their failure is reported
     // separately: the candles above are already drawn and stay on screen.
@@ -620,16 +621,34 @@ function planOf(p, price) {
   const cadence = globalThis.DeskCoverage ? DeskCoverage.cadenceFor(p.strategy, cfg) : null;
   return DeskPlan.planRows(p, { price, cadence, exitMode: cfg.EXIT_MODE, traderParts: cfg.TRADER_PARTS, now: Date.now() });
 }
+/** The most recently closed trade of this book (DATA.trades), or null. */
+function lastClosed() { let best = null; for (const t of DATA.trades || []) if (!best || Date.parse(t.close_t) > Date.parse(best.close_t)) best = t; return best; }
+/** Status chips (display only): live R (unrealised, from the original risk) and time in trade vs the max hold for an open
+ *  position; the last recorded exit when asked for, or when there is no open position. */
+function tradeChips(p, price, withExit) {
+  const out = [];
+  if (p && globalThis.DeskPlan) {
+    const r = DeskPlan.liveR(p, price);
+    if (r) out.push(`<span class="pchip pchip-r ${r.tone}" data-chip="liveR" title="Unrealised: current price vs entry in units of the ORIGINAL risk (entry to original stop). Fills already taken at a target are not included.">${esc(r.text)} <small>unrealised</small></span>`);
+    const c = DeskPlan.holdClock(p.openT, p.maxHoldH, Date.now());
+    if (c) out.push(`<span class="pchip pchip-clock" data-chip="clock" data-state="${c.state}" title="Time in trade against the maximum hold. The max hold is a limit (the engine's time exit), not a forecast.">${esc(c.text)}${c.state === "red" ? " · at limit" : c.state === "amber" ? " · nearing limit" : ""} <small>max hold = limit</small></span>`);
+  }
+  const t = withExit || !p ? lastClosed() : null, ex = t && globalThis.DeskPlan ? DeskPlan.exitTag(t) : null;
+  if (ex) out.push(`<span class="pchip pchip-exit ${+t.net >= 0 ? "up" : "down"}" data-chip="exit" title="Recorded exit reason: ${esc(ex.recorded)}">Last exit · <b>${esc(ex.text)}</b> · ${esc(sgnR(+t.r))} · ${esc(when(t.close_t))}</span>`);
+  return out.join("");
+}
 function renderPlanPanel(plan, price, warn, failed) {
   const el = $("planPanel"); if (!el) return;
+  const pos = ((DATA.state || {}).state || {}).pos, hc = $("chartChips");
+  if (hc) hc.innerHTML = failed ? "" : tradeChips(plan ? pos : null, price, false);
   if (failed) { el.innerHTML = '<p class="note down">Plan unavailable: the position data could not be read. Nothing about the position was changed.</p>'; return; }
   const warnHtml = warn ? `<p class="note warn">${esc(warn)}</p>` : "";
-  if (!plan) { el.innerHTML = '<p class="note faint">No open paper position: the chart shows price action and, if switched on, reference levels only.</p>'; return; }
+  if (!plan) { const ch = tradeChips(null, null, true); el.innerHTML = (ch ? `<div class="plan-chips">${ch}</div>` : "") + '<p class="note faint">No open paper position: the chart shows price action and, if switched on, reference levels only.</p>'; return; }
   const m = plan.meta, q = (x) => (x == null ? "—" : (+x).toPrecision(6));
   const row = (r) => `<tr class="pk-${r.kind} ${r.status === "hit" ? "hit" : ""}"><td data-k="Level">${esc(r.label)}${r.kind === "reference" ? ' <small class="faint">not an order</small>' : ""}</td><td data-k="Price" class="r">${fmtPx(r.price)}</td><td data-k="From entry" class="r">${r.pct == null ? "—" : (r.pct > 0 ? "+" : "") + r.pct.toFixed(2) + "%"}</td><td data-k="R (original)" class="r">${r.r == null ? "—" : (r.r > 0 ? "+" : "") + r.r.toFixed(2) + "R"}</td><td data-k="Exit (planned)" class="r">${r.exitText ? esc(r.exitText) + " · " : ""}${q(r.qty)}</td><td data-k="Status">${esc(r.status)}</td></tr>`;
-  el.innerHTML = `${warnHtml}<div class="plan-meta"><b>${esc(nameOf(m.strategy))}</b> · ${esc(m.dir)} · signal on ${esc(m.signalTimeframe || "—")} · max hold ${esc(m.maxHoldText || "—")}${m.heldH != null && m.maxHoldH ? ` (held ${m.heldH.toFixed(0)} h of ${m.maxHoldH} h)` : ""}${m.expiresAt ? ` · time exit ${new Date(m.expiresAt).toISOString().slice(0, 16).replace("T", " ")} UTC` : ""} · 1R = ${fmtPx(m.riskPts)} pts (${m.riskPct.toFixed(2)}%) = ${fmt$(m.riskAmt)}</div>
+  el.innerHTML = `${warnHtml}<div class="plan-chips">${tradeChips(pos, price, true)}</div><div class="plan-meta"><b>${esc(nameOf(m.strategy))}</b> · ${esc(m.dir)} · signal on ${esc(m.signalTimeframe || "—")} · max hold ${esc(m.maxHoldText || "—")}${m.expiresAt ? ` · time exit ${new Date(m.expiresAt).toISOString().slice(0, 16).replace("T", " ")} UTC` : ""} · 1R = ${fmtPx(m.riskPts)} pts (${m.riskPct.toFixed(2)}%) = ${fmt$(m.riskAmt)}</div>
     <div class="plan-wrap"><table class="plan-t"><thead><tr><th>Level</th><th class="r">Price</th><th class="r">From entry</th><th class="r">R (original risk)</th><th class="r">Exit size (planned)</th><th>Status</th></tr></thead><tbody>${plan.rows.map(row).join("")}</tbody></table></div>
-    <p class="note faint">Executable levels are the paper engine's orders. Exit rules: ${esc(m.exitRules.join("; ") || "—")}. The chart timeframe you view is not the trade's deadline. Zones, Donchian, Asian range and agent levels are reference or advisory only.</p>`;
+    <p class="note faint">Executable levels are the paper engine's orders. Exit rules: ${esc(m.exitRules.join("; ") || "—")}. The chart timeframe you view is not the trade's deadline. Zones and "Ref ·" levels (grey dashed, at most 5, nearest to price) are context only, not orders. Live R is unrealised.</p>`;
 }
 async function renderSetupCard(p, S) {
   try { await renderSetupCardInner(p, S); } catch (e) { panelError("setup card", e, "setupCard"); }
