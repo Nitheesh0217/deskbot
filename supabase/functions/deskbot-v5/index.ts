@@ -23,6 +23,7 @@ import { catchUp } from "./catchup.ts";
 import { managerRows, managerFailure, snapshotPos, workKey, mergeOutbox, type WorkRow } from "./worklog.ts";
 import { makeDb, saveStateCAS, writeAgentRows as writeLog, ackWork, flushOutbox, backlog } from "./persist.ts";
 import { scanMarket, rankScan, derivatives, SCAN_NOTE, CALL_HORIZON_H } from "./scan.ts";
+import { frameInfo, receiptsFor, type Receipt } from "./observe.ts";
 import { signalsOverBars, signalInsertRequest, resolve, trackRecord, shadowRecord, offInBook, withConfig, shadowCfg, shadowCfgId, bookCfgId, SHADOW_VERSION, type LaneTrace, scoreCall, callRecord, PRIORITY, PROMOTION, type NewSignal, type OpenSignal, type Resolution, type OpenCall, type CallScore } from "./track.ts";
 import { captureDecision, pickEntry, decisionIdFor } from "./provenance.ts";
 import { recordCoverage, dispositions, boundaryFlags } from "./coverage.ts";
@@ -212,6 +213,7 @@ async function runOnce(sym: Sym = "BTC", scheduler?: (fn: () => Promise<void>) =
   let opened: { strategy: string; dir: string; entry: number; stop: number; reentry?: boolean; why: string[] } | null = null;
   let covNow: unknown = null;
   let catchup: unknown = null;
+  let receipts: Receipt[] | null = null; const shadowCands: { strategy: string; barT: number }[] = [];   // observability only (observe.ts)
   if (snap.T > st.lastEvalT) {
     const hadPos = !!st.pos, gateCopy = JSON.parse(JSON.stringify(st)) as State, trace: StrategyTrace[] = [];
     const prevEvalT = st.lastEvalT;
@@ -222,6 +224,7 @@ async function runOnce(sym: Sym = "BTC", scheduler?: (fn: () => Promise<void>) =
     if (CATCHUP_MODE !== "off" && !st.pos) {
       const cu = catchUp(S, i5, prevEvalT, st, st.enabled, { funding: ctx?.funding ?? null, oi: ctx?.oi ?? null, markPx: ctx?.markPx ?? null, fng: fng?.value ?? null });
       for (const m of cu.missed) evs.push({ kind: "MISSED", strategy: m.strategy, symbol: sym, msg: `${tag}${m.strategy} ${m.dir.toUpperCase()} setup on the ${new Date(m.T + 1).toISOString().slice(11, 16)} UTC close was missed by a late run: ${m.reason}`, data: { barT: m.T, score: m.score } });
+      if (cu.candidates.length && CATCHUP_MODE === "shadow") for (const c of cu.candidates) shadowCands.push({ strategy: c.strategy, barT: c.barT });
       if (cu.candidates.length && CATCHUP_MODE === "shadow") for (const c of cu.candidates) evs.push({ kind: "MISSED", strategy: c.strategy, symbol: sym, msg: `${tag}${c.strategy} ${c.dir.toUpperCase()} catch-up still valid (shadow mode, not entered)`, data: { barT: c.barT } });
       if (cu.candidates.length && CATCHUP_MODE === "on" && !signals.length) signals.push(...cu.candidates);
       catchup = { mode: CATCHUP_MODE, scanned: cu.scanned, boundaryBars: cu.boundaryBars, valid: cu.candidates.map((c) => c.strategy), missed: cu.missed.length };
@@ -275,6 +278,8 @@ async function runOnce(sym: Sym = "BTC", scheduler?: (fn: () => Promise<void>) =
       const globalBlock = newsBlock ? `Entries paused: ${newsBlock}` : mixedFeeds ? mixedFeeds : enf && !integrity.approved ? `New entries paused: ${integrity.reason}` : null;
       covNow = recordCoverage(st, { T: snap.T, now, trace, boundary: boundaryFlags(snap.T, { "15m": snap.new15, "1h": snap.new1h, "4h": snap.new4h, "1d": snap.i1d >= 0 && S.d1[snap.i1d].ct === snap.T }), disp: dispositions(signals, { hadPos, opened: opened ? { strategy: opened.strategy as StrategyTrace["id"], dir: opened.dir } : null, globalBlock, gateState: gateCopy, now }) });
     } catch (e) { notes.push(`coverage: ${(e as Error).message}`.slice(0, 120)); }
+    try { receipts = receiptsFor(covNow as Parameters<typeof receiptsFor>[0], { barT: snap.T, opened, shadow: shadowCands }); }
+    catch (e) { notes.push(`receipts: ${(e as Error).message}`.slice(0, 120)); }
   }
   if (closed.length) await saveTrades(closed, sym);
 
@@ -299,7 +304,7 @@ async function runOnce(sym: Sym = "BTC", scheduler?: (fn: () => Promise<void>) =
   if (!wx._workOutbox.length) delete wx._workOutbox;
   // providers = names usable for the desk committee (the tower seats); policy = the five separate facts per provider and feature
   const ai = { providers: providersFromEnv("committee").map((p) => p.name), policy: providerPolicy(aiFeaturesOf(), sx._aiUsage ?? {}, now), usage: sx._aiUsage ?? {} };
-  const lastRun = { ts: new Date(now).toISOString(), sym, action, trader: { acts: traderActs, plan: st.pos?.plan ?? [] }, source, sources, notes, integrity, news, ai, upnl: +upnl.toFixed(2), market, decision, risk: dynamicRisk(st.equity), desk: desk.summary, coverage: covNow, catchup, provenanceError, ms: Date.now() - now };
+  const lastRun = { ts: new Date(now).toISOString(), sym, action, trader: { acts: traderActs, plan: st.pos?.plan ?? [] }, source, sources, frames: frameInfo({ m5, m15, h1, h4 }, rx), receipts, notes, integrity, news, ai, upnl: +upnl.toFixed(2), market, decision, risk: dynamicRisk(st.equity), desk: desk.summary, coverage: covNow, catchup, provenanceError, ms: Date.now() - now };
   st.version = VERSION;
   await saveState(st, lastRun, sym);
   await upsert("dbv5_equity", [{ symbol: sym, ts: new Date(now).toISOString(), equity: +st.equity.toFixed(4), upnl: +upnl.toFixed(4), price: snap.price }]);

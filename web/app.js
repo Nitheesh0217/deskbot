@@ -369,7 +369,10 @@ const RENDERERS = [
   ["book", () => document.querySelectorAll(".bookName").forEach((e) => { e.textContent = BOOK === "GOLD" ? "PAXG" : "BTC"; }), "v-desk"],
   ["desk", () => renderDesk(), "v-desk"], ["agents", () => renderAgents(), "v-desk"], ["operations", () => renderOperations(), "v-desk"],
   ["strategies", () => renderStrategies(), "v-strategies"], ["trades", () => renderTrades(), "v-trades"], ["events", () => renderEvents(), "v-activity"],
-  ["system", () => renderSystem(), "v-system"], ["tower", () => renderTower(), "v-tower"], ["scanner", () => renderScanner(), "v-scanner"],
+  ["system", () => renderSystem(), "v-system"],
+  ["freshness", () => { const M = mod("DeskFreshness"); if (M) M.mount($("v-system"), RAW, DATA, BOOK, Date.now()); }, "v-system"],
+  ["receipts", () => { const M = mod("DeskReceipts"); if (M) M.mount($("v-system"), (DATA.state || {}).last_run, { nameOf, bookLabel: BOOK === "GOLD" ? "PAXG" : "BTC" }); }, "v-system"],
+  ["tower", () => renderTower(), "v-tower"], ["scanner", () => renderScanner(), "v-scanner"],
 ];
 function renderAll() { RENDERERS.forEach(([name, fn, host]) => safeRender(name, fn, host)); }
 
@@ -777,7 +780,7 @@ $("runBtn").addEventListener("click", async () => {
   }
   setInterval(() => { if (!document.hidden) pull(); }, 30000);
   document.addEventListener("visibilitychange", () => { if (!document.hidden) pull(); });
-  setInterval(() => { if (!document.hidden) RENDERERS.filter(([n]) => ["desk", "agents", "operations", "system"].includes(n)).forEach(([n, fn, host]) => safeRender(n, fn, host)); }, 10000);
+  setInterval(() => { if (!document.hidden) RENDERERS.filter(([n]) => ["desk", "agents", "operations", "system", "freshness"].includes(n)).forEach(([n, fn, host]) => safeRender(n, fn, host)); }, 10000);
 })();
 
 // ---- AI chat (talks to the cloud bot's free-LLM assistant; proposals need Backtest + Apply) ----

@@ -1,0 +1,28 @@
+/* Data freshness cards and decision receipts (freshness.js, receipts.js). Presentation only. */
+.obs-card .obs-nr { margin-top: 8px; font-style: italic; }
+.obs-book { margin-top: 14px; }
+.obs-book-h { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.obs-mixed { color: var(--warn); border-color: var(--warn); margin: 0 0 10px; font-weight: 600; }
+.obs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.obs-cell { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; background: var(--panel-2); min-width: 0; }
+.obs-cell[data-status="STALE"] { border-color: var(--warn); }
+.obs-cell[data-status="MISSING"] { border-color: var(--down); }
+.obs-cell-h { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.obs-st { font: 600 10px/1 var(--f-mono); letter-spacing: .08em; padding: 3px 6px; border-radius: 4px; border: 1px solid currentColor; }
+.obs-st.up { color: var(--up); } .obs-st.warn { color: var(--warn); } .obs-st.down { color: var(--down); }
+.obs-kv { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; line-height: 1.6; color: var(--fg-2); }
+.obs-kv span:first-child { color: var(--fg-3); }
+.obs-kv { flex-wrap: wrap; }
+.obs-kv span:last-child { text-align: right; white-space: nowrap; margin-left: auto; }
+.obs-disclaimer { margin-bottom: 6px; }
+.obs-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin-top: 10px; }
+.obs-group { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; min-width: 0; }
+.obs-group-h { display: flex; justify-content: space-between; margin-bottom: 6px; }
+.obs-group-h .warn { color: var(--warn); } .obs-group-h .down { color: var(--down); }
+.obs-group ul { list-style: none; margin: 0; padding: 0; }
+.obs-group li { display: flex; flex-direction: column; gap: 2px; padding: 6px 0; border-top: 1px solid var(--line); font-size: 12px; }
+.obs-group li:first-child { border-top: 0; }
+.obs-strat { font-weight: 600; color: var(--fg); }
+.obs-reason { color: var(--fg-2); overflow-wrap: anywhere; }
+@media (max-width: 639px) { .obs-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .obs-kv { font-size: 11px; } .obs-groups { grid-template-columns: 1fr; } }
+.obs-warn { color: var(--warn); font-weight: 600; }
