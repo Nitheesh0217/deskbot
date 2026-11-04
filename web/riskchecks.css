@@ -1,0 +1,41 @@
+/* Paper position checks, market context, config guard and plan badges (riskchecks.js). Light theme, existing tokens only. */
+.rc-card h2 { margin: 0; }
+.rc-card .section-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: space-between; }
+.rc-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.rc-chip { display: inline-flex; align-items: baseline; gap: 6px; max-width: 100%; font: 600 12px/1.3 var(--f-mono); font-variant-numeric: tabular-nums; padding: 5px 9px; border-radius: 6px; border: 1px solid var(--line-2); color: var(--fg-2); background: var(--panel-2); overflow-wrap: anywhere; }
+.rc-chip .rc-k { font: 500 11px/1.3 var(--f-body); color: var(--fg-3); }
+.rc-chip b { font-weight: 700; color: var(--fg); }
+.rc-chip[data-state="ok"] { border-color: color-mix(in srgb, var(--up) 40%, transparent); background: var(--up-soft); }
+.rc-chip[data-state="ok"] b { color: var(--up); }
+.rc-chip[data-state="warn"] { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 55%, transparent); background: color-mix(in srgb, var(--warn) 8%, transparent); }
+.rc-chip[data-state="warn"] b { color: var(--warn); }
+.rc-chip[data-state="nr"] b { color: var(--fg-3); font-weight: 500; }
+.rc-chip:focus-visible, .rc-priv:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.rc-stale { font: 600 12px/1.3 var(--f-body); }
+.rc-badge { display: inline-flex; align-items: center; gap: 4px; font: 700 11px/1 var(--f-mono); letter-spacing: .04em; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--line-2); background: var(--panel); color: var(--fg); font-variant-numeric: tabular-nums; }
+.rc-dir.long { color: var(--up); border-color: color-mix(in srgb, var(--up) 45%, transparent); background: var(--up-soft); }
+.rc-dir.short { color: var(--down); border-color: color-mix(in srgb, var(--down) 45%, transparent); background: var(--down-soft); }
+.rc-priv { font: 600 11px/1 var(--f-mono); padding: 6px 9px; border-radius: 6px; border: 1px solid var(--line-2); background: var(--panel); color: var(--fg-2); cursor: pointer; min-height: 28px; }
+.rc-priv[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.rc-nr, .rc-nrv { color: var(--fg-3); }
+.rc-card p.rc-nr { margin-top: 10px; }
+.rc-notes { margin: 8px 0 0; padding-left: 18px; font-size: 12px; color: var(--fg-2); }
+.rc-guard { margin-top: 10px; }
+.rc-guard[data-state="fail"], .rc-sum[data-state="fail"] { color: var(--warn); }
+.rc-guard[data-state="ok"], .rc-sum[data-state="ok"] { color: var(--up); }
+.rc-sum { margin: 10px 0 0; font: 600 13px/1.4 var(--f-body); color: var(--fg-2); }
+.rc-rules { margin: 6px 0 0; padding-left: 18px; font-size: 12.5px; color: var(--fg-2); }
+.rc-rules li { margin: 3px 0; }
+.rc-rules b { font-family: var(--f-mono); font-size: 12px; color: var(--fg); }
+.rc-h3 { margin: 14px 0 6px; font: 600 13px var(--f-display); color: var(--fg); }
+.rc-h3 small { font-weight: 500; }
+.rc-steps { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; counter-reset: none; }
+.rc-steps li { display: inline-flex; flex-direction: column; gap: 2px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-2); font-variant-numeric: tabular-nums; }
+.rc-steps li:not(:last-child)::after { content: none; }
+.rc-steps .k { font-size: 11px; color: var(--fg-3); }
+.rc-steps b { font: 600 12px/1.2 var(--f-mono); color: var(--fg); }
+.plan-chips .rc-priv { margin-left: auto; }
+@media (max-width: 640px) {
+  .rc-chip { font-size: 11px; }
+  .rc-chip .rc-k { font-size: 10.5px; }
+}

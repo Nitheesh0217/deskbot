@@ -1,0 +1,13 @@
+DeskBot
+Copyright (c) 2026 Nitheesh Donepudi
+
+This product includes software and design patterns adapted from third parties:
+
+- Superior-Trade/trading-terminal — https://github.com/Superior-Trade/trading-terminal
+  Copyright 2026 Superior Trade. Licensed under the Apache License, Version 2.0.
+  Portions adapted (modified) for DeskBot's paper-only checks and dashboard; each adapted file carries a header.
+- Superior-Trade/superior-skills — https://github.com/Superior-Trade/superior-skills
+  Copyright (c) 2026 Superior Trade. MIT License. Research checklist items adapted in docs/control/RESEARCH_PROTOCOL.md.
+- TradingView Lightweight Charts — see web/vendor/NOTICE.lightweight-charts (Apache License 2.0).
+
+DeskBot does not use Superior Trade's hosted API, managed wallets or live deployment features.

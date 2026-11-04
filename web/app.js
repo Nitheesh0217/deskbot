@@ -25,22 +25,27 @@ const STRAT_X = [
   { id: "EMA_PB", name: "XAU pullback (EMA_PB)", desc: "Your saved gold pullback strategy: M15 EMA50/200 trend, 5m pullback to EMA20, 08:00–11:30 ET weekdays. Opt-in.",
     ref: { when: "no live validation recorded", text: "Ported from 'XAU Pullback v1'; opt-in.", noteSaysOff: true }, rate: { BTC: 53.4, GOLD: 44.1 }, optInRate: true },
 ];
-const STRATS = globalThis.DeskBotModel.strategies.map((s) => Object.assign({}, s, STRAT_X.find((x) => x.id === s.id) || {}));
+// shared helpers (util.js, loaded first). Without them nothing below can render, so say so plainly instead of failing silently.
+if (!globalThis.DeskUtil) {
+  document.addEventListener("DOMContentLoaded", () => document.body.insertAdjacentHTML("afterbegin", '<p class="banner down" role="alert">Dashboard helpers (util.js) did not load. Reload the page.</p>'));
+  throw new Error("DeskUtil (util.js) is not loaded");
+}
+const { esc, ago, $ } = globalThis.DeskUtil;
+/** Another script's global, or null when it did not load (each use shows "component unavailable" instead of throwing). */
+const mod = (name) => globalThis[name] || null;
+const unavailable = (what) => `<p class="note component-unavailable" role="status">Component unavailable: ${esc(what)} did not load. Other panels keep working.</p>`;
+const MODEL = mod("DeskBotModel");
+// registry from desk-model.js; if it is missing, fall back to this file's descriptions (same ids) so the other views still render
+const STRATS = MODEL ? MODEL.strategies.map((s) => Object.assign({}, s, STRAT_X.find((x) => x.id === s.id) || {})) : STRAT_X.map((x) => Object.assign({}, x));
 
-const $ = (id) => document.getElementById(id);
-const fmt$ = (v) => !Number.isFinite(v) ? "—" : (v < 0 ? "−$" : "$") + Math.abs(v).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+// privacy mode (riskchecks.js): $ amounts and position sizes are masked; R, % and prices stay
+const PRIV = () => !!(globalThis.DeskRisk && DeskRisk.privacyOn());
+const fmtQty = (v, dp) => PRIV() ? DeskRisk.QMASK : (+v).toFixed(dp);
+const fmt$ = (v) => !Number.isFinite(v) ? "—" : PRIV() ? DeskRisk.MASK : (v < 0 ? "−$" : "$") + Math.abs(v).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtPx = (v) => v == null || !isFinite(v) ? "—" : Number(v).toLocaleString("en-US",{minimumFractionDigits:BOOK==="GOLD"?2:0,maximumFractionDigits:BOOK==="GOLD"?2:0});
 const sgnR = (r) => (r > 0 ? "+" : r < 0 ? "−" : "") + Math.abs(r).toFixed(2) + "R";
 const pct = (v, d = 1) => (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v * 100).toFixed(d) + "%";
-function ago(ts) {
-  const s = (Date.now() - new Date(ts).getTime()) / 1000;
-  if (!Number.isFinite(s)) return "timestamp unknown";
-  if (s < 0) return "future timestamp";
-  if (s < 90) return Math.round(s) + "s ago"; if (s < 5400) return Math.round(s / 60) + "m ago";
-  if (s < 172800) return Math.round(s / 3600) + "h ago"; return Math.round(s / 86400) + "d ago";
-}
 function when(ts) { const d = new Date(ts); return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }); }
-const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const nameOf = (id) => (STRATS.find((s) => s.id === id) || { name: id || "System" }).name;
 
 let DATA = SNAP, LIVE = false, RAW = null;
@@ -59,7 +64,8 @@ function renderDesk() {
   $("integrityBanner").hidden = !integrity || integrity.approved;
   $("integrityBanner").textContent = integrity && !integrity.approved
     ? `Config fingerprint unapproved. Entry enforcement is not reported; inspect System & research.` : "";
-  const account = globalThis.DeskBotModel.account(st, lr), available = account.available;
+  if (!MODEL) { $("posCard").innerHTML = unavailable("Account model (desk-model.js)"); return; }
+  const account = MODEL.account(st, lr), available = account.available;
   const eq = +st.equity || 0, start = Number.isFinite(st.startEquity) && st.startEquity > 0 ? st.startEquity : null, upnl = +lr.upnl || 0;
   $("metricNet").textContent = account.net == null ? "—" : fmt$(account.net);
   $("metricNet").className = "num " + (account.net > 0 ? "up" : account.net < 0 ? "down" : "");
@@ -73,8 +79,8 @@ function renderDesk() {
   $("deskClock").textContent = Number.isFinite(Date.parse(S.updated_at)) ? "Updated " + new Date(S.updated_at).toISOString().slice(11,19) + " UTC" : "No update timestamp";
   $("eq").textContent = available ? fmt$(eq + upnl) : "—";
   const ch = eq + upnl - start, base = S.carried && S.carried.v3StartEquity ? +S.carried.v3StartEquity : null;
-  $("eqd").innerHTML = `<span class="${ch >= 0 ? "up" : "down"}">${ch >= 0 ? "+" : "−"}${fmt$(Math.abs(ch)).replace("$", "$")} (${pct(start ? ch / start : 0, 2)})</span> <span class="faint">since ${BOOK === "GOLD" ? "gold book start" : "v5 start"}</span>` +
-    (base ? `<br><span class="faint">v3 began at $${base.toFixed(0)} · ${pct((eq + upnl) / base - 1, 1)} all-time</span>` : "");
+  $("eqd").innerHTML = `<span class="${ch >= 0 ? "up" : "down"}">${ch >= 0 ? "+" : "−"}${fmt$(Math.abs(ch))} (${pct(start ? ch / start : 0, 2)})</span> <span class="faint">since ${BOOK === "GOLD" ? "gold book start" : "v5 start"}</span>` +
+    (base ? `<br><span class="faint">v3 began at ${PRIV() ? DeskRisk.MASK : "$" + base.toFixed(0)} · ${pct((eq + upnl) / base - 1, 1)} all-time</span>` : "");
   $("runAction").textContent = (lr.action || "—").replace("_", " ");
   const all = (st.stats && st.stats.all) || { n: 0, wins: 0, sumR: 0 };
   if (available && start == null) $("eqd").textContent = "Starting equity is not reported; account return is unavailable.";
@@ -109,15 +115,15 @@ function renderDesk() {
     const rung = (t, lvl, done, cls = "") => `<div class="rung ${done ? "hit" : ""} ${cls}"><span class="t">${t}</span><span class="track"><i style="width:${(done ? 100 : prog(lvl) * 100).toFixed(0)}%"></i></span><span>${fmtPx(lvl)}</span></div>`;
     const u = +lr.upnl || 0;
     pc.innerHTML = `<div class="pos-head"><span class="side ${p.dir}">${p.dir.toUpperCase()}</span><h2>${esc(nameOf(p.strategy))}</h2><span class="num ${u >= 0 ? "up" : "down"}" style="margin-left:auto;font-weight:600">${u >= 0 ? "+" : "−"}${fmt$(Math.abs(u))}</span></div>
-      <div class="setup-svg" style="margin-top:10px">${DeskSetup.setupSVG(p, zonePal(), fmtPx)}</div>
+      <div class="setup-svg" style="margin-top:10px">${mod("DeskSetup") ? DeskSetup.setupSVG(p, zonePal(), fmtPx) : unavailable("Setup drawing (setup.js)")}</div>
       <div class="grid2" style="margin-top:10px"><div><div class="k">Entry</div><div class="v">${fmtPx(p.entry)}</div></div><div><div class="k">Risk</div><div class="v">${fmt$(p.riskAmt)} · ${fmtPx(R)} pts</div></div>
-      <div><div class="k">Size</div><div class="v">${(+p.remainingQty).toFixed(5)} ${BOOK === "GOLD" ? "PAXG units (modeled)" : "BTC"}</div></div><div><div class="k">Opened</div><div class="v">${ago(p.openT)}</div></div></div>
+      <div><div class="k">Size</div><div class="v">${fmtQty(p.remainingQty, 5)} ${BOOK === "GOLD" ? "PAXG units (modeled)" : "BTC"}</div></div><div><div class="k">Opened</div><div class="v">${ago(p.openT)}</div></div></div>
       <div class="ladder">${rung("TP3", p.tp3, p.tp3Done)}${rung("TP2", p.tp2, p.tp2Done)}${rung("TP1", p.tp1, p.tp1Done)}
       <div class="rung stop"><span class="t">Stop</span><span class="track"><i style="width:${p.stop !== p.stop0 ? 100 : 0}%"></i></span><span>${fmtPx(p.stop)}${p.stop !== p.stop0 ? " (moved)" : ""}</span></div></div>
       <p class="note" style="margin-top:10px">${(p.why || []).map(esc).join(" · ")}</p>
       <div class="note" style="margin-top:10px"><b>Trade manager</b>${(p.plan && p.plan.length) ? p.plan.slice().reverse().map((x) => `<div>${new Date(x.t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · ${esc(x.msg)}</div>`).join("") : `<div class="muted">Watching 1m/5m/1H structure — no adjustment needed yet.</div>`}</div>`;
   } else {
-    const on = STRATS.filter((s) => stratView(s.id, st).state !== "DISABLED").length;
+    const on = STRATS.filter((s) => resolveStrat(s.id, st).enabled).length;
     pc.innerHTML = `<div class="flat"><span class="radar" aria-hidden="true"></span><div><h2>${available ? "No open paper position" : "Account data unavailable"}</h2><p class="note">${available ? on + " of " + STRATS.length + " strategies configured on." : "Connect to the public runner to load current state."} Each waits for its own timeframe and setup. Paper runner checks approximately every 5 minutes${st.cb && st.cb.cooldownUntil > Date.now() ? ` · <span class="down">circuit breaker until ${new Date(st.cb.cooldownUntil).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>` : ""}.</p></div></div>`;
   }
 
@@ -144,35 +150,40 @@ function renderDesk() {
   const seen = new Set();
   (dec.rejects || []).forEach((r) => { if (seen.has(r.strategy)) return; seen.add(r.strategy); rows.push(`<div><span class="s">${esc(r.strategy)}</span><span class="muted">${esc(r.reason)}</span></div>`); });
   $("why").innerHTML = rows.join("") || `<p class="note">Waiting for the next check.</p>`;
-  renderAgents(lr);
-  renderOperations();
 }
-function renderAgents(lr) {
+function renderAgents() {
+  const lr = (DATA.state || {}).last_run || {};
   const d = (lr && lr.desk) || null, box = $("deskBody");
   if (!d) { box.innerHTML = `<p class="note">The desk reports after the next cloud check (v5.8).</p>`; return; }
   const c = d.chart || {}, tr = c.trend || {}, arrow = (v) => (v === 1 ? "▲" : v === -1 ? "▼" : "·");
   const chip = (name, on) => `<span class="chip" style="margin-right:6px;opacity:${on ? 1 : 0.55}">${name} ${on ? "ON" : "off"}</span>`;
   const lv = (x) => (x ? `${esc(x.name)} $${fmtPx(x.px)} <span class="faint">(${x.atr} ATR)</span>` : "—");
-  const ago2 = (ts) => ago(ts);
   box.innerHTML =
     `<div style="margin:8px 0">${chip("Body stop", d.body)}${chip("Re-entry", !!d.reentry)}${chip("Validator", d.validator)}</div>` +
     `<div class="grid2"><div><div class="k">Chart agent · bias</div><div class="v ${c.bias === "bull" ? "up" : c.bias === "bear" ? "down" : ""}">${esc((c.bias || "—").toUpperCase())} · 1m${arrow(tr.m1)} 5m${arrow(tr.m5)} 15m${arrow(tr.m15)} 1h${arrow(tr.h1)} 4h${arrow(tr.h4)}</div></div>` +
     `<div><div class="k">Nearest support</div><div class="v">${lv(c.support)}</div></div><div><div class="k">Nearest resistance</div><div class="v">${lv(c.resistance)}</div></div>` +
     `<div><div class="k">Re-entry</div><div class="v">${d.reentry && d.reentry.armed ? `armed · reclaim $${fmtPx(d.reentry.armed.level)}` : "not armed"}</div></div></div>` +
-    `<div class="note" style="margin-top:10px"><b>Recent agent activity</b>${(DATA.agents || []).filter((a) => a.agent !== "chart").slice(0, 8).map((a) => `<div>${esc(ago2(a.ts))} · <b>${esc(a.agent)}</b> · ${esc(a.input_summary || "")}${a.output && a.output.verdict ? ` — ${esc(a.output.verdict)}: ${esc(a.output.reason || "")}` : ""}${a.error ? ` <span class="down">${esc(a.error)}</span>` : ""}</div>`).join("") || `<div class="muted">No signals or adjustments yet. Agents log when they have something to say.</div>`}</div>`;
+    `<div class="note" style="margin-top:10px"><b>Recent agent activity</b>${(DATA.agents || []).filter((a) => a.agent !== "chart").slice(0, 8).map((a) => `<div>${esc(ago(a.ts))} · <b>${esc(a.agent)}</b> · ${esc(a.input_summary || "")}${a.output && a.output.verdict ? ` — ${esc(a.output.verdict)}: ${esc(a.output.reason || "")}` : ""}${a.error ? ` <span class="down">${esc(a.error)}</span>` : ""}</div>`).join("") || `<div class="muted">No signals or adjustments yet. Agents log when they have something to say.</div>`}</div>`;
 }
 
-const OPT_IN = ["HTF_SWEEP", "EMA_CROSS", "SSR", "EMA_PB"], DEFAULT_SCALE = { D_BEARTRAP: 1, D_THRUST: 1, HTF_TREND: 1, TREND_MTF: 1, SWEEP_REV: 1, VWAP_REVERT: 1, SESSION_BO: 1, HTF_SWEEP: 0, EMA_CROSS: 0, SSR: 0, EMA_PB: 0 };
-function stratView(id, st) {
-  // same resolution as the engine: an override RISK_SCALE replaces the default object, so a missing key means "undefined" (opt-in strategies stay off)
-  const cfg = st.cfg || {}, own = cfg.RISK_SCALE && Object.prototype.hasOwnProperty.call(cfg.RISK_SCALE, id), rs = own ? cfg.RISK_SCALE[id] : cfg.RISK_SCALE ? undefined : DEFAULT_SCALE[id];
-  return DeskCoverage.viewStrategy({ id, cfg, riskScale: rs, optIn: OPT_IN.includes(id), enabledFlag: (st.enabled || {})[id], cov: (st.cov || {})[id], stat: (st.stats && st.stats.by || {})[id], probationMin: 10, now: Date.now() });
+/** Enabled / risk scale for one strategy on the selected book: DeskBotModel.resolveStrategy, the single rule shared with the engine. */
+function resolveStrat(id, st) {
+  if (MODEL) return MODEL.resolveStrategy(id, st.cfg, st.enabled);
+  return { id, riskScale: undefined, optIn: false, enabledFlag: undefined, enabled: false, off: null, unknown: true };
 }
-const OPST = { RUNNING: ["running", "Running"], WAITING_FOR_BAR: ["waiting", "Waiting for first bar"], DISABLED: ["disabled", "Disabled"], DATA_BLOCKED: ["blocked", "Data blocked"], ERROR: ["error", "Error"], NO_EVALUATION_YET: ["nodata", "No evaluation data yet"] };
+function stratView(id, st) {
+  const r = resolveStrat(id, st), cov = mod("DeskCoverage");
+  if (!cov || r.unknown) return { id, state: "UNAVAILABLE", offReason: null, cadence: null, nextDueT: null, riskScale: r.riskScale ?? null, probation: false, cov: (st.cov || {})[id] || null };
+  return cov.viewStrategy({ id, cfg: st.cfg || {}, riskScale: r.riskScale, optIn: r.optIn, enabledFlag: r.enabledFlag, cov: (st.cov || {})[id], stat: (st.stats && st.stats.by || {})[id], probationMin: 10, now: Date.now() });
+}
+const OPST = { RUNNING: ["running", "Running"], WAITING_FOR_BAR: ["waiting", "Waiting for first bar"], DISABLED: ["disabled", "Disabled"], DATA_BLOCKED: ["blocked", "Data blocked"], ERROR: ["error", "Error"], NO_EVALUATION_YET: ["nodata", "No evaluation data yet"], UNAVAILABLE: ["nodata", "State unavailable (component not loaded)"] };
+/** [css class, label] for an operational state; unknown states show their raw name instead of throwing. */
+const opst = (state) => OPST[state] || ["nodata", String(state ?? "unknown")];
 function renderOperations() {
   const S=DATA.state||{}, st=S.state||{}, lr=S.last_run||{};
-  const available=globalThis.DeskBotModel.finite(st.equity);
-  const op=globalThis.DeskBotModel.operations(st,lr,DATA.agents,available);
+  if(!MODEL){$("agentGrid").innerHTML=unavailable("Agent roster (desk-model.js)");$("setupList").innerHTML=unavailable("Setup radar (desk-model.js)");return;}
+  const available=MODEL.finite(st.equity);
+  const op=MODEL.operations(st,lr,DATA.agents,available);
   $("pulseStrategies").textContent=op.enabled ?? "—";
   $("pulseStrategyNote").textContent=op.registered+" registered strategies · selected book";
   $("pulseAgents").textContent=op.observedRoles ?? "—";
@@ -188,7 +199,8 @@ function renderOperations() {
 }
 function renderSetupRadar(operations) {
   const S=DATA.state||{},st=S.state||{},lr=S.last_run||{};
-  const op=operations||globalThis.DeskBotModel.operations(st,lr,DATA.agents,globalThis.DeskBotModel.finite(st.equity));
+  if(!operations&&!MODEL){$("setupList").innerHTML=unavailable("Setup radar (desk-model.js)");return;}
+  const op=operations||MODEL.operations(st,lr,DATA.agents,MODEL.finite(st.equity));
   const query=($("setupSearch").value||"").toLowerCase(),family=$("setupFamily").value;
   const rows=op.rows.filter(r=>(family==="all"||r.family===family)&&[r.name,r.id,r.family,r.cadence,r.status.reason].join(" ").toLowerCase().includes(query));
   $("radarCoverage").textContent=rows.length+" of "+op.registered+" setup types";
@@ -203,7 +215,7 @@ const TOWER_CAL = { at: 0, next: null };
 function renderTower() {
   if (!globalThis.TowerView) return;
   const S = DATA.state || {}, st = S.state || {};
-  const strategies = STRATS.map((s) => { const v = stratView(s.id, st), c = v.cov; return { id: s.id, name: s.name, state: OPST[v.state] ? OPST[v.state][1].toUpperCase() : v.state, reason: v.state === "DISABLED" ? (v.offReason || "") : c ? ((c.lastDueCode || c.lastCode || "") + " " + (c.lastDueReason || c.lastReason || "")).trim() : "no evaluation counters yet" }; });
+  const strategies = STRATS.map((s) => { const v = stratView(s.id, st), c = v.cov; return { id: s.id, name: s.name, state: opst(v.state)[1].toUpperCase(), reason: v.state === "DISABLED" ? (v.offReason || "") : c ? ((c.lastDueCode || c.lastCode || "") + " " + (c.lastDueReason || c.lastReason || "")).trim() : "no evaluation counters yet" }; });
   if (globalThis.DeskMarkets && !$("v-tower").hidden && Date.now() - TOWER_CAL.at > 10 * 60e3) { TOWER_CAL.at = Date.now(); globalThis.DeskMarkets.nextHighImpact().then((e) => { TOWER_CAL.next = e; renderTower(); }).catch(() => {}); }
   globalThis.TowerView.render({ calendarNext: TOWER_CAL.next, state: S, agents: DATA.agents || [], trades: DATA.trades || [], curve: DATA.curve || [], strategies, book: BOOK, bt: DATA.bt || null,
     experiment: RAW ? (RAW.experiment === undefined ? null : RAW.experiment) : null, config: BOOK === "BTC" && RAW ? RAW.config || null : null, aiProviders: RAW && RAW.chat ? RAW.chat.ai || [] : null, ai: RAW ? RAW.ai || null : null, scan: RAW ? RAW.scan || null : null, track: RAW ? RAW.track || null : null, chat: RAW ? RAW.chat || null : null, work: RAW ? RAW.work || null : null });
@@ -212,16 +224,18 @@ let strategyFilter = "all";
 let MATRIX = null;
 /** W3 coverage matrix for the selected book (DeskCoverage.strategyMatrix; same code as the edge function). */
 function renderMatrix(S, st) {
-  const el = $("covMatrix"); if (!el || !globalThis.DeskCoverage || !DeskCoverage.strategyMatrix) return;
-  const reg = (RAW && RAW.registry) || { strategies: STRATS.map((x) => x.id), optIn: OPT_IN };
+  const el = $("covMatrix"); if (!el) return;
+  if (!mod("DeskCoverage") || !DeskCoverage.strategyMatrix || !MODEL) { MATRIX = null; el.innerHTML = unavailable("Coverage matrix (coverage_view.js / desk-model.js)"); return; }
+  const reg = (RAW && RAW.registry) || { strategies: STRATS.map((x) => x.id), optIn: MODEL.OPT_IN.slice() };
   const bookCfg = BOOK === "GOLD" ? (RAW && RAW.books && RAW.books.GOLD && RAW.books.GOLD.config) : (RAW && RAW.config);
-  const cfg = bookCfg || { RISK_SCALE: Object.assign({}, DEFAULT_SCALE, (st.cfg || {}).RISK_SCALE || {}), XC_TF: (st.cfg || {}).XC_TF, HSW_TF: (st.cfg || {}).HSW_TF };
+  // RISK_SCALE always via the shared resolver (book config merged over defaults); the inputs are never mutated
+  const cfg = bookCfg ? Object.assign({}, bookCfg, { RISK_SCALE: MODEL.riskScaleMap(bookCfg) }) : { RISK_SCALE: MODEL.riskScaleMap(st.cfg), XC_TF: (st.cfg || {}).XC_TF, HSW_TF: (st.cfg || {}).HSW_TF };
   const lr = S.last_run || {}, riskPct = typeof lr.risk === "number" ? lr.risk : null;
   const shadow = ((RAW && RAW.track && RAW.track.shadow) || []).filter((x) => x.sym === (BOOK === "GOLD" ? "GOLD" : "BTC"));
   MATRIX = DeskCoverage.strategyMatrix({ strategies: reg.strategies, optIn: reg.optIn, cfg, st, trades: DATA.trades || [], riskPct, now: Date.now(), shadow });
   const meta = st.covMeta, hh = (T) => (T == null ? "—" : new Date(T + 1).toISOString().slice(11, 16));
   const tr = MATRIX.map((m) => `<tr class="${m.openNow ? "open" : ""} ${m.starved ? "warn" : ""}"><td><b>${esc(m.id)}</b>${m.openNow ? ' <span class="chip">OPEN</span>' : ""}<br><small class="faint">${esc(m.requires)}</small></td>
-    <td>${esc(OPST[m.state] ? OPST[m.state][1] : m.state)}${m.disabledReason ? `<br><small class="faint">${esc(m.disabledReason)}</small>` : ""}${m.shadow ? `<br><small title="${esc(m.shadow.basis || '')}">shadow (B, simplified hypothetical, ${esc((m.shadow.cfgIds || [])[0] || 'SHADOW')}): ${m.shadow.resolved} resolved · ${m.shadow.open} open${m.shadow.meanNetR != null ? ` · ${m.shadow.meanNetR >= 0 ? "+" : ""}${m.shadow.meanNetR}R mean` : ""}</small>` : ""}${m.starved ? '<br><small class="down">due bars not evaluated</small>' : ""}</td>
+    <td>${esc(opst(m.state)[1])}${m.disabledReason ? `<br><small class="faint">${esc(m.disabledReason)}</small>` : ""}${m.shadow ? `<br><small title="${esc(m.shadow.basis || '')}">shadow (B, simplified hypothetical, ${esc((m.shadow.cfgIds || [])[0] || 'SHADOW')}): ${m.shadow.resolved} resolved · ${m.shadow.open} open${m.shadow.meanNetR != null ? ` · ${m.shadow.meanNetR >= 0 ? "+" : ""}${m.shadow.meanNetR}R mean` : ""}</small>` : ""}${m.starved ? '<br><small class="down">due bars not evaluated</small>' : ""}</td>
     <td>${esc(m.cadence)}<br><small class="faint">last due ${hh(m.lastDueT)}</small></td><td class="r">${m.due}<br><small class="faint">${m.completed} done${m.windowClosed ? ` · ${m.windowClosed} outside window` : ""}</small></td>
     <td class="r">${m.noSetup}</td><td class="r ${m.missingData || m.errors ? "down" : ""}">${m.missingData}${m.errors ? ` / ${m.errors} err` : ""}</td><td class="r">${m.signals}</td>
     <td>${m.vetoes.length ? m.vetoes.slice(0, 2).map((x) => `${esc(x.reason)} ×${x.n}`).join("<br>") : '<span class="faint">none</span>'}</td>
@@ -234,18 +248,19 @@ function renderMatrix(S, st) {
 }
 function renderStrategies() {
   const S = DATA.state || {}, st = S.state || {}, lr = S.last_run || {}, hasCov = !!(st.cov && Object.keys(st.cov).length), by = (st.stats && st.stats.by) || {};
-  renderMatrix(S, st);
+  try { renderMatrix(S, st); } catch (e) { MATRIX = null; panelError("matrix", e, "covMatrix"); }
   const trades = (DATA.trades || []).slice().sort((a, b) => new Date(a.close_t) - new Date(b.close_t));
   const views = STRATS.map((s) => stratView(s.id, st)), on = views.filter((v) => v.state !== "DISABLED").length;
   $("strategyCount").textContent = `${STRATS.length} registered · ${on} on for ${BOOK === "GOLD" ? "gold (PAXG)" : "BTC"}`;
   const meta = st.covMeta;
   $("stratNote").innerHTML = (hasCov ? `Evaluation counters since <b>${esc(new Date(Math.min(...Object.values(st.cov).map((c) => c.since))).toISOString().slice(0, 16).replace("T", " "))} UTC</b>${meta ? ` · bars evaluated ${meta.evalBars} · boundary bars missed ${meta.missedBars} · bars missing from the feed ${Object.values(meta.missingDue || {}).reduce((a, b) => a + b, 0)}` : ""}.`
     : `<b>No evaluation counters in this data yet.</b> They start when the coverage update is deployed; the states below come from configuration only and do not prove a strategy ran.`) +
+    (mod("DeskCoverage") && MODEL ? "" : ` <b>Component unavailable:</b> the strategy state view (coverage_view.js / desk-model.js) did not load, so operational states are not shown.`) +
     ` Every number here is <b>PAPER</b> (simulated fills at live prices), not funded trading. <b>Operational state</b> says whether the strategy is being evaluated; <b>sizing</b> is separate. Zero closed trades does not mean it was not evaluated.`;
   const q = ($("strategySearch").value || "").toLowerCase();
   $("stratList").innerHTML = STRATS.map((s, k) => ({ s, k })).filter(({ s, k }) => (s.name + " " + s.id).toLowerCase().includes(q) && (strategyFilter === "all" || (strategyFilter === "enabled" ? views[k].state !== "DISABLED" : views[k].state === "DISABLED"))).map(({ s, k }) => {
     const v = views[k], c = v.cov, x = by[s.id] || { n: 0, sumR: 0, net: 0 }, mine = trades.filter((t) => t.strategy === s.id);
-    const [cls, label] = OPST[v.state], openNow = st.pos && st.pos.strategy === s.id;
+    const [cls, label] = opst(v.state), openNow = st.pos && st.pos.strategy === s.id;
     // costs and drawdown from the closed trades loaded on this page (the last 100 of the book), labelled as such
     let cum = 0, pk = 0, dd = 0; mine.forEach((t) => { cum += +t.r; pk = Math.max(pk, cum); dd = Math.max(dd, pk - cum); });
     const fees = mine.reduce((a, t) => a + (+t.fees || 0), 0), fund = mine.reduce((a, t) => a + (+t.funding || 0), 0);
@@ -295,10 +310,13 @@ function renderEvents() {
 }
 
 function renderSystem() {
-  const evidence = globalThis.DeskBotEvidence.summarize(RAW, Date.now(), LIVE);
-  $("evidenceMode").textContent = evidence.mode + " · Observations, not a forecast or execution authorization.";
-  $("evidenceRows").innerHTML = evidence.rows.map((r) => `<div class="li"><div class="a">${esc(r.instrument)}</div><div class="b">${r.fresh ? "Recent timestamps" : "STALE / UNKNOWN"}</div><div class="c">Last run UTC: ${esc(r.runAt)} · ${esc(r.approval)} · AI: ${esc(r.ai)}</div></div>`).join("");
-  $("evidenceIssues").innerHTML = evidence.issues.map((s) => `<li>${esc(s)}</li>`).join("");
+  const EV = mod("DeskBotEvidence");
+  if (EV) {
+    const evidence = EV.summarize(RAW, Date.now(), LIVE);
+    $("evidenceMode").textContent = evidence.mode + " · Observations, not a forecast or execution authorization.";
+    $("evidenceRows").innerHTML = evidence.rows.map((r) => `<div class="li"><div class="a">${esc(r.instrument)}</div><div class="b">${r.fresh ? "Recent timestamps" : "STALE / UNKNOWN"}</div><div class="c">Last run UTC: ${esc(r.runAt)} · ${esc(r.approval)} · AI: ${esc(r.ai)}</div></div>`).join("");
+    $("evidenceIssues").innerHTML = evidence.issues.map((s) => `<li>${esc(s)}</li>`).join("");
+  } else { $("evidenceMode").textContent = "Evidence summary unavailable"; $("evidenceRows").innerHTML = unavailable("Evidence summary (evidence.js)"); $("evidenceIssues").innerHTML = ""; }
   const b = DATA.bt, S = DATA.state || {}, lr = S.last_run || {};
   if (!b) { $("btSub").textContent = "No instrument-matched saved validation was returned for this book."; $("btChart").innerHTML = ""; $("btTable").innerHTML = ""; }
   $("honest").textContent = "Research is separate from forward paper results. A saved backtest does not validate the current configuration. Review the exact source, instrument, period and costs before drawing conclusions.";
@@ -330,7 +348,7 @@ function renderSystem() {
     ["Data source", lr.source === "binance" ? "Binance spot (fallback)" : lr.source === "hyperliquid" ? "Hyperliquid reported feed" : "Not reported"],
     ["Check took", lr.ms != null ? lr.ms + " ms" : "—"],
     ["Engine", st.version ? "v" + st.version : "Not reported"],
-    ["Configuration", globalThis.DeskBotEvidence.configLabel(S.integrity)],
+    ["Configuration", EV ? EV.configLabel(S.integrity) : "Not available (evidence.js did not load)"],
     ["Config fingerprint", S.integrity ? S.integrity.hash : "—"],
     ["Drawdown basis", st.markedEquity != null ? "Sampled marked equity (since upgrade)" : "Legacy realized equity"],
     ["Circuit breaker", st.cb && st.cb.cooldownUntil > Date.now() ? "Cooling down" : `${(st.cb && st.cb.consec) || 0} of 3 losses`],
@@ -338,7 +356,31 @@ function renderSystem() {
   $("sys").innerHTML = sys.map(([k, v]) => `<div><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`).join("");
 }
 
-function renderAll() { document.querySelectorAll(".bookName").forEach((e) => { e.textContent = BOOK === "GOLD" ? "PAXG" : "BTC"; }); renderDesk(); renderStrategies(); renderTrades(); renderEvents(); renderSystem(); renderTower(); renderScanner(); }
+// Error isolation: each renderer runs on its own. A failure is logged once per renderer and shown inline in that panel
+// only; the next successful render clears it. One failing view never blanks the others.
+const RENDER_LOGGED = new Set();
+function panelError(name, err, hostId) {
+  if (!RENDER_LOGGED.has(name)) { RENDER_LOGGED.add(name); console.error(`[deskbot] ${name} view failed to render:`, err); }
+  const host = $(hostId); if (!host) return;
+  let note = host.querySelector(`:scope > .panel-error[data-render="${name}"]`);
+  if (!note) { note = document.createElement("p"); note.className = "note panel-error"; note.setAttribute("role", "alert"); note.dataset.render = name; host.prepend(note); }
+  note.textContent = `This panel could not be drawn (${String((err && err.message) || err || "error").slice(0, 160)}). Other panels are unaffected.`;
+}
+function clearPanelError(name, hostId) { const host = $(hostId); const note = host && host.querySelector(`:scope > .panel-error[data-render="${name}"]`); if (note) note.remove(); }
+function safeRender(name, fn, hostId) { try { fn(); clearPanelError(name, hostId); } catch (e) { panelError(name, e, hostId); } }
+const RENDERERS = [
+  ["book", () => document.querySelectorAll(".bookName").forEach((e) => { e.textContent = BOOK === "GOLD" ? "PAXG" : "BTC"; }), "v-desk"],
+  ["desk", () => renderDesk(), "v-desk"], ["agents", () => renderAgents(), "v-desk"], ["operations", () => renderOperations(), "v-desk"],
+  ["strategies", () => renderStrategies(), "v-strategies"], ["trades", () => renderTrades(), "v-trades"], ["events", () => renderEvents(), "v-activity"],
+  ["system", () => renderSystem(), "v-system"],
+  ["freshness", () => { const M = mod("DeskFreshness"); if (M) M.mount($("v-system"), RAW, DATA, BOOK, Date.now()); }, "v-system"],
+  ["receipts", () => { const M = mod("DeskReceipts"); if (M) M.mount($("v-system"), (DATA.state || {}).last_run, { nameOf, bookLabel: BOOK === "GOLD" ? "PAXG" : "BTC" }); }, "v-system"],
+  ["riskchecks", () => { const M = mod("DeskRisk"); if (!M) return; const S = DATA.state || {}, lr = S.last_run || {}, p = (S.state || {}).pos || null, price = (lr.market || {}).price;
+    M.mount({ desk: $("v-desk"), system: $("v-system") }, { lastRun: lr, pos: p, plan: p ? planOf(p, Number.isFinite(price) ? price : null) : null, price, now: Date.now(), fmtPx, unit: BOOK === "GOLD" ? "PAXG" : "BTC", bookLabel: BOOK === "GOLD" ? "PAXG" : "BTC",
+      onChange: () => { renderAll(); if (!$("v-chart").hidden && CH.chart) chartDraw(); } }); }, "v-desk"],
+  ["tower", () => renderTower(), "v-tower"], ["scanner", () => renderScanner(), "v-scanner"],
+];
+function renderAll() { RENDERERS.forEach(([name, fn, host]) => safeRender(name, fn, host)); }
 
 // scanner, committee and the trading-state pill (scanner.js)
 function renderScanner() {
@@ -405,6 +447,7 @@ async function getBars(tf, n, book = BOOK) {
   } catch (e) {
     const r = await fetch(`https://data-api.binance.vision/api/v3/klines?symbol=${(BOOK_META[book] || BOOK_META.BTC).bn}&interval=${tf}&limit=${Math.min(n, 1000)}`, { signal: AbortSignal.timeout(12000) });
     if (!r.ok) throw new Error("no candle source reachable"); const j = await r.json();
+    if (!Array.isArray(j) || !j.length) throw new Error("no candles returned by either feed");
     return { src: "Binance", bars: j.map((k) => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4] })) };
   }
 }
@@ -465,7 +508,7 @@ function drawIndicators(b) {
   hoverLegend(null);
 }
 function hoverLegend(p) {
-  const el = $("hoverLegend"); if (!el || !IND.last) return;
+  const el = $("hoverLegend"); if (!el || !IND.last || !IND.last.length) return;   // no candles: nothing to describe
   const bar = p && p.seriesData ? p.seriesData.get(CH.series.c) : null, src = IND.last, lastBar = src[src.length - 1];
   const o = bar ? bar : { open: lastBar.o, high: lastBar.h, low: lastBar.l, close: lastBar.c };
   const val = (s) => { if (!s) return null; const d = p && p.seriesData ? p.seriesData.get(s) : null; return d && isFinite(d.value) ? d.value : null; };
@@ -480,9 +523,11 @@ function hoverLegend(p) {
 
 async function chartDraw() {
   const tf = CH.tf, book = BOOK, request = ++CH.request;
+  let candlesLoaded = false;
   try {
     const [main, day, h4] = await Promise.all([getBars(tf, tf === "1d" ? 400 : 500, book), getBars("1d", 200, book), getBars("4h", 120, book)]);
     if (request !== CH.request || book !== BOOK || tf !== CH.tf) return;
+    candlesLoaded = true;
     $("lwMsg").hidden = true;
     const b = main.bars;
     CH.series.c.setData(b.map((x) => ({ time: sec(x.t), open: x.o, high: x.h, low: x.l, close: x.c })));
@@ -502,44 +547,51 @@ async function chartDraw() {
     const h4c = h4.bars.filter((x) => x.t + 144e5 <= Date.now()), dc = donchianPrior(h4c.concat([{ h: NaN, l: NaN }]), 55);
     const last = b[b.length - 1].c, eDnow = eD.length ? eD[eD.length - 1].value : m.ema50D;
     const legend = [];
-    // reference and advisory levels (not orders) only when asked for: they are context, and their labels crowd the plan
-    if (CH.layers.refs) {
-      if (dc) { PL(dc.hi, "#5aa9e6", "Ref · 4H 55-bar high", 1); PL(dc.lo, "#5aa9e6", "Ref · 4H 55-bar low", 1); }
-      if (m.asian && tf !== "1d" && tf !== "4h") { PL(m.asian.hi, cssVar("--fg-3"), "Ref · Asian high", 3); PL(m.asian.lo, cssVar("--fg-3"), "Ref · Asian low", 3); }
-      const dl = (((S.last_run || {}).desk || {}).chart || {}).levels || [];
-      dl.filter((x) => x.blocks && Math.abs(x.px - b[b.length - 1].c) / b[b.length - 1].c < 0.04).forEach((x) => PL(x.px, x.side === "support" ? cssVar("--up") : cssVar("--down"), "Advisory · " + x.name, 2));
+    // context levels (not orders) only when asked for: at most 5, nearest to price first, near-duplicates dropped (plan.js
+    // pickRefs), all grey dashed with a "Ref ·" label. Prior UTC day = the last CLOSED daily candle.
+    CH.refs = [];
+    if (CH.layers.refs && globalThis.DeskPlan) {
+      const pd = dClosed[dClosed.length - 1], cands = [];
+      if (pd) cands.push({ name: "prior day high", px: pd.h }, { name: "prior day low", px: pd.l });
+      if (m.asian && tf !== "1d" && tf !== "4h") cands.push({ name: "Asian high", px: m.asian.hi }, { name: "Asian low", px: m.asian.lo });
+      if (dc) cands.push({ name: "4H 55-bar high", px: dc.hi }, { name: "4H 55-bar low", px: dc.lo });
+      cands.push(DeskPlan.roundLevel(last));
+      CH.refs = DeskPlan.pickRefs(cands, last, { cap: 5 });
+      CH.refs.forEach((x) => CH.lines.push(CH.series.c.createPriceLine({ price: x.px, color: cssVar("--fg-3"), lineWidth: 1, lineStyle: 2, axisLabelVisible: false, title: x.label })));
     }
-    // executable plan levels, labelled with distance from entry, R from the ORIGINAL risk and the exit share (plan.js)
-    const plan = p ? planOf(p, last) : null;
-    if (plan) for (const r of plan.rows) {
-      const tag = `${r.pct > 0 ? "+" : ""}${r.pct.toFixed(2)}% · ${r.r > 0 ? "+" : ""}${r.r.toFixed(2)}R`;
-      if (r.key === "entry") PL(r.price, cssVar("--fg"), `Entry · ${p.dir.toUpperCase()}`, 0, 2);
-      else if (r.key === "stop") PL(r.price, cssVar("--down"), `${r.label} · ${tag}`, 0, 2);
-      else if (r.key === "stop0") PL(r.price, cssVar("--down"), `Original stop · −1R (reference)`, 2, 1);
-      else if (/^tp/.test(r.key)) PL(r.price, cssVar("--up"), `${r.label}${r.status === "hit" ? " ✓" : ""} · ${tag} · exit ${Math.round(r.share * 100)}% of orig.`, r.status === "hit" ? 2 : 0);
-    }
+    // executable plan levels: short right-edge labels with R from the ORIGINAL risk and % from entry (plan.js levelLabels)
+    const plan = p ? planOf(p, last) : null, roleColor = { entry: cssVar("--fg"), stop: cssVar("--down"), target: cssVar("--up") };
+    if (plan) for (const l of DeskPlan.levelLabels(plan)) PL(l.price, roleColor[l.role], l.title, l.style, l.width);
     renderPlanPanel(plan, last);
     // markers: closed trades + open entry
     const times = b.map((x) => sec(x.t));
     const snapT = (ts) => { let lo = 0, hi = times.length - 1, a = -1; while (lo <= hi) { const md = (lo + hi) >> 1; if (times[md] <= ts) { a = md; lo = md + 1; } else hi = md - 1; } return a < 0 ? null : times[a]; };
     const mk = [];
-    (DATA.trades || []).forEach((t) => { const o = sec(Date.parse(t.open_t)), c = sec(Date.parse(t.close_t)), L = t.dir === "long";
+    const lastT = lastClosed();
+    (DATA.trades || []).forEach((t) => { const o = sec(Date.parse(t.open_t)), c = sec(Date.parse(t.close_t)), L = t.dir === "long", ex = t === lastT && globalThis.DeskPlan ? DeskPlan.exitTag(t) : null;
       mk.push({ time: snapT(o), position: L ? "belowBar" : "aboveBar", color: L ? cssVar("--up") : cssVar("--down"), shape: L ? "arrowUp" : "arrowDown", text: `${t.strategy}` });
-      mk.push({ time: snapT(c), position: "inBar", color: +t.net >= 0 ? cssVar("--up") : cssVar("--down"), shape: "circle", text: sgnR(+t.r) }); });
+      // the last closed trade carries its RECORDED exit reason (plan.js exitTag), never one inferred from prices
+      mk.push({ time: snapT(c), position: ex ? (L ? "aboveBar" : "belowBar") : "inBar", color: +t.net >= 0 ? cssVar("--up") : cssVar("--down"), shape: ex ? "square" : "circle", text: ex ? `Exit · ${ex.text} · ${sgnR(+t.r)}` : sgnR(+t.r) }); });
     if (p) { const o = sec(p.openT); mk.push({ time: snapT(o), position: p.dir === "long" ? "belowBar" : "aboveBar", color: cssVar("--accent"), shape: p.dir === "long" ? "arrowUp" : "arrowDown", text: "OPEN " + p.strategy }); }
-    // price-structure layers (fixed rules on closed candles, same module the edge function uses)
-    const pal = zonePal(), read = DeskZones.zonesOf(b.map((x) => ({ t: sec(x.t), o: x.o, h: x.h, l: x.l, c: x.c, v: x.v }))), t0s = sec(b[0].t);
+    // price-structure layers (fixed rules on closed candles, same module the edge function uses). Their failure is reported
+    // separately: the candles above are already drawn and stay on screen.
     CH.prims.forEach((q) => { try { CH.series.c.detachPrimitive(q); } catch (_) { /* already gone */ } }); CH.prims = [];
     CH.zlines.forEach((l) => CH.series.c.removePriceLine(l)); CH.zlines = [];
-    const ZL = (price, color, title, style = 2) => { if (isFinite(price)) CH.zlines.push(CH.series.c.createPriceLine({ price, color, lineWidth: 1, lineStyle: style, axisLabelVisible: false, title })); };
-    const boxes = DeskSetup.zoneBoxes(read, CH.layers, pal, (t) => snapT(t), t0s);
-    if (CH.layers.trade && p) boxes.push(...DeskSetup.tradeBoxes(p, pal, (ms) => snapT(sec(ms)), { labels: false }));
-    boxes.forEach((bx) => { const q = new DeskSetup.Box(bx); CH.series.c.attachPrimitive(q); CH.prims.push(q); });
-    if (CH.layers.value && read.value) { ZL(read.value.poc, "#e3c14d", "POC", 0); ZL(read.value.vah, "#e3c14d", "VAH", 3); ZL(read.value.val, "#e3c14d", "VAL", 3); }
-    if (CH.layers.pd && read.range) { ZL(read.range.eq, cssVar("--fg-3"), `mid · ${read.range.zone}`, 1); }
-    if (CH.layers.liq) read.pools.forEach((q) => ZL(q.px, "#b48ef0", q.kind + (q.swept ? " swept" : ""), 3));
-    if (CH.layers.structure) read.structure.forEach((e) => mk.push({ time: snapT(e.t), position: e.side === "bull" ? "belowBar" : "aboveBar", color: e.side === "bull" ? "#4fd1c5" : "#d46bd6", shape: "square", text: e.kind + (e.side === "bull" ? "↑" : "↓") }));
-    window.__zoneRead = read;
+    const zoneMsg = $("zoneMsg"); if (zoneMsg) { zoneMsg.hidden = true; zoneMsg.textContent = ""; }
+    try {
+      if (!mod("DeskZones") || !mod("DeskSetup")) throw new Error("component unavailable: " + [!mod("DeskZones") && "zones.js", !mod("DeskSetup") && "setup.js"].filter(Boolean).join(" and ") + " did not load");
+      const pal = zonePal(), read = DeskZones.zonesOf(b.map((x) => ({ t: sec(x.t), o: x.o, h: x.h, l: x.l, c: x.c, v: x.v }))), t0s = sec(b[0].t);
+      const ZL = (price, color, title, style = 2) => { if (isFinite(price)) CH.zlines.push(CH.series.c.createPriceLine({ price, color, lineWidth: 1, lineStyle: style, axisLabelVisible: false, title })); };
+      const boxes = DeskSetup.zoneBoxes(read, CH.layers, pal, (t) => snapT(t), t0s);
+      if (CH.layers.trade && p) boxes.push(...DeskSetup.tradeBoxes(p, pal, (ms) => snapT(sec(ms)), { labels: false }));
+      boxes.forEach((bx) => { const q = new DeskSetup.Box(bx); CH.series.c.attachPrimitive(q); CH.prims.push(q); });
+      if (CH.layers.value && read.value) { ZL(read.value.poc, "#e3c14d", "POC", 0); ZL(read.value.vah, "#e3c14d", "VAH", 3); ZL(read.value.val, "#e3c14d", "VAL", 3); }
+      if (CH.layers.pd && read.range) { ZL(read.range.eq, cssVar("--fg-3"), `mid · ${read.range.zone}`, 1); }
+      if (CH.layers.liq) read.pools.forEach((q) => ZL(q.px, "#b48ef0", q.kind + (q.swept ? " swept" : ""), 3));
+      if (CH.layers.structure) read.structure.forEach((e) => mk.push({ time: snapT(e.t), position: e.side === "bull" ? "belowBar" : "aboveBar", color: e.side === "bull" ? "#4fd1c5" : "#d46bd6", shape: "square", text: e.kind + (e.side === "bull" ? "↑" : "↓") }));
+    } catch (ze) {
+      if (zoneMsg) { zoneMsg.hidden = false; zoneMsg.textContent = `Candles loaded, but the structure layers (zones, trade boxes, value area) could not be drawn: ${String((ze && ze.message) || ze).slice(0, 160)}.`; }
+    }
     // Price action: scale to recent candles + entry + stops (far targets stay listed in the plan table, never moved).
     // Full plan: scale to every executable level, including TP3.
     const focusOn = !!p, fitKey = tf + "+" + CH.view + (p ? "+p" : "");
@@ -563,7 +615,13 @@ async function chartDraw() {
     const nw = (S.last_run || {}).news; if (nw) rd.push(`<div>News risk <b>${esc(nw.risk)}</b> (${esc(String(nw.by || "").startsWith("ai:") ? "AI" : "keyword rules")}, ${esc(nw.mode)} mode): ${esc(nw.reason)}</div>`);
     $("botRead").innerHTML = rd.join("");
     renderSetupCard(p, S);
-  } catch (e) { if (request !== CH.request || book !== BOOK || tf !== CH.tf) return; renderSetupCard(((DATA.state || {}).state || {}).pos, DATA.state); try { const ps = ((DATA.state || {}).state || {}).pos; renderPlanPanel(ps ? planOf(ps, null) : null, null, "Candles unavailable: the plan below comes from the stored position; current price and its distances are not shown."); } catch (_) { renderPlanPanel(null, null, null, true); } $("lwMsg").hidden = false; $("lwMsg").textContent = "Couldn't load candles here (" + (e && e.message || "network") + "). Retry when the candle source is reachable."; }
+  } catch (e) {
+    if (request !== CH.request || book !== BOOK || tf !== CH.tf) return;
+    renderSetupCard(((DATA.state || {}).state || {}).pos, DATA.state);
+    if (candlesLoaded) { $("lwMsg").hidden = false; $("lwMsg").textContent = "Candles loaded, but the chart could not be drawn (" + ((e && e.message) || "error") + "). Other views are unaffected."; return; }
+    try { const ps = ((DATA.state || {}).state || {}).pos; renderPlanPanel(ps ? planOf(ps, null) : null, null, "Candles unavailable: the plan below comes from the stored position; current price and its distances are not shown."); } catch (_) { renderPlanPanel(null, null, null, true); }
+    $("lwMsg").hidden = false; $("lwMsg").textContent = "Couldn't load candles here (" + (e && e.message || "network") + "). Retry when the candle source is reachable.";
+  }
 }
 
 /** The plan table for the open position (plan.js), with this book's exit rules and the strategy's trigger timeframe. */
@@ -573,32 +631,54 @@ function planOf(p, price) {
   const cadence = globalThis.DeskCoverage ? DeskCoverage.cadenceFor(p.strategy, cfg) : null;
   return DeskPlan.planRows(p, { price, cadence, exitMode: cfg.EXIT_MODE, traderParts: cfg.TRADER_PARTS, now: Date.now() });
 }
+/** The most recently closed trade of this book (DATA.trades), or null. */
+function lastClosed() { let best = null; for (const t of DATA.trades || []) if (!best || Date.parse(t.close_t) > Date.parse(best.close_t)) best = t; return best; }
+/** Status chips (display only): live R (unrealised, from the original risk) and time in trade vs the max hold for an open
+ *  position; the last recorded exit when asked for, or when there is no open position. */
+function tradeChips(p, price, withExit) {
+  const out = [];
+  if (p && globalThis.DeskPlan) {
+    const r = DeskPlan.liveR(p, price);
+    if (r) out.push(`<span class="pchip pchip-r ${r.tone}" data-chip="liveR" title="Unrealised: current price vs entry in units of the ORIGINAL risk (entry to original stop). Fills already taken at a target are not included.">${esc(r.text)} <small>unrealised</small></span>`);
+    const c = DeskPlan.holdClock(p.openT, p.maxHoldH, Date.now());
+    if (c) out.push(`<span class="pchip pchip-clock" data-chip="clock" data-state="${c.state}" title="Time in trade against the maximum hold. The max hold is a limit (the engine's time exit), not a forecast.">${esc(c.text)}${c.state === "red" ? " · at limit" : c.state === "amber" ? " · nearing limit" : ""} <small>max hold = limit</small></span>`);
+  }
+  const t = withExit || !p ? lastClosed() : null, ex = t && globalThis.DeskPlan ? DeskPlan.exitTag(t) : null;
+  if (ex) out.push(`<span class="pchip pchip-exit ${+t.net >= 0 ? "up" : "down"}" data-chip="exit" title="Recorded exit reason: ${esc(ex.recorded)}">Last exit · <b>${esc(ex.text)}</b> · ${esc(sgnR(+t.r))} · ${esc(when(t.close_t))}</span>`);
+  return out.join("");
+}
 function renderPlanPanel(plan, price, warn, failed) {
   const el = $("planPanel"); if (!el) return;
+  const pos = ((DATA.state || {}).state || {}).pos, hc = $("chartChips");
+  if (hc) hc.innerHTML = failed ? "" : tradeChips(plan ? pos : null, price, false);
   if (failed) { el.innerHTML = '<p class="note down">Plan unavailable: the position data could not be read. Nothing about the position was changed.</p>'; return; }
   const warnHtml = warn ? `<p class="note warn">${esc(warn)}</p>` : "";
-  if (!plan) { el.innerHTML = '<p class="note faint">No open paper position: the chart shows price action and, if switched on, reference levels only.</p>'; return; }
-  const m = plan.meta, q = (x) => (x == null ? "—" : (+x).toPrecision(6));
+  if (!plan) { const ch = tradeChips(null, null, true); el.innerHTML = (ch ? `<div class="plan-chips">${ch}</div>` : "") + '<p class="note faint">No open paper position: the chart shows price action and, if switched on, reference levels only.</p>'; return; }
+  const m = plan.meta, q = (x) => (x == null ? "—" : PRIV() ? DeskRisk.QMASK : (+x).toPrecision(6));
   const row = (r) => `<tr class="pk-${r.kind} ${r.status === "hit" ? "hit" : ""}"><td data-k="Level">${esc(r.label)}${r.kind === "reference" ? ' <small class="faint">not an order</small>' : ""}</td><td data-k="Price" class="r">${fmtPx(r.price)}</td><td data-k="From entry" class="r">${r.pct == null ? "—" : (r.pct > 0 ? "+" : "") + r.pct.toFixed(2) + "%"}</td><td data-k="R (original)" class="r">${r.r == null ? "—" : (r.r > 0 ? "+" : "") + r.r.toFixed(2) + "R"}</td><td data-k="Exit (planned)" class="r">${r.exitText ? esc(r.exitText) + " · " : ""}${q(r.qty)}</td><td data-k="Status">${esc(r.status)}</td></tr>`;
-  el.innerHTML = `${warnHtml}<div class="plan-meta"><b>${esc(nameOf(m.strategy))}</b> · ${esc(m.dir)} · signal on ${esc(m.signalTimeframe || "—")} · max hold ${esc(m.maxHoldText || "—")}${m.heldH != null && m.maxHoldH ? ` (held ${m.heldH.toFixed(0)} h of ${m.maxHoldH} h)` : ""}${m.expiresAt ? ` · time exit ${new Date(m.expiresAt).toISOString().slice(0, 16).replace("T", " ")} UTC` : ""} · 1R = ${fmtPx(m.riskPts)} pts (${m.riskPct.toFixed(2)}%) = ${fmt$(m.riskAmt)}</div>
+  el.innerHTML = `${warnHtml}<div class="plan-chips">${tradeChips(pos, price, true)}${mod("DeskRisk") ? DeskRisk.planChipsHTML(pos, plan, price, Date.now(), fmtPx) : ""}</div><div class="plan-meta"><b>${esc(nameOf(m.strategy))}</b> · ${esc(m.dir)} · signal on ${esc(m.signalTimeframe || "—")} · max hold ${esc(m.maxHoldText || "—")}${m.expiresAt ? ` · time exit ${new Date(m.expiresAt).toISOString().slice(0, 16).replace("T", " ")} UTC` : ""} · 1R = ${fmtPx(m.riskPts)} pts (${m.riskPct.toFixed(2)}%) = ${fmt$(m.riskAmt)}</div>
     <div class="plan-wrap"><table class="plan-t"><thead><tr><th>Level</th><th class="r">Price</th><th class="r">From entry</th><th class="r">R (original risk)</th><th class="r">Exit size (planned)</th><th>Status</th></tr></thead><tbody>${plan.rows.map(row).join("")}</tbody></table></div>
-    <p class="note faint">Executable levels are the paper engine's orders. Exit rules: ${esc(m.exitRules.join("; ") || "—")}. The chart timeframe you view is not the trade's deadline. Zones, Donchian, Asian range and agent levels are reference or advisory only.</p>`;
+    <p class="note faint">Executable levels are the paper engine's orders. Exit rules: ${esc(m.exitRules.join("; ") || "—")}. The chart timeframe you view is not the trade's deadline. Zones and "Ref ·" levels (grey dashed, at most 5, nearest to price) are context only, not orders. Live R is unrealised.</p>`;
 }
 async function renderSetupCard(p, S) {
+  try { await renderSetupCardInner(p, S); } catch (e) { panelError("setup card", e, "setupCard"); }
+}
+async function renderSetupCardInner(p, S) {
   const el = $("setupCard"), pal = zonePal(), nm = (BOOK === "GOLD" ? "Gold (PAXG)" : "BTC");
   if (!p) { el.innerHTML = `<div class="setup-head"><h2>Trade setup</h2></div><p class="note" style="margin-top:6px">No open ${nm} trade. When the bot enters, the setup appears here: entry, red stop-loss block, green take-profit blocks and the structure checks that agree with the trade. Reaction areas on the chart below show where the rules would care.</p>`; return; }
   let conf = null, why = "";
-  try {
+  if (!mod("DeskZones")) why = "Structure checks unavailable: zones.js did not load.";
+  else try {
     const m15 = (await getBars("15m", 500)).bars.filter((x) => x.t + 9e5 <= p.openT).map((x) => ({ t: sec(x.t), o: x.o, h: x.h, l: x.l, c: x.c, v: x.v }));
     conf = DeskZones.confluence(DeskZones.zonesOf(m15), { dir: p.dir, entry: p.entry, stop: p.stop0, tp1: p.tp1, tp2: p.tp2, tp3: p.tp3 });
   } catch (e) { why = "Could not load 15m candles to check structure at entry."; }
   const R = Math.abs(p.entry - p.stop0), rr = (x) => (Math.abs(x - p.entry) / R).toFixed(2), d = p.dir === "long" ? 1 : -1;
   el.innerHTML = `<div class="setup-head"><span class="side ${p.dir}">${p.dir.toUpperCase()}</span><h2>${esc(nameOf(p.strategy))} · ${nm}</h2><span class="note" style="margin-left:auto">PAPER · opened ${ago(p.openT)}</span></div>
-    <div class="setup-grid"><div class="setup-svg">${DeskSetup.setupSVG(p, pal, fmtPx)}</div>
+    <div class="setup-grid"><div class="setup-svg">${mod("DeskSetup") ? DeskSetup.setupSVG(p, pal, fmtPx) : unavailable("Setup drawing (setup.js)")}</div>
     <div><div class="grid2"><div><div class="k">Entry</div><div class="v">${fmtPx(p.entry)}</div></div><div><div class="k">Stop loss (original)</div><div class="v down">${fmtPx(p.stop0)} · −1R</div></div>
     <div><div class="k">Take profits</div><div class="v up">${fmtPx(p.tp1)} · ${fmtPx(p.tp2)} · ${fmtPx(p.tp3)}</div></div><div><div class="k">Reward at TP1 / TP2 / TP3</div><div class="v">${rr(p.tp1)}R / ${rr(p.tp2)}R / ${rr(p.tp3)}R</div></div>
-    <div><div class="k">Risk</div><div class="v">${fmt$(p.riskAmt)} · ${fmtPx(R)} pts</div></div><div><div class="k">Size</div><div class="v">${(+p.originalQty).toFixed(5)} ${BOOK === "GOLD" ? "oz" : "BTC"}</div></div></div>
-    ${conf ? `<h3 style="margin:14px 0 0;font:600 13px var(--f-display)">Structure checks at entry: ${conf.met} of ${conf.of} agree</h3><p class="note faint" style="margin:2px 0 0">A count of rule items on 15m candles at the time of entry. It is not a win probability.</p>${DeskSetup.checksHTML(conf)}` : `<p class="note">${esc(why)}</p>`}
+    <div><div class="k">Risk</div><div class="v">${fmt$(p.riskAmt)} · ${fmtPx(R)} pts</div></div><div><div class="k">Size</div><div class="v">${fmtQty(p.originalQty, 5)} ${BOOK === "GOLD" ? "oz" : "BTC"}</div></div></div>
+    ${conf && mod("DeskSetup") ? `<h3 style="margin:14px 0 0;font:600 13px var(--f-display)">Structure checks at entry: ${conf.met} of ${conf.of} agree</h3><p class="note faint" style="margin:2px 0 0">A count of rule items on 15m candles at the time of entry. It is not a win probability.</p>${DeskSetup.checksHTML(conf)}` : `<p class="note">${esc(why)}</p>`}
     <p class="note" style="margin-top:10px"><b>Why the bot took it:</b> ${(p.why || []).map(esc).join(" · ") || "—"}</p></div></div>`;
 }
 async function showTV() {
@@ -726,7 +806,7 @@ $("runBtn").addEventListener("click", async () => {
   }
   setInterval(() => { if (!document.hidden) pull(); }, 30000);
   document.addEventListener("visibilitychange", () => { if (!document.hidden) pull(); });
-  setInterval(() => { if (!document.hidden) { renderDesk(); renderSystem(); } }, 10000);
+  setInterval(() => { if (!document.hidden) RENDERERS.filter(([n]) => ["desk", "agents", "operations", "system", "freshness"].includes(n)).forEach(([n, fn, host]) => safeRender(n, fn, host)); }, 10000);
 })();
 
 // ---- AI chat (talks to the cloud bot's free-LLM assistant; proposals need Backtest + Apply) ----

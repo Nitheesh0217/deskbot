@@ -58,10 +58,6 @@ export function providerPolicy(enabled: Partial<Record<AiFeature, boolean>> = {}
     return { name: p.name, credentialsPresent, termsReviewed, dataUseAccepted, reachable, featuresEnabled: AI_FEATURES.filter((f) => enabled[f] !== false), usableFor };
   });
 }
-/** Backwards-compatible summary for the status payload. */
-export function providerAvailability() {
-  return providerPolicy().map((x) => ({ name: x.name, configured: x.credentialsPresent, termsVerified: !!x.termsReviewed, verifiedBy: x.termsReviewed }));
-}
 /** Providers that may serve ONE feature, in order. Without credentials, reviewed terms and accepted data use for this feature: none. */
 export function providersFromEnv(feature: AiFeature): Provider[] {
   const ok = new Set(providerPolicy().filter((a) => a.usableFor.includes(feature)).map((a) => a.name));

@@ -4,13 +4,11 @@
 // Data comes from /api/feeds (a fixed-allowlist proxy). Display only: nothing here reaches the trading engine.
 (function (root) {
   'use strict';
-  const $ = (id) => document.getElementById(id);
-  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const fin = (x) => typeof x === 'number' && Number.isFinite(x);
+  const { $, esc, finite: fin } = root.DeskUtil;
   const money = (v, d) => (fin(v) ? '$' + v.toLocaleString('en-US', { minimumFractionDigits: d ?? (v >= 100 ? 0 : v >= 1 ? 2 : 4), maximumFractionDigits: d ?? (v >= 100 ? 0 : v >= 1 ? 2 : 4) }) : '—');
   const big = (v) => (!fin(v) ? '—' : v >= 1e12 ? '$' + (v / 1e12).toFixed(2) + 'T' : v >= 1e9 ? '$' + (v / 1e9).toFixed(1) + 'B' : v >= 1e6 ? '$' + (v / 1e6).toFixed(1) + 'M' : '$' + v.toFixed(0));
   const pct = (v) => (fin(v) ? (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(2) + '%' : '—');
-  const ago = (t) => { const s = Math.max(0, (Date.now() - t) / 1000); return s < 60 ? Math.round(s) + 's' : s < 3600 ? Math.round(s / 60) + 'm' : s < 86400 ? Math.round(s / 3600) + 'h' : Math.round(s / 86400) + 'd'; };
+  const ageShort = (t) => { const s = Math.max(0, (Date.now() - t) / 1000); return s < 60 ? Math.round(s) + 's' : s < 3600 ? Math.round(s / 60) + 'm' : s < 86400 ? Math.round(s / 3600) + 'h' : Math.round(s / 86400) + 'd'; };
   const S = { feeds: {}, timers: [], started: false, newsTab: 'btc', calFilter: 'hm', prev: {} };
 
   async function feed(k) {
@@ -38,7 +36,7 @@
   }
   function latency() {
     const el = $('mkFeeds'); if (!el) return;
-    el.innerHTML = 'feeds: ' + ['crypto', 'macro', 'calendar', 'news'].map((k) => { const f = S.feeds[k]; return `<span class="lat ${!f ? '' : f.ok ? 'ok' : 'bad'}" title="${esc(f && f.err || '')}">${k} ${!f ? '…' : f.ok ? f.ms + 'ms · ' + ago(f.at) : 'down'}</span>`; }).join(' · ');
+    el.innerHTML = 'feeds: ' + ['crypto', 'macro', 'calendar', 'news'].map((k) => { const f = S.feeds[k]; return `<span class="lat ${!f ? '' : f.ok ? 'ok' : 'bad'}" title="${esc(f && f.err || '')}">${k} ${!f ? '…' : f.ok ? f.ms + 'ms · ' + ageShort(f.at) : 'down'}</span>`; }).join(' · ');
   }
   function flash(el, key, val) { if (!el) return; const p = S.prev[key]; if (p != null && val != null && p !== val) { el.classList.remove('fl-up', 'fl-dn'); void el.offsetWidth; el.classList.add(val > p ? 'fl-up' : 'fl-dn'); } S.prev[key] = val; }
   const spark = (pts, up) => { if (!pts || pts.length < 2) return ''; const lo = Math.min(...pts), hi = Math.max(...pts), sp = hi - lo || 1; const d = pts.map((v, i) => `${i ? 'L' : 'M'}${(i / (pts.length - 1) * 80).toFixed(1)} ${(22 - (v - lo) / sp * 20).toFixed(1)}`).join(''); return `<svg class="spk" viewBox="0 0 80 24" preserveAspectRatio="none" aria-hidden="true"><path d="${d}" class="${up ? 'up' : 'dn'}"/></svg>`; };
@@ -76,7 +74,7 @@
       const el = $('mkNews'); if (!el) return;
       if (!f || !f.ok) { el.innerHTML = `<p class="mk-note">${f ? 'News unavailable: ' + esc(f.err) : 'Loading…'}</p>`; return; }
       const list = (f.data[S.newsTab] || []);
-      el.innerHTML = list.map((n) => `<a class="nw" ${n.link ? `href="${esc(n.link)}" target="_blank" rel="noopener noreferrer"` : ''}><span>${esc(n.title)}</span><small class="faint">${esc(n.publisher)}${n.publishedAt ? ' · ' + ago(Date.parse(n.publishedAt)) + ' ago' : ''}</small></a>`).join('') || '<p class="mk-note">No headlines.</p>';
+      el.innerHTML = list.map((n) => `<a class="nw" ${n.link ? `href="${esc(n.link)}" target="_blank" rel="noopener noreferrer"` : ''}><span>${esc(n.title)}</span><small class="faint">${esc(n.publisher)}${n.publishedAt ? ' · ' + ageShort(Date.parse(n.publishedAt)) + ' ago' : ''}</small></a>`).join('') || '<p class="mk-note">No headlines.</p>';
     }
   }
   const countdown = (ms) => { const m = Math.max(0, Math.round(ms / 60000)); return m >= 1440 ? Math.floor(m / 1440) + 'd ' + Math.floor((m % 1440) / 60) + 'h' : m >= 60 ? Math.floor(m / 60) + 'h ' + (m % 60) + 'm' : m + 'm'; };
@@ -96,5 +94,5 @@
     const e = f.data.find((x) => x.impact === 'High' && Date.parse(x.date) > now); return e ? { ...e, inMs: Date.parse(e.date) - now, label: `${e.country} ${e.title} in ${countdown(Date.parse(e.date) - now)}` } : null;
   }
   document.addEventListener('desk:view', (e) => { if (e.detail.view === 'markets') start(); });
-  root.DeskMarkets = { start, nextHighImpact, _state: S };
+  root.DeskMarkets = { start, nextHighImpact };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

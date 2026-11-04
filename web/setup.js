@@ -1,7 +1,7 @@
 // Dashboard drawing helpers for the trade-setup view and chart zones. No network. Zones come from zones.js (DeskZones).
 // Everything drawn here is derived from closed candles by fixed rules, or from the bot's own recorded plan. It is not a forecast.
 (function () {
-  const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const { esc } = globalThis.DeskUtil;
   const rgba = (hex, a) => { if (!/^#[0-9a-f]{6}$/i.test(hex)) return hex; const n = parseInt(hex.replace("#", ""), 16); return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`; };
 
   // A filled price box from time t1 to the right edge (or t2), drawn on the series pane.
