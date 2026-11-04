@@ -51,6 +51,9 @@ export type CaptureArgs = {
   stateBefore: State; cfgResolved: unknown; integrity: { hash: string; approved: boolean; reason: string | null };
   signals: Signal[]; rejects: Reject[]; gateNotes: string[]; newsBlock: string | null;
   chosen: Signal; fillRef: number; position: Position; equityBefore: number; approvalEnforced?: boolean; catchUpFromT?: number | null;
+  /** Optional observe-only diagnostics (checks.ts) stored as `record.observe`. Never read by replay or by any trading decision;
+   *  absent when not supplied, so the deskbot.decision/1 schema and its validation (dbv5_record_decision) are unchanged. */
+  observe?: { positionChecks?: unknown };
 };
 
 const accountView = (st: State) => {
@@ -110,6 +113,7 @@ export async function captureDecision(a: CaptureArgs): Promise<{ record: Record<
       sizing: { equityBefore: a.equityBefore, dynamicRisk: dyn, riskMultiplier: mult, riskScale: scale, riskAmtFormula: a.equityBefore * dyn * mult * scale, stopDist, qtyUncapped, qtyLeverageCap: qtyCap, leverageCapped: qtyUncapped > qtyCap, maxLeverage: CFG.MAX_LEVERAGE },
       modeledCosts: { takerFee: CFG.TAKER_FEE, makerFee: CFG.MAKER_FEE, slippage: CFG.SLIPPAGE, entryFee: p.entryFee, roundTripTakerCostPctOfEntry: 2 * CFG.TAKER_FEE + 2 * CFG.SLIPPAGE, roundTripCostR: (p.entry * (2 * CFG.TAKER_FEE + 2 * CFG.SLIPPAGE)) / stopDist, direction: d },
     },
+    ...(a.observe ? { observe: { ...clone(a.observe), authority: "observe-only: recorded, never gating" } } : {}),
   };
   assertNoSecrets(record); assertNoSecrets(inputs);
   const recordSha256 = await sha256(canonical(record));
