@@ -37,6 +37,7 @@ const srv = http.createServer((q, r) => { const f = path.join(web, q.url === "/"
         const { interval, startTime, endTime } = b.req; const rows = (fx.frames[interval] || []).filter((x) => x[0] >= startTime && x[0] <= endTime);
         return route.fulfill({ contentType: "application/json", body: JSON.stringify(rows.map((x) => ({ t: x[0], T: x[0], o: String(x[1]), h: String(x[2]), l: String(x[3]), c: String(x[4]), v: String(x[5]) }))) }); }
       if (u.includes("supabase.co/functions")) return route.fulfill({ contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify(status) });
+      if (u.includes("data-api.binance.vision")) return route.fulfill({ contentType: "application/json", body: "[]" });   // fallback feed: mocked empty (the fixture ages, so the app may try it)
       return route.abort();
     });
     await page.goto(base + "#tower"); await page.waitForTimeout(1200);

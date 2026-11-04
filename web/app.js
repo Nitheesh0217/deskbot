@@ -447,6 +447,7 @@ async function getBars(tf, n, book = BOOK) {
   } catch (e) {
     const r = await fetch(`https://data-api.binance.vision/api/v3/klines?symbol=${(BOOK_META[book] || BOOK_META.BTC).bn}&interval=${tf}&limit=${Math.min(n, 1000)}`, { signal: AbortSignal.timeout(12000) });
     if (!r.ok) throw new Error("no candle source reachable"); const j = await r.json();
+    if (!Array.isArray(j) || !j.length) throw new Error("no candles returned by either feed");
     return { src: "Binance", bars: j.map((k) => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4] })) };
   }
 }
@@ -507,7 +508,7 @@ function drawIndicators(b) {
   hoverLegend(null);
 }
 function hoverLegend(p) {
-  const el = $("hoverLegend"); if (!el || !IND.last) return;
+  const el = $("hoverLegend"); if (!el || !IND.last || !IND.last.length) return;   // no candles: nothing to describe
   const bar = p && p.seriesData ? p.seriesData.get(CH.series.c) : null, src = IND.last, lastBar = src[src.length - 1];
   const o = bar ? bar : { open: lastBar.o, high: lastBar.h, low: lastBar.l, close: lastBar.c };
   const val = (s) => { if (!s) return null; const d = p && p.seriesData ? p.seriesData.get(s) : null; return d && isFinite(d.value) ? d.value : null; };
