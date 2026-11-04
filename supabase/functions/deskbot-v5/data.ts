@@ -96,14 +96,32 @@ export async function candlesRangeBinance(interval: string, startTime: number, e
   return out.filter(b => b.ct < endTime);
 }
 
-export async function hlContext(sym: Sym = "BTC"): Promise<{ funding: number; oi: number; markPx: number; premium: number } | null> {
+// Hyperliquid instrument metadata comes from the SAME metaAndAssetCtxs response (no extra request). Observe-only: nothing here
+// changes sizing, entries or exits. `delisted` follows Hyperliquid's `isDelisted` flag on the universe entry (the pattern of
+// Superior-Trade/trading-terminal lib/hl-universe.ts, re-implemented). fundingAprPct = hourly funding x 24 x 365 x 100 (simple).
+export type HlCtx = {
+  funding: number; oi: number; markPx: number; premium: number;
+  oraclePx: number | null; szDecimals: number | null; maxLeverage: number | null; delisted: boolean; fundingAprPct: number;
+};
+/** Filled in place by hlContext: "missing" = coin not in the universe, "delisted" = listed with isDelisted, "unavailable" = request failed. */
+export type HlDiag = { status?: "ok" | "missing" | "delisted" | "unavailable"; coin?: string };
+const numOrNull = (x: unknown) => (x == null || x === "" || !Number.isFinite(+(x as number)) ? null : +(x as number));
+/** Hourly funding rate (fraction) -> simple annualised percent. */
+export const fundingApr = (hourly: number) => hourly * 24 * 365 * 100;
+
+export async function hlContext(sym: Sym = "BTC", diag: HlDiag = {}): Promise<HlCtx | null> {
+  diag.coin = SYMBOLS[sym].hl; diag.status = "unavailable";
   try {
     const r = await withTimeout(async s => { const res = await fetch(HL, { method: "POST", signal: s, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: "metaAndAssetCtxs" }) }); return res.ok ? await res.json() : null; });
     if (!r) return null;
     const [meta, ctxs] = r;
-    const i = meta.universe.findIndex((u: { name: string }) => u.name === SYMBOLS[sym].hl); if (i < 0) return null;
-    const c = ctxs[i];
-    return { funding: +c.funding, oi: +c.openInterest, markPx: +c.markPx, premium: +(c.premium ?? 0) };
+    const i = meta.universe.findIndex((u: { name: string }) => u.name === SYMBOLS[sym].hl); if (i < 0) { diag.status = "missing"; return null; }
+    const c = ctxs[i], u = meta.universe[i] as { szDecimals?: unknown; maxLeverage?: unknown; isDelisted?: unknown };
+    const delisted = u.isDelisted === true; diag.status = delisted ? "delisted" : "ok";
+    return {
+      funding: +c.funding, oi: +c.openInterest, markPx: +c.markPx, premium: +(c.premium ?? 0),
+      oraclePx: numOrNull(c.oraclePx), szDecimals: numOrNull(u.szDecimals), maxLeverage: numOrNull(u.maxLeverage), delisted, fundingAprPct: fundingApr(+c.funding),
+    };
   } catch { return null; }
 }
 
