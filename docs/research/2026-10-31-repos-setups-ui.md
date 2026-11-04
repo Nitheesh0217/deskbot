@@ -88,7 +88,7 @@ Studies and articles:
 |---|---|---|---|
 | lhc5407/ATS | **unverified**: the repo returns 404 and the user has no public repos | Regime switch (mean-reversion vs trend); AI approval before entry | Regime gating exists (engine.ts); the AI stays advisory on purpose |
 | anouarac/ATS (C++) | MIT | Strategies emit order intents to a queue; one abstract exchange interface per venue; unit tests on order and position managers | The read-only adapter contract exists (accounts.ts). A paper order-intent layer is a later candidate, and needs replay parity first |
-| hamed65kz/ATS (Python) | **none**, so all rights reserved: ideas only | Broker-neutral interface; logging the same asset's price from two venues side by side. **Anti-pattern:** commits a plaintext API key | Secret handling is already guarded. Cross-venue divergence: **observe-only check added** |
+| hamed65kz/ATS (Python) | **none**, so all rights reserved: ideas only | Broker-neutral interface; logging the same asset's price from two venues side by side. **Anti-pattern:** commits a plaintext API key | Secret handling is already guarded. Cross-venue divergence: **not built yet** (observe-only candidate; premium vs oracle is recorded instead, see Superior note) |
 | memarc/jsystemtrader (Java, archived) | BSD-3-Clause | A trading schedule that blocks entries and closes at a set time; validating data and indicators before trading; one code path for backtest and live; several report formats | Data validity: **observe-only missing-bar check added**. A PAXG weekend schedule changes trading, so it needs **owner approval, shadow first**. Backtest/live parity already exists (lanes) |
 
 Rejected: optimizer ranking by in-sample profit (overfitting risk).
