@@ -38,7 +38,10 @@ const MODEL = mod("DeskBotModel");
 // registry from desk-model.js; if it is missing, fall back to this file's descriptions (same ids) so the other views still render
 const STRATS = MODEL ? MODEL.strategies.map((s) => Object.assign({}, s, STRAT_X.find((x) => x.id === s.id) || {})) : STRAT_X.map((x) => Object.assign({}, x));
 
-const fmt$ = (v) => !Number.isFinite(v) ? "—" : (v < 0 ? "−$" : "$") + Math.abs(v).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+// privacy mode (riskchecks.js): $ amounts and position sizes are masked; R, % and prices stay
+const PRIV = () => !!(globalThis.DeskRisk && DeskRisk.privacyOn());
+const fmtQty = (v, dp) => PRIV() ? DeskRisk.QMASK : (+v).toFixed(dp);
+const fmt$ = (v) => !Number.isFinite(v) ? "—" : PRIV() ? DeskRisk.MASK : (v < 0 ? "−$" : "$") + Math.abs(v).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtPx = (v) => v == null || !isFinite(v) ? "—" : Number(v).toLocaleString("en-US",{minimumFractionDigits:BOOK==="GOLD"?2:0,maximumFractionDigits:BOOK==="GOLD"?2:0});
 const sgnR = (r) => (r > 0 ? "+" : r < 0 ? "−" : "") + Math.abs(r).toFixed(2) + "R";
 const pct = (v, d = 1) => (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v * 100).toFixed(d) + "%";
@@ -77,7 +80,7 @@ function renderDesk() {
   $("eq").textContent = available ? fmt$(eq + upnl) : "—";
   const ch = eq + upnl - start, base = S.carried && S.carried.v3StartEquity ? +S.carried.v3StartEquity : null;
   $("eqd").innerHTML = `<span class="${ch >= 0 ? "up" : "down"}">${ch >= 0 ? "+" : "−"}${fmt$(Math.abs(ch))} (${pct(start ? ch / start : 0, 2)})</span> <span class="faint">since ${BOOK === "GOLD" ? "gold book start" : "v5 start"}</span>` +
-    (base ? `<br><span class="faint">v3 began at $${base.toFixed(0)} · ${pct((eq + upnl) / base - 1, 1)} all-time</span>` : "");
+    (base ? `<br><span class="faint">v3 began at ${PRIV() ? DeskRisk.MASK : "$" + base.toFixed(0)} · ${pct((eq + upnl) / base - 1, 1)} all-time</span>` : "");
   $("runAction").textContent = (lr.action || "—").replace("_", " ");
   const all = (st.stats && st.stats.all) || { n: 0, wins: 0, sumR: 0 };
   if (available && start == null) $("eqd").textContent = "Starting equity is not reported; account return is unavailable.";
@@ -114,7 +117,7 @@ function renderDesk() {
     pc.innerHTML = `<div class="pos-head"><span class="side ${p.dir}">${p.dir.toUpperCase()}</span><h2>${esc(nameOf(p.strategy))}</h2><span class="num ${u >= 0 ? "up" : "down"}" style="margin-left:auto;font-weight:600">${u >= 0 ? "+" : "−"}${fmt$(Math.abs(u))}</span></div>
       <div class="setup-svg" style="margin-top:10px">${mod("DeskSetup") ? DeskSetup.setupSVG(p, zonePal(), fmtPx) : unavailable("Setup drawing (setup.js)")}</div>
       <div class="grid2" style="margin-top:10px"><div><div class="k">Entry</div><div class="v">${fmtPx(p.entry)}</div></div><div><div class="k">Risk</div><div class="v">${fmt$(p.riskAmt)} · ${fmtPx(R)} pts</div></div>
-      <div><div class="k">Size</div><div class="v">${(+p.remainingQty).toFixed(5)} ${BOOK === "GOLD" ? "PAXG units (modeled)" : "BTC"}</div></div><div><div class="k">Opened</div><div class="v">${ago(p.openT)}</div></div></div>
+      <div><div class="k">Size</div><div class="v">${fmtQty(p.remainingQty, 5)} ${BOOK === "GOLD" ? "PAXG units (modeled)" : "BTC"}</div></div><div><div class="k">Opened</div><div class="v">${ago(p.openT)}</div></div></div>
       <div class="ladder">${rung("TP3", p.tp3, p.tp3Done)}${rung("TP2", p.tp2, p.tp2Done)}${rung("TP1", p.tp1, p.tp1Done)}
       <div class="rung stop"><span class="t">Stop</span><span class="track"><i style="width:${p.stop !== p.stop0 ? 100 : 0}%"></i></span><span>${fmtPx(p.stop)}${p.stop !== p.stop0 ? " (moved)" : ""}</span></div></div>
       <p class="note" style="margin-top:10px">${(p.why || []).map(esc).join(" · ")}</p>
@@ -372,6 +375,9 @@ const RENDERERS = [
   ["system", () => renderSystem(), "v-system"],
   ["freshness", () => { const M = mod("DeskFreshness"); if (M) M.mount($("v-system"), RAW, DATA, BOOK, Date.now()); }, "v-system"],
   ["receipts", () => { const M = mod("DeskReceipts"); if (M) M.mount($("v-system"), (DATA.state || {}).last_run, { nameOf, bookLabel: BOOK === "GOLD" ? "PAXG" : "BTC" }); }, "v-system"],
+  ["riskchecks", () => { const M = mod("DeskRisk"); if (!M) return; const S = DATA.state || {}, lr = S.last_run || {}, p = (S.state || {}).pos || null, price = (lr.market || {}).price;
+    M.mount({ desk: $("v-desk"), system: $("v-system") }, { lastRun: lr, pos: p, plan: p ? planOf(p, Number.isFinite(price) ? price : null) : null, price, now: Date.now(), fmtPx, unit: BOOK === "GOLD" ? "PAXG" : "BTC", bookLabel: BOOK === "GOLD" ? "PAXG" : "BTC",
+      onChange: () => { renderAll(); if (!$("v-chart").hidden && CH.chart) chartDraw(); } }); }, "v-desk"],
   ["tower", () => renderTower(), "v-tower"], ["scanner", () => renderScanner(), "v-scanner"],
 ];
 function renderAll() { RENDERERS.forEach(([name, fn, host]) => safeRender(name, fn, host)); }
@@ -647,9 +653,9 @@ function renderPlanPanel(plan, price, warn, failed) {
   if (failed) { el.innerHTML = '<p class="note down">Plan unavailable: the position data could not be read. Nothing about the position was changed.</p>'; return; }
   const warnHtml = warn ? `<p class="note warn">${esc(warn)}</p>` : "";
   if (!plan) { const ch = tradeChips(null, null, true); el.innerHTML = (ch ? `<div class="plan-chips">${ch}</div>` : "") + '<p class="note faint">No open paper position: the chart shows price action and, if switched on, reference levels only.</p>'; return; }
-  const m = plan.meta, q = (x) => (x == null ? "—" : (+x).toPrecision(6));
+  const m = plan.meta, q = (x) => (x == null ? "—" : PRIV() ? DeskRisk.QMASK : (+x).toPrecision(6));
   const row = (r) => `<tr class="pk-${r.kind} ${r.status === "hit" ? "hit" : ""}"><td data-k="Level">${esc(r.label)}${r.kind === "reference" ? ' <small class="faint">not an order</small>' : ""}</td><td data-k="Price" class="r">${fmtPx(r.price)}</td><td data-k="From entry" class="r">${r.pct == null ? "—" : (r.pct > 0 ? "+" : "") + r.pct.toFixed(2) + "%"}</td><td data-k="R (original)" class="r">${r.r == null ? "—" : (r.r > 0 ? "+" : "") + r.r.toFixed(2) + "R"}</td><td data-k="Exit (planned)" class="r">${r.exitText ? esc(r.exitText) + " · " : ""}${q(r.qty)}</td><td data-k="Status">${esc(r.status)}</td></tr>`;
-  el.innerHTML = `${warnHtml}<div class="plan-chips">${tradeChips(pos, price, true)}</div><div class="plan-meta"><b>${esc(nameOf(m.strategy))}</b> · ${esc(m.dir)} · signal on ${esc(m.signalTimeframe || "—")} · max hold ${esc(m.maxHoldText || "—")}${m.expiresAt ? ` · time exit ${new Date(m.expiresAt).toISOString().slice(0, 16).replace("T", " ")} UTC` : ""} · 1R = ${fmtPx(m.riskPts)} pts (${m.riskPct.toFixed(2)}%) = ${fmt$(m.riskAmt)}</div>
+  el.innerHTML = `${warnHtml}<div class="plan-chips">${tradeChips(pos, price, true)}${mod("DeskRisk") ? DeskRisk.planChipsHTML(pos, plan, price, Date.now(), fmtPx) : ""}</div><div class="plan-meta"><b>${esc(nameOf(m.strategy))}</b> · ${esc(m.dir)} · signal on ${esc(m.signalTimeframe || "—")} · max hold ${esc(m.maxHoldText || "—")}${m.expiresAt ? ` · time exit ${new Date(m.expiresAt).toISOString().slice(0, 16).replace("T", " ")} UTC` : ""} · 1R = ${fmtPx(m.riskPts)} pts (${m.riskPct.toFixed(2)}%) = ${fmt$(m.riskAmt)}</div>
     <div class="plan-wrap"><table class="plan-t"><thead><tr><th>Level</th><th class="r">Price</th><th class="r">From entry</th><th class="r">R (original risk)</th><th class="r">Exit size (planned)</th><th>Status</th></tr></thead><tbody>${plan.rows.map(row).join("")}</tbody></table></div>
     <p class="note faint">Executable levels are the paper engine's orders. Exit rules: ${esc(m.exitRules.join("; ") || "—")}. The chart timeframe you view is not the trade's deadline. Zones and "Ref ·" levels (grey dashed, at most 5, nearest to price) are context only, not orders. Live R is unrealised.</p>`;
 }
@@ -670,7 +676,7 @@ async function renderSetupCardInner(p, S) {
     <div class="setup-grid"><div class="setup-svg">${mod("DeskSetup") ? DeskSetup.setupSVG(p, pal, fmtPx) : unavailable("Setup drawing (setup.js)")}</div>
     <div><div class="grid2"><div><div class="k">Entry</div><div class="v">${fmtPx(p.entry)}</div></div><div><div class="k">Stop loss (original)</div><div class="v down">${fmtPx(p.stop0)} · −1R</div></div>
     <div><div class="k">Take profits</div><div class="v up">${fmtPx(p.tp1)} · ${fmtPx(p.tp2)} · ${fmtPx(p.tp3)}</div></div><div><div class="k">Reward at TP1 / TP2 / TP3</div><div class="v">${rr(p.tp1)}R / ${rr(p.tp2)}R / ${rr(p.tp3)}R</div></div>
-    <div><div class="k">Risk</div><div class="v">${fmt$(p.riskAmt)} · ${fmtPx(R)} pts</div></div><div><div class="k">Size</div><div class="v">${(+p.originalQty).toFixed(5)} ${BOOK === "GOLD" ? "oz" : "BTC"}</div></div></div>
+    <div><div class="k">Risk</div><div class="v">${fmt$(p.riskAmt)} · ${fmtPx(R)} pts</div></div><div><div class="k">Size</div><div class="v">${fmtQty(p.originalQty, 5)} ${BOOK === "GOLD" ? "oz" : "BTC"}</div></div></div>
     ${conf && mod("DeskSetup") ? `<h3 style="margin:14px 0 0;font:600 13px var(--f-display)">Structure checks at entry: ${conf.met} of ${conf.of} agree</h3><p class="note faint" style="margin:2px 0 0">A count of rule items on 15m candles at the time of entry. It is not a win probability.</p>${DeskSetup.checksHTML(conf)}` : `<p class="note">${esc(why)}</p>`}
     <p class="note" style="margin-top:10px"><b>Why the bot took it:</b> ${(p.why || []).map(esc).join(" · ") || "—"}</p></div></div>`;
 }
