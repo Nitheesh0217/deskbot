@@ -10,7 +10,9 @@ import {
   VERSION, CFG, STRATEGIES, OPT_IN, buildSeries, snapshot, evaluate, entryGates, openPosition, managePosition,
   initState, unrealized, backtest, summarize, rollDay, dynamicRisk, applyCfg, resolvedCfg, ensureState, markEquity, setMlAsset, traderManage, m1View, type State, type Trade, type Bar,
 } from "./engine.ts";
-import { candles, candlesRange, candlesRangeBinance, hlContext, fearGreed, orderFlow, SYMBOLS, isSym, bookOf, type Sym } from "./data.ts";
+import { candles, candlesRange, candlesRangeBinance, hlContext, fearGreed, orderFlow, SYMBOLS, isSym, bookOf, type Sym, type HlDiag } from "./data.ts";
+import { positionChecks, rangeDiag, intentCheck, hlView, type IntentCheck } from "./checks.ts";
+import { guardCfg } from "./cfg_guard.ts";
 import { readNews, newsBlocks, type NewsRead } from "./news.ts";
 import { providersFromEnv, providerPolicy, type Usage, type AiFeature } from "./ai.ts";
 import { chatFacts, pushClose, pushOpen } from "./egress.ts";
@@ -95,6 +97,22 @@ async function recordDecision(c: Awaited<ReturnType<typeof captureDecision>>) {
   const ok = await rest("rpc/dbv5_record_decision", { method: "POST", headers: { Prefer: "" }, body: JSON.stringify({ d: { id: c.record.decisionId, sym: c.record.sym, ts: c.record.decidedAt, record: c.record, record_sha256: c.recordSha256 }, inputs: c.inputs.map((r) => ({ decision_id: r.decisionId, tf: r.tf, source: r.source, bars: r.bars, bars_sha256: r.barsSha256 })) }) });
   if (ok !== true && ok !== false) throw new Error("decision record not acknowledged");
 }
+// Market context history (observe-only; future funding/basis shadow research): one dbv5_market_ctx row per book per run.
+// The table comes from migration 20261104_market_ctx.sql; until it is applied the insert is skipped, noted once per isolate.
+let marketCtxMissingNoted = false;
+async function logMarketCtx(sym: Sym, ctx: Awaited<ReturnType<typeof hlContext>>, notes: string[]): Promise<"ok" | "no_ctx" | "not_migrated" | string> {
+  if (!ctx) return "no_ctx";
+  try {
+    await insert("dbv5_market_ctx", [{ symbol: sym, mark: ctx.markPx, oracle: ctx.oraclePx, premium: ctx.premium, funding: ctx.funding, oi: ctx.oi }]);
+    return "ok";
+  } catch (e) {
+    if (notMigrated(e)) {
+      if (!marketCtxMissingNoted) { marketCtxMissingNoted = true; notes.push("market ctx history: table dbv5_market_ctx not migrated; rows are skipped until migration 20261104_market_ctx.sql is applied"); }
+      return "not_migrated";
+    }
+    const msg = `market ctx history: ${(e as Error).message}`.slice(0, 160); notes.push(msg); return msg;
+  }
+}
 async function push(title: string, body: string) {
   if (!NTFY) return; try { await fetch(`https://ntfy.sh/${NTFY}`, { method: "POST", headers: { Title: title }, body, signal: AbortSignal.timeout(3000) }); } catch { /* optional, bounded to 3 s */ }
 }
@@ -135,6 +153,9 @@ async function runLocked() {
 async function runOnce(sym: Sym = "BTC", scheduler?: (fn: () => Promise<void>) => void) {
   const pending: (() => Promise<void>)[] = [], defer = scheduler ?? ((fn: () => Promise<void>) => { pending.push(fn); });
   const now = Date.now(); const evs: Ev[] = []; const notes: string[] = [];
+  // Observe-only checks (checks.ts, cfg_guard.ts): recorded in lastRun, never gating. DESKBOT_OBSERVE_CHECKS=off removes them entirely.
+  const OBS = (Deno.env.get("DESKBOT_OBSERVE_CHECKS") ?? "on") !== "off";
+  const hlDiag: HlDiag = {};
   const bk = bookOf(sym), isCrypto = bk.isCrypto, tag = sym === "BTC" ? "" : `${sym} `;
   let st = await loadState(sym);
   if (!st && sym !== "BTC") return { ok: true, sym, skipped: "book not initialised" };
@@ -146,7 +167,7 @@ async function runOnce(sym: Sym = "BTC", scheduler?: (fn: () => Promise<void>) =
   const rx: { m5?: number; m15?: number; h1?: number; h4?: number; ctx?: number; fng?: number; flow?: number; fngCached?: boolean } = {};
   const stamp = <T,>(k: "m5" | "m15" | "h1" | "h4" | "ctx" | "flow", p: Promise<T>) => p.then((v) => { rx[k] = Date.now(); return v; });
   const [m1v, m5, m15, h1, h4, ctx, fng, flow] = await Promise.all([
-    candles("1m", 240, now, "hyperliquid", sym).catch((e) => { notes.push(`Warning: 1m candles unavailable (${String((e as Error).message).slice(0, 80)}); the 1m trade-manager view is empty this run`); return { bars: [] as Bar[], source: "hyperliquid" as const }; }), stamp("m5", candles("5m", 400, now, "hyperliquid", sym)), stamp("m15", candles("15m", 400, now, "hyperliquid", sym)), stamp("h1", candles("1h", 300, now, "hyperliquid", sym)), stamp("h4", candles("4h", 700, now, "hyperliquid", sym)), stamp("ctx", hlContext(sym)),
+    candles("1m", 240, now, "hyperliquid", sym).catch((e) => { notes.push(`Warning: 1m candles unavailable (${String((e as Error).message).slice(0, 80)}); the 1m trade-manager view is empty this run`); return { bars: [] as Bar[], source: "hyperliquid" as const }; }), stamp("m5", candles("5m", 400, now, "hyperliquid", sym)), stamp("m15", candles("15m", 400, now, "hyperliquid", sym)), stamp("h1", candles("1h", 300, now, "hyperliquid", sym)), stamp("h4", candles("4h", 700, now, "hyperliquid", sym)), stamp("ctx", hlContext(sym, hlDiag)),
     (async () => { if (!isCrypto) return null; const c = (st as State & { _fng?: { v: number; l: string; t: number } })._fng; if (c && now - c.t < 3 * 3600_000) { rx.fng = c.t; rx.fngCached = true; return { value: c.v, label: c.l }; } const r = await fearGreed(); rx.fng = Date.now(); rx.fngCached = false; return r; })(), stamp("flow", orderFlow(now, sym)),
   ]);
   if (fng) (st as State & { _fng?: unknown })._fng = { v: fng.value, l: fng.label, t: now };
@@ -213,6 +234,7 @@ async function runOnce(sym: Sym = "BTC", scheduler?: (fn: () => Promise<void>) =
   let opened: { strategy: string; dir: string; entry: number; stop: number; reentry?: boolean; why: string[] } | null = null;
   let covNow: unknown = null;
   let catchup: unknown = null;
+  let intent: IntentCheck | null = null, entryTiming: { barCloseT: number; evalStartMs: number; fillMs: number | null; lagMs: number } | null = null;
   let receipts: Receipt[] | null = null; const shadowCands: { strategy: string; barT: number }[] = [];   // observability only (observe.ts)
   if (snap.T > st.lastEvalT) {
     const hadPos = !!st.pos, gateCopy = JSON.parse(JSON.stringify(st)) as State, trace: StrategyTrace[] = [];
@@ -246,14 +268,25 @@ async function runOnce(sym: Sym = "BTC", scheduler?: (fn: () => Promise<void>) =
         const { sig, p, fillRef } = picked;
         if (sym !== "BTC") p.id = `${sym}-${now}`;
         try {
-          await recordDecision(await captureDecision({
+          // observe-only: the position checks at entry are stored with the decision (optional `observe` field; schema unchanged)
+          let entryChecks: ReturnType<typeof positionChecks> = null;
+          if (OBS) try { entryChecks = positionChecks(p, stateBefore.equity, p.entry, hlView(ctx)); } catch { /* observe-only */ }
+          const cap = await captureDecision({
             sym, now, experimentId: EXPERIMENT_ID, frames: { m5: { ...m5, receivedAtMs: rx.m5 ?? null }, m15: { ...m15, receivedAtMs: rx.m15 ?? null }, h1: { ...h1, receivedAtMs: rx.h1 ?? null }, h4: { ...h4, receivedAtMs: rx.h4 ?? null } }, snapT: snap.T,
             external: { ctx: ctx ? { funding: ctx.funding ?? null, oi: ctx.oi ?? null, markPx: ctx.markPx ?? null } : null, markPxUsed: fillRef, fng: fng?.value ?? null, flow: flow ?? null },
             externalReceivedAtMs: { ctx: rx.ctx ?? null, fng: rx.fng ?? null, fngCached: rx.fngCached, flow: rx.flow ?? null },
             stateBefore, cfgResolved: resolvedCfg(st.cfg), integrity, signals, rejects, gateNotes: notes, newsBlock, chosen: sig, fillRef, position: p, equityBefore: stateBefore.equity, approvalEnforced: enforce, catchUpFromT: sig.why.some((w) => w.startsWith("CATCH-UP:")) ? prevEvalT : null,
-          }));
+            ...(entryChecks ? { observe: { positionChecks: entryChecks } } : {}),
+          });
+          await recordDecision(cap);
           for (const k of Object.keys(st)) delete (st as unknown as Record<string, unknown>)[k];
           Object.assign(st, trial);
+          if (OBS) {
+            const rec = cap.record as { plan: Record<string, unknown>; timing: { snapshotBarClose: number; evaluationTimeMs: number; evaluationLagMs: number } };
+            entryTiming = { barCloseT: rec.timing.snapshotBarClose, evalStartMs: rec.timing.evaluationTimeMs, fillMs: (rec.plan.openT as number) ?? null, lagMs: rec.timing.evaluationLagMs };
+            intent = intentCheck(rec.plan, st.pos);
+            if (!intent.ok) evs.push({ kind: "ERROR", strategy: sig.strategy, symbol: sym, msg: `${tag}intent check: opened position differs from the recorded plan (${intent.mismatches.map((m) => m.field).join(", ")})`.slice(0, 300), data: { intentCheck: intent, decisionId: decisionIdFor(p.id) } });
+          }
         } catch (e) {
           // Fail closed for the REPLACEMENT entry only: no position, no OPEN event; the run (and any closure above) still persists, and the failure is visible.
           const msg = `entry rejected, decision evidence not recorded: ${(e as Error).message}`.slice(0, 300);
@@ -304,7 +337,19 @@ async function runOnce(sym: Sym = "BTC", scheduler?: (fn: () => Promise<void>) =
   if (!wx._workOutbox.length) delete wx._workOutbox;
   // providers = names usable for the desk committee (the tower seats); policy = the five separate facts per provider and feature
   const ai = { providers: providersFromEnv("committee").map((p) => p.name), policy: providerPolicy(aiFeaturesOf(), sx._aiUsage ?? {}, now), usage: sx._aiUsage ?? {} };
-  const lastRun = { ts: new Date(now).toISOString(), sym, action, trader: { acts: traderActs, plan: st.pos?.plan ?? [] }, source, sources, frames: frameInfo({ m5, m15, h1, h4 }, rx), receipts, notes, integrity, news, ai, upnl: +upnl.toFixed(2), market, decision, risk: dynamicRisk(st.equity), desk: desk.summary, coverage: covNow, catchup, provenanceError, ms: Date.now() - now };
+  // Observe-only checks (recorded and shown, never gating). Notes are added only here, after every entry decision, so they can
+  // never reach a decision record's gate notes or an event message. Any failure is a note, never a failed run.
+  let obs: Record<string, unknown> = {}, marketOut: Record<string, unknown> = market;
+  if (OBS) {
+    try {
+      const hl = hlView(ctx);
+      if (hlDiag.status === "missing" || hlDiag.status === "delisted") notes.push(`Instrument metadata: ${hlDiag.coin} ${hlDiag.status} on Hyperliquid`);
+      marketOut = { ...market, hl, rangeDiag: rangeDiag(h1.bars, now) };
+      const timing = entryTiming ?? { barCloseT: snap.T, evalStartMs: now, fillMs: null, lagMs: now - snap.T };
+      obs = { positionChecks: positionChecks(st.pos, st.equity, snap.price, hl), cfgGuard: guardCfg(resolvedCfg(st.cfg)), intentCheck: intent, timing, marketCtxLog: await logMarketCtx(sym, ctx, notes) };
+    } catch (e) { notes.push(`observe checks: ${(e as Error).message}`.slice(0, 120)); }
+  }
+  const lastRun = { ts: new Date(now).toISOString(), sym, action, trader: { acts: traderActs, plan: st.pos?.plan ?? [] }, source, sources, frames: frameInfo({ m5, m15, h1, h4 }, rx), receipts, notes, integrity, news, ai, upnl: +upnl.toFixed(2), market: marketOut, decision, risk: dynamicRisk(st.equity), desk: desk.summary, coverage: covNow, catchup, provenanceError, ...obs, ms: Date.now() - now };
   st.version = VERSION;
   await saveState(st, lastRun, sym);
   await upsert("dbv5_equity", [{ symbol: sym, ts: new Date(now).toISOString(), equity: +st.equity.toFixed(4), upnl: +upnl.toFixed(4), price: snap.price }]);
