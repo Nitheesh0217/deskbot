@@ -1,3 +1,5 @@
+> **Superseded** — see `docs/README.md` for the current authoritative document.
+
 # Release W2 + W3: truthful workers, durable work log, strategy coverage, shadow lane
 
 Status: **candidate prepared, NOT released.** Every step below that changes production needs owner approval.

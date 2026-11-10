@@ -5,7 +5,7 @@ import {
   CFG, ML_IS_GOLD, setMlAsset, applyCfg, buildSeries, snapshot, evaluate, entryGates, openPosition, dynamicRisk, riskMultiplier, ensureState, idxAt,
   type Bar, type Signal, type Reject, type State, type Position, type Trade, type Context,
 } from "./engine.ts";
-import { SYMBOLS, type Sym } from "./data.ts";
+import { SYMBOLS, bookOf, type Sym } from "./data.ts";
 import { BUILD } from "./build_info.ts";
 import { canonical } from "./runtime.ts";
 import { catchUp } from "./catchup.ts";
@@ -51,6 +51,9 @@ export type CaptureArgs = {
   stateBefore: State; cfgResolved: unknown; integrity: { hash: string; approved: boolean; reason: string | null };
   signals: Signal[]; rejects: Reject[]; gateNotes: string[]; newsBlock: string | null;
   chosen: Signal; fillRef: number; position: Position; equityBefore: number; approvalEnforced?: boolean; catchUpFromT?: number | null;
+  /** Optional observe-only diagnostics (checks.ts) stored as `record.observe`. Never read by replay or by any trading decision;
+   *  absent when not supplied, so the deskbot.decision/1 schema and its validation (dbv5_record_decision) are unchanged. */
+  observe?: { positionChecks?: unknown };
 };
 
 const accountView = (st: State) => {
@@ -110,6 +113,7 @@ export async function captureDecision(a: CaptureArgs): Promise<{ record: Record<
       sizing: { equityBefore: a.equityBefore, dynamicRisk: dyn, riskMultiplier: mult, riskScale: scale, riskAmtFormula: a.equityBefore * dyn * mult * scale, stopDist, qtyUncapped, qtyLeverageCap: qtyCap, leverageCapped: qtyUncapped > qtyCap, maxLeverage: CFG.MAX_LEVERAGE },
       modeledCosts: { takerFee: CFG.TAKER_FEE, makerFee: CFG.MAKER_FEE, slippage: CFG.SLIPPAGE, entryFee: p.entryFee, roundTripTakerCostPctOfEntry: 2 * CFG.TAKER_FEE + 2 * CFG.SLIPPAGE, roundTripCostR: (p.entry * (2 * CFG.TAKER_FEE + 2 * CFG.SLIPPAGE)) / stopDist, direction: d },
     },
+    ...(a.observe ? { observe: { ...clone(a.observe), authority: "observe-only: recorded, never gating" } } : {}),
   };
   assertNoSecrets(record); assertNoSecrets(inputs);
   const recordSha256 = await sha256(canonical(record));
@@ -150,7 +154,7 @@ export async function replayDecision(record: Record<string, any>, rows: Pick<Inp
   if (diffs.length) return { diffs, reproduced: false };
   const cfgBefore = clone(CFG), glBefore = ML_IS_GOLD;
   try {
-    applyCfg(record.config.resolved); setMlAsset(record.sym === "GOLD");
+    applyCfg(record.config.resolved); setMlAsset(bookOf(record.sym).mlGold);
     const S = buildSeries({ m5: frames.m5, m15: frames.m15, h1: frames.h1, h4: frames.h4 });
     const i5 = idxAt(frames.m5, record.dataAvailability.snapshotBarClose);
     if (i5 < 0 || frames.m5[i5].ct !== record.dataAvailability.snapshotBarClose) { add("snapshotBar", record.dataAvailability.snapshotBarClose, i5 < 0 ? "not found" : frames.m5[i5].ct); return { diffs, reproduced: false }; }

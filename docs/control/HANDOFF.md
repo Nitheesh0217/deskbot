@@ -1,3 +1,5 @@
+> **Superseded** — see `docs/README.md` for the current authoritative document.
+
 # DeskBot handoff
 
 Start here, then read CURRENT_STATE.md, TASKS.md and EVIDENCE_LOG.md. Product scope: PROJECT_BRIEF.md. Boundaries: ARCHITECTURE.md and DECISIONS.md. Existing operational/strategy details remain in ../OPERATIONS.md, ../ONLINE_RUNBOOK.md, ../RISK.md, ../STRATEGIES.md, ../AGENTS.md and ../ML_REPORT.md.
