@@ -169,3 +169,13 @@ The cross-book regression fails on the previous scheduler: GOLD is saved after B
 - Live provider reachability: no provider is configured.
 - Broker connectivity: none exists.
 - Hyperliquid instrument metadata: the host is not reachable from this session.
+
+## 2026-11-10: PR #28 release + strategy shut-off (owner-approved "approve everything")
+- **Baseline:** both books flat (no open position), `_rev` 3218; edge v25 → `4262f7f`.
+- **Config:** RISK_SCALE 0 for BTC SWEEP_REV, SESSION_BO, TREND_MTF and GOLD SWEEP_REV, SESSION_BO, TREND_MTF, EMA_CROSS (`PROPOSED_CFG_2026-11-10.md`), `_rev` bumped, CONFIG events written. The value persisted through the next runs (`_rev` 3222).
+- **Migration:** `20261104_market_ctx` applied (additive). Rows recorded: 4 after two runs.
+- **Merge:** PR #28 → `main` at `2ef04a6`; code diff from the tested head `b14f42d` is empty.
+- **Edge:** v26, import pinned to `2ef04a6…`. Rollback: re-pin to `4262f7f…`.
+- **Vercel:** `dpl_Aaq92bYX6k69fzhswnDbkE6LccH9`, production, READY, `githubCommitSha` = `2ef04a6`.
+- **First runs on v26** (20:52 manual, 20:56 cron): no ERROR/INTENT events; `cfgGuard.ok = true`; `marketCtxLog = ok`; receipts show the seven off strategies as DISABLED, and HTF_TREND, VWAP_REVERT, D_THRUST, D_BEARTRAP as NOT_DUE (waiting for their bar).
+- **Not done:** funded execution, risk-limit changes, AI providers, PR #26 ETH/SOL. CI is still blocked by GitHub billing.
