@@ -5,6 +5,8 @@
 //   EXIT_C  after management: if TP1 is not done and held ≥ 50% of max hold, close at the next 5m open.
 //   AGREE   any strategy: skip a signal unless 1h SuperTrend, 4h SuperTrend and daily close vs daily EMA50 all agree with it
 //           (frozen spec docs/research/2026-11-10-layer-agreement/SPEC_FROZEN.md).
+//   EXIT_D  HTF_TREND only: after a closed bar, once MFE >= 1.5R the stop ratchets to MFE - 1.0R (never loosens; effective next bar)
+//           (frozen spec docs/research/2026-11-10-exit-d/SPEC_FROZEN.md).
 //   ENTRY_1 HTF_TREND only: skip a signal whose close is more than 1.0 × ATR4h beyond its Donchian trigger (closed signal bar only).
 //   npx tsx scripts/challenger_study.ts --data kline5_BTC.csv.gz --book BTC --cfg live_cfg.json --strategy HTF_TREND --variant ENTRY_1 [--costx 1.5] --out dir
 import { gunzipSync } from "node:zlib";
@@ -16,7 +18,7 @@ import {
 import { newLane, stepLane, finishLane, withLaneCfg, type Lane } from "../supabase/functions/deskbot-v5/lanes.ts";
 import { cadenceFor } from "../supabase/functions/deskbot-v5/coverage_view.ts";
 
-type Variant = "BASE" | "EXIT_B" | "EXIT_C" | "ENTRY_1" | "AGREE";
+type Variant = "BASE" | "EXIT_B" | "EXIT_C" | "ENTRY_1" | "AGREE" | "EXIT_D";
 const arg = (k: string, d?: string) => { const i = process.argv.indexOf("--" + k); return i > 0 ? process.argv[i + 1] : d; };
 const TF5 = 300_000, DAY = 86_400_000, book = arg("book", "BTC")!, strategy = arg("strategy")! as StrategyId, variant = arg("variant")! as Variant;
 const costx = +(arg("costx") ?? "1"), outDir = arg("out", "challenger_out")!;
@@ -34,7 +36,7 @@ const TP1_GT_1R = new Set<StrategyId>(["HTF_TREND", "EMA_CROSS", "HTF_SWEEP", "D
 type Run = { trades: Trade[]; eq: { t: number; e: number }[]; skipped: number; modified: number; timeClosed: number };
 async function run(v: Variant): Promise<Run> {
   const lane: Lane = await newLane({ sym: book, strategy, startEquity: live.startEquity, baseCfg, specVersion: "lane-spec-1" }, m5[0].t);
-  const st = lane.state, trades: Trade[] = [], eq: { t: number; e: number }[] = []; let skipped = 0, modified = 0, timeClosed = 0;
+  const st = lane.state, trades: Trade[] = [], eq: { t: number; e: number }[] = []; let skipped = 0, modified = 0, timeClosed = 0, trailMoves = 0; const mfe = new Map<string, number>();
   for (let i = Math.max(warm, 60); i < m5.length - 1; i++) {
     const bar = m5[i], fill = { px: m5[i + 1].o, t: m5[i + 1].t };
     withLaneCfg(lane, () => {
@@ -42,6 +44,14 @@ async function run(v: Variant): Promise<Run> {
       if (st.pos && CFG.TRADER) { const sn = snapshot(S, i), r = traderManage(st, sn, S, { st: sn.st5, bos: sn.st5, c: bar.c }, bar.c, bar.ct); if (r.closed) trades.push(r.closed); }
       if (v === "EXIT_C" && st.pos && !st.pos.tp1Done && bar.ct - st.pos.openT >= 0.5 * st.pos.maxHoldH * 3600e3) {
         const t = closeNow(st, fill.px, fill.t); if (t) { trades.push({ ...t, reason: "time50" }); timeClosed++; }
+      }
+      if (v === "EXIT_D" && strategy === "HTF_TREND" && st.pos) {
+        const p = st.pos, d = p.dir === "long" ? 1 : -1, R0 = Math.abs(p.entry - p.stop0);
+        if (R0 > 0) {
+          const fav = ((d === 1 ? bar.h : bar.l) - p.entry) * d / R0;
+          const m = Math.max(mfe.get(p.id) ?? 0, fav); mfe.set(p.id, m);
+          if (m >= 1.5) { const ns = p.entry + d * (m - 1.0) * R0; if ((ns - p.stop) * d > 0) { p.stop = ns; trailMoves++; } }
+        }
       }
       const e = markEquity(st, bar.c); if (i % 12 === 0) eq.push({ t: bar.ct, e });
       if (!st.pos) {
@@ -72,7 +82,7 @@ async function run(v: Variant): Promise<Run> {
   }
   trades.push(...finishLane(lane, m5[m5.length - 1]).trades);
   eq.push({ t: m5[m5.length - 1].ct, e: st.equity });
-  return { trades, eq, skipped, modified, timeClosed };
+  return { trades, eq, skipped, modified: modified + trailMoves, timeClosed };
 }
 
 // identity check: the hook-free copy must equal the production lane executor
