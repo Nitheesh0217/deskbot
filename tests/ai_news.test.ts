@@ -134,10 +134,10 @@ test("free providers: only those with a key, default order or AI_PROVIDER_ORDER,
     set({ AI_DATA_USE_ACCEPTED: "gemini:*" }); assert.deepEqual(providersFromEnv("news"), [], "acceptance without a key: nothing");
     set({ GROQ_API_KEY: "y", AI_DATA_USE_ACCEPTED: "groq:*" }); assert.deepEqual(providersFromEnv("committee"), [], "accepted but terms not reviewed: nothing");
     const pol = providerPolicy({ news: true, committee: false, chat: true }, { groq: { day: "d", calls: 3, fails: 3, coolUntil: Date.now() + 6e5 } });
-    const g = pol.find((x) => x.name === "groq")!; assert.equal(g.credentialsPresent, true); assert.equal(g.termsReviewed, null); assert.deepEqual(g.dataUseAccepted, ["news", "committee", "chat"]); assert.equal(g.reachable, "failing (cooling down)"); assert.deepEqual(g.usableFor, []);
+    const g = pol.find((x) => x.name === "groq")!; assert.equal(g.credentialsPresent, true); assert.equal(g.termsReviewed, null); assert.deepEqual(g.dataUseAccepted, ["news", "committee", "chat", "trader"]); assert.equal(g.reachable, "failing (cooling down)"); assert.deepEqual(g.usableFor, []);
     set({ NVIDIA_API_KEY: "x", GROQ_API_KEY: "y", OPENROUTER_API_KEY: "z", AI_TERMS_VERIFIED: "groq,nvidia,openrouter", AI_DATA_USE_ACCEPTED: "groq:*,nvidia:*,openrouter:*" });
     assert.deepEqual(providersFromEnv("committee").map((p) => p.name), ["groq", "nvidia", "openrouter"]);
-    assert.deepEqual(providerPolicy({ committee: false }).find((x) => x.name === "groq")!.usableFor, ["news", "chat"], "a switched-off feature is never usable");
+    assert.deepEqual(providerPolicy({ committee: false }).find((x) => x.name === "groq")!.usableFor, ["news", "chat", "trader"], "a switched-off feature is never usable");
     set({ NVIDIA_API_KEY: "x", GROQ_API_KEY: "y", AI_PROVIDER_ORDER: "nvidia", NVIDIA_MODEL: "custom/model", AI_TERMS_VERIFIED: "groq,nvidia", AI_DATA_USE_ACCEPTED: "groq:*,nvidia:*" });
     const ps = providersFromEnv("committee"); assert.deepEqual(ps.map((p) => p.name), ["nvidia", "groq"]); assert.equal(ps[0].model, "custom/model"); assert.match(ps[0].url, /^https:\/\/integrate\.api\.nvidia\.com\//);
     set({}); assert.deepEqual(providersFromEnv("chat"), []);

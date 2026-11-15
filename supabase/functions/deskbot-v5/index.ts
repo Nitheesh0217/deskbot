@@ -17,6 +17,7 @@ import { readNews, newsBlocks, type NewsRead } from "./news.ts";
 import { providersFromEnv, providerPolicy, type Usage, type AiFeature } from "./ai.ts";
 import { chatFacts, pushClose, pushOpen } from "./egress.ts";
 import { bookSpec, shadowEntry } from "./books.ts";
+import { AI_BOOK_ROW, newAiBook, stepAiBook, aiDecider, type AiBook } from "./ai_trader.ts";
 import { chat, validatePatch, mergeCfg, EDITABLE, type ChatTurn } from "./chat.ts";
 import { configIntegrity, serialExecutor } from "./runtime.ts";
 import { runDesk, deskChart, type AgentRow } from "./agents.ts";
@@ -54,7 +55,8 @@ const EXPERIMENT_ID = Deno.env.get("DESKBOT_EXPERIMENT_ID") ?? "baseline-paper";
 const CHAT_KEY = Deno.env.get("DESKBOT_CHAT_KEY") ?? "";
 const CHAT_DAILY_CAP = +(Deno.env.get("CHAT_DAILY_CAP") ?? 150);
 // which advisory features are switched on (a provider still needs credentials, reviewed terms and accepted data use per feature)
-const aiFeaturesOf = (): Record<AiFeature, boolean> => ({ news: NEWS_AI && NEWS_MODE !== "off", committee: AGENT_AI && DESK_WORKFLOW, chat: !!CHAT_KEY && CHAT_DAILY_CAP > 0 });
+const AI_TRADER = (Deno.env.get("AI_TRADER") ?? "on") !== "off";   // the AI paper book (ai_trader.ts); trades only when a provider is usable for "trader"
+const aiFeaturesOf = (): Record<AiFeature, boolean> => ({ news: NEWS_AI && NEWS_MODE !== "off", committee: AGENT_AI && DESK_WORKFLOW, chat: !!CHAT_KEY && CHAT_DAILY_CAP > 0, trader: AI_TRADER });
 // Each book is a separate paper account (own equity, position, stats, cfg) in its own dbv5_state row.
 // A non-BTC book only runs once its row exists (created deliberately, with a researched cfg).
 const BOOKS: Sym[] = (Deno.env.get("DESKBOT_BOOKS") ?? "BTC,GOLD").split(",").map((x) => x.trim()).filter(isSym);
@@ -369,6 +371,12 @@ async function runOnce(sym: Sym = "BTC", scheduler?: (fn: () => Promise<void>) =
   await events(evs);
   // phase 2 (advisory, recoverable): runs after EVERY book's phase 1 (runLocked). The global CFG belongs to whichever book ran last, so
   // this book's own configuration is applied again first.
+  // AI paper book (phase 2, BTC run only): its own row, equity and position; the model picks from the menu of valid signals or stands
+  // aside; code sizes, gates and manages. Never touches the rule books. No usable provider → it records NO_DECISION and places nothing.
+  if (sym === "BTC" && AI_TRADER) defer(async () => {
+    try { await runAiBook({ S, i5, bars: m5.bars.slice(-288), price: snap.price, funding: ctx?.funding ?? null, fng: fng?.value ?? null, baseCfg: (st.cfg ?? {}) as Record<string, unknown>, usage: (sx._aiUsage ??= {}), now }); }
+    catch (e) { try { await events([{ kind: "ERROR", msg: `AI trader: ${(e as Error).message}`.slice(0, 240), symbol: "AI_BTC" as Sym }]); } catch { /* best effort */ } }
+  });
   defer(async () => {
     applyCfg(st.cfg); setMlAsset(bk.mlGold);
     // flush Theo's outbox (persist.ts flushOutbox): batches of conflict-safe inserts, each acknowledged by a scoped RPC that removes
@@ -594,10 +602,35 @@ async function status() {
   for (const [k, b] of Object.entries(books)) if ((b as { work?: unknown }).work) workBacklog[k] = (b as { work?: unknown }).work;
   const curve = (eq ?? []).filter((_: unknown, i: number, a: unknown[]) => a.length < 600 || i % Math.ceil(a.length / 600) === 0 || i === a.length - 1);
   // build.sourceSha256: identity of the deployed source files (build_info.ts), not only the engine VERSION
-  return { version: VERSION, build: { sourceSha256: BUILD.sourceSha256 }, mode: "PAPER", now: new Date().toISOString(), updated: s?.[0]?.updated_at ?? null, integrity, state: st, lastRun: s?.[0]?.last_run ?? null, events: ev, agents: agents ?? [], trades: tr, curve, books, backtest: bt?.[0] ?? null, experiment, experimentError, config, registry: { strategies: STRATEGIES, optIn: OPT_IN }, scan, track, trackError, work: { backlog: workBacklog, lastFlush: Array.isArray(lastFlush) ? lastFlush : null, flushFailures24h: Array.isArray(flushFails) ? flushFails.length : null, lastFlushFailure: Array.isArray(flushFails) && flushFails[0] ? flushFails[0] : null }, chat: { enabled: !!CHAT_KEY, ai: providersFromEnv("chat").map((p) => p.name) }, ai: { policy: providerPolicy(aiFeaturesOf(), (st as { _aiUsage?: Usage } | null)?._aiUsage ?? {}), providers: providersFromEnv("committee").map((p) => p.name), byFeature: { news: providersFromEnv("news").map((p) => p.name), committee: providersFromEnv("committee").map((p) => p.name), chat: providersFromEnv("chat").map((p) => p.name) }, agentAi: AGENT_AI, deskWorkflow: DESK_WORKFLOW, newsAi: NEWS_AI, newsMode: NEWS_MODE },
+  // AI paper book: summary only (its log holds menus, picks and reasons; trades are in dbv5_trades with symbol AI_BTC)
+  let aiTrader: unknown = null;
+  try {
+    const [ar, at] = await Promise.all([select(`dbv5_state?id=eq.${AI_BOOK_ROW}&select=state,last_run,updated_at`), select("dbv5_trades?select=id,strategy,dir,r,net,reason,open_t,close_t&symbol=eq.AI_BTC&order=close_t.desc&limit=50")]);
+    const a = ar?.[0]?.state as AiBook | undefined;
+    aiTrader = { enabled: AI_TRADER, providers: providersFromEnv("trader").map((p) => p.name), updated: ar?.[0]?.updated_at ?? null,
+      book: a ? { equity: a.state.equity, startEquity: a.simulated?.startEquity ?? 350, pos: a.state.pos, stats: a.state.stats?.all ?? null, specVersion: a.specVersion, log: (a.log ?? []).slice(-20) } : null, trades: at ?? [] };
+  } catch (e) { aiTrader = { enabled: AI_TRADER, error: (e as Error).message.slice(0, 160) }; }
+  return { version: VERSION, build: { sourceSha256: BUILD.sourceSha256 }, mode: "PAPER", aiTrader, now: new Date().toISOString(), updated: s?.[0]?.updated_at ?? null, integrity, state: st, lastRun: s?.[0]?.last_run ?? null, events: ev, agents: agents ?? [], trades: tr, curve, books, backtest: bt?.[0] ?? null, experiment, experimentError, config, registry: { strategies: STRATEGIES, optIn: OPT_IN }, scan, track, trackError, work: { backlog: workBacklog, lastFlush: Array.isArray(lastFlush) ? lastFlush : null, flushFailures24h: Array.isArray(flushFails) ? flushFails.length : null, lastFlushFailure: Array.isArray(flushFails) && flushFails[0] ? flushFails[0] : null }, chat: { enabled: !!CHAT_KEY, ai: providersFromEnv("chat").map((p) => p.name) }, ai: { policy: providerPolicy(aiFeaturesOf(), (st as { _aiUsage?: Usage } | null)?._aiUsage ?? {}), providers: providersFromEnv("committee").map((p) => p.name), byFeature: { news: providersFromEnv("news").map((p) => p.name), committee: providersFromEnv("committee").map((p) => p.name), chat: providersFromEnv("chat").map((p) => p.name), trader: providersFromEnv("trader").map((p) => p.name) }, agentAi: AGENT_AI, deskWorkflow: DESK_WORKFLOW, newsAi: NEWS_AI, newsMode: NEWS_MODE },
     // real-account preparation: the registry/adapter contract (accounts.ts) exists, no broker is connected, funded orders are disabled
     brokers: { connected: [] as string[], contract: "read-only (accounts.ts)", fundedOrders: "disabled" as const }, spec: bookSpec("BTC"),
     pendingBooks: BOOKS.filter((b) => b !== "BTC" && !books[b]).map((b) => ({ sym: b, state: "NOT INITIALISED", spec: bookSpec(b) })) };
+}
+
+async function runAiBook(a: { S: ReturnType<typeof buildSeries>; i5: number; bars: Bar[]; price: number; funding: number | null; fng: number | null; baseCfg: Record<string, unknown>; usage: Usage; now: number }) {
+  const row = (await select(`dbv5_state?id=eq.${AI_BOOK_ROW}&select=state`))?.[0]?.state as (AiBook & { _rev?: number }) | undefined;
+  const book: AiBook & { _rev?: number } = row ?? newAiBook(350, a.now, a.baseCfg);   // created without _rev: the first compare-and-set save matches `_rev is null`
+  if (!row) await rest("dbv5_state?on_conflict=id", { method: "POST", headers: { Prefer: "resolution=ignore-duplicates,return=minimal" }, body: JSON.stringify([{ id: AI_BOOK_ROW, state: book }]) });
+  const r = await stepAiBook(book, {
+    S: a.S, i: a.i5, bars: a.bars, fill: { px: a.price, t: a.now }, sym: "BTC", now: a.now, snapCtx: { funding: a.funding, fng: a.fng },
+    decide: aiDecider(providersFromEnv("trader"), a.usage, a.now),
+  });
+  await saveStateCAS(db, AI_BOOK_ROW, book as unknown as Record<string, unknown> & { _rev?: number }, { ts: new Date(a.now).toISOString(), sym: "AI_BTC", last: r.log, equity: +book.state.equity.toFixed(2), pos: book.state.pos ? { strategy: book.state.pos.strategy, dir: book.state.pos.dir } : null });
+  if (r.trades.length) await saveTrades(r.trades, "AI_BTC" as Sym);
+  const evs: Ev[] = [];
+  if (r.log) evs.push({ kind: r.log.outcome === "ENTERED" ? "OPEN" : "AI_DECISION", strategy: r.log.choice && r.log.choice.pick >= 0 ? r.log.menu[r.log.choice.pick]?.strategy ?? null : null, symbol: "AI_BTC" as Sym,
+    msg: `AI ${r.log.outcome}${r.log.choice ? ` · pick ${r.log.choice.pick} conf ${r.log.choice.confidence} · ${r.log.choice.reason}` : r.log.note ? ` · ${r.log.note}` : ""} · menu ${r.log.menu.map((m) => `${m.strategy} ${m.dir}`).join(", ")}`.slice(0, 280), data: r.log });
+  for (const t of r.trades) evs.push({ kind: t.net > 0 ? "WIN" : "LOSS", strategy: t.strategy, symbol: "AI_BTC" as Sym, msg: `AI ${t.strategy} ${t.dir.toUpperCase()} closed ${t.reason} (${t.r >= 0 ? "+" : ""}${t.r.toFixed(2)}R)` });
+  await events(evs);
 }
 
 async function initBook(sym: string) {

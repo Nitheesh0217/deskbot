@@ -38,7 +38,7 @@ export const TERMS_VERIFIED: Record<string, { checked: string; source: string; d
   gemini: { checked: "2026-10-30", source: "ai.google.dev/pricing; ai.google.dev/gemini-api/docs/billing", dataUse: "free tier: prompts may be used to improve Google products; paid (billing on): not used" },
 };
 /** Advisory features that can send a request. Each needs its own owner acceptance of the provider's data use for that payload. */
-export const AI_FEATURES = ["news", "committee", "chat"] as const;
+export const AI_FEATURES = ["news", "committee", "chat", "trader"] as const;   // trader: the AI paper book (ai_trader.ts) picks orders
 export type AiFeature = typeof AI_FEATURES[number];
 const list = (k: string) => String(env(k) || "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean);
 /** AI_DATA_USE_ACCEPTED, the owner's explicit acceptance per provider and feature, e.g. "gemini:news,gemini:committee" ("gemini:*" = all). */

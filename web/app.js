@@ -374,7 +374,20 @@ function panelError(name, err, hostId) {
 }
 function clearPanelError(name, hostId) { const host = $(hostId); const note = host && host.querySelector(`:scope > .panel-error[data-render="${name}"]`); if (note) note.remove(); }
 function safeRender(name, fn, hostId) { try { fn(); clearPanelError(name, hostId); } catch (e) { panelError(name, e, hostId); } }
+function renderAiTrader() {
+  const A = RAW && RAW.aiTrader, note = $("aiTraderNote"), rows = $("aiTraderRows"); if (!note || !rows) return;
+  if (!A) { note.textContent = "AI trader status not reported by this backend."; rows.innerHTML = ""; return; }
+  if (A.error) { note.textContent = "AI trader status error: " + A.error; rows.innerHTML = ""; return; }
+  const prov = (A.providers || []).length ? `provider: ${A.providers.join(", ")}` : "BLOCKED: no AI provider usable for 'trader' (needs a key, reviewed terms and AI_DATA_USE_ACCEPTED provider:trader)";
+  const b = A.book, st = b && b.stats;
+  note.textContent = `${A.enabled ? "On" : "Off"} · ${prov} · picks one of the valid signals or stands aside; code sets stop, size and exits · SIMULATED money.`;
+  const head = b ? `<div class="li"><div class="a">Equity ${fmt$(b.equity)} (start ${fmt$(b.startEquity)})</div><div class="b">${st ? `${st.n} trades · ${st.n ? (st.sumR / st.n >= 0 ? "+" : "") + (st.sumR / st.n).toFixed(2) + "R/trade" : ""}` : "no trades"}</div><div class="c">${b.pos ? `Open: ${esc(b.pos.strategy)} ${esc(String(b.pos.dir).toUpperCase())} @ ${fmtPx(b.pos.entry)} · stop ${fmtPx(b.pos.stop)}` : "Flat"} · ${esc(b.specVersion || "")}</div></div>` : `<div class="li"><div class="a">Not started</div><div class="c">The book is created on the first BTC run after deploy.</div></div>`;
+  const logs = ((b && b.log) || []).slice(-8).reverse().map((l) => `<div class="li"><div class="a">${esc(l.outcome)}${l.choice && l.choice.pick >= 0 && l.menu[l.choice.pick] ? " · " + esc(l.menu[l.choice.pick].strategy + " " + l.menu[l.choice.pick].dir) : ""}</div><div class="b faint">${ago(l.t)}</div><div class="c">${l.choice ? `conf ${l.choice.confidence} · ${esc(l.choice.reason)}` : esc(l.note || "")} · menu: ${esc(l.menu.map((m) => m.strategy + " " + m.dir).join(", "))} · by ${esc(l.by)}</div></div>`).join("");
+  rows.innerHTML = head + (logs || `<div class="li"><div class="c faint">No decisions yet (a decision is asked only when at least one strategy has a valid signal).</div></div>`);
+}
+
 const RENDERERS = [
+  ["aitrader", renderAiTrader, "v-system"],
   ["book", () => document.querySelectorAll(".bookName").forEach((e) => { e.textContent = BM().label; }), "v-desk"],
   ["desk", () => renderDesk(), "v-desk"], ["agents", () => renderAgents(), "v-desk"], ["operations", () => renderOperations(), "v-desk"],
   ["strategies", () => renderStrategies(), "v-strategies"], ["trades", () => renderTrades(), "v-trades"], ["events", () => renderEvents(), "v-activity"],
