@@ -18,14 +18,32 @@ export const SYMBOLS = {
   LINK: { hl: "LINK", bn: "LINKUSDT", name: "Chainlink" },
   AVAX: { hl: "AVAX", bn: "AVAXUSDT", name: "Avalanche" },
   SUI: { hl: "SUI", bn: "SUIUSDT", name: "Sui" },
+  // paper basket (HTF_TREND only; docs/research/2026-11-15-oos-coins). bn "" = no matching Binance spot pair: no fallback feed.
+  ZEC: { hl: "ZEC", bn: "ZECUSDT", name: "Zcash" },
+  NEAR: { hl: "NEAR", bn: "NEARUSDT", name: "NEAR" },
+  XMR: { hl: "XMR", bn: "", name: "Monero" },
+  AAVE: { hl: "AAVE", bn: "AAVEUSDT", name: "Aave" },
+  UNI: { hl: "UNI", bn: "UNIUSDT", name: "Uniswap" },
+  ADA: { hl: "ADA", bn: "ADAUSDT", name: "Cardano" },
+  PEPE: { hl: "kPEPE", bn: "", name: "Pepe (×1000)" },
+  // Hyperliquid HIP-3 "xyz" perps on traditional markets: record-only (shadow); about a year of history, too short to test
+  SPX: { hl: "xyz:SP500", bn: "", name: "S&P 500 (perp)" },
+  NDX: { hl: "xyz:XYZ100", bn: "", name: "Nasdaq-100 (perp)" },
+  NVDA: { hl: "xyz:NVDA", bn: "", name: "NVIDIA (perp)" },
+  XAU: { hl: "xyz:GOLD", bn: "", name: "Gold (perp)" },
+  XAG: { hl: "xyz:SILVER", bn: "", name: "Silver (perp)" },
+  BRENT: { hl: "xyz:BRENTOIL", bn: "", name: "Brent oil (perp)" },
+  WTI: { hl: "xyz:CL", bn: "", name: "WTI crude (perp)" },
 } as const;
+/** Traditional-market books: no crypto sentiment (Fear & Greed), no Binance fallback. */
+export const TRADFI = new Set<string>(["SPX", "NDX", "NVDA", "XAU", "XAG", "BRENT", "WTI"]);
 export type Sym = keyof typeof SYMBOLS;
 export const isSym = (x: unknown): x is Sym => typeof x === "string" && x in SYMBOLS;
 
 // Per-book identity in ONE place, so no caller re-derives it from a "BTC"/"GOLD" literal.
 // rowId: its dbv5_state row; mlGold: the ML model's gold flag (engine.setMlAsset); isCrypto: crypto sentiment (Fear & Greed)
 // applies; news: the crypto news layer applies (BTC only today).
-export const bookOf = (sym: Sym) => ({ rowId: sym === "BTC" ? "main" : sym.toLowerCase(), mlGold: sym === "GOLD", isCrypto: sym !== "GOLD", news: sym === "BTC" });
+export const bookOf = (sym: Sym) => ({ rowId: sym === "BTC" ? "main" : sym.toLowerCase(), mlGold: sym === "GOLD" || sym === "XAU", isCrypto: sym !== "GOLD" && !TRADFI.has(sym), news: sym === "BTC" });
 
 // The whole request INCLUDING the body read runs inside the deadline: `p` must read the body itself. Clearing the timer when
 // fetch resolved (headers only) left res.json() unbounded on a stalled stream. The race also bounds a body that ignores the abort.
@@ -48,6 +66,7 @@ async function hlCandles(interval: string, startTime: number, endTime: number, s
 }
 
 async function bnCandles(interval: string, limit: number, sym: Sym = "BTC"): Promise<Bar[]> {
+  if (!SYMBOLS[sym].bn) throw new Error(`no Binance fallback for ${sym}`);
   const j = await withTimeout(async s => {
     const res = await fetch(`${BN}/klines?symbol=${SYMBOLS[sym].bn}&interval=${interval}&limit=${Math.min(limit, 1000)}`, { signal: s });
     if (!res.ok) throw new Error(`Binance ${interval} HTTP ${res.status}`);
@@ -82,6 +101,7 @@ export async function candlesRange(interval: string, startTime: number, endTime:
 
 // long history from Binance spot BTCUSDT (paged 1000/call) — HL only serves the latest ~5000 candles
 export async function candlesRangeBinance(interval: string, startTime: number, endTime: number, sym: Sym = "BTC"): Promise<Bar[]> {
+  if (!SYMBOLS[sym].bn) throw new Error(`no Binance history for ${sym}`);
   const out: Bar[] = []; let s = startTime;
   for (let guard = 0; s < endTime && guard < 130; guard++) {
     const j = await withTimeout(async sig => {
@@ -109,11 +129,19 @@ const numOrNull = (x: unknown) => (x == null || x === "" || !Number.isFinite(+(x
 /** Hourly funding rate (fraction) -> simple annualised percent. */
 export const fundingApr = (hourly: number) => hourly * 24 * 365 * 100;
 
+// one metaAndAssetCtxs response per dex reused for 60 s: a run with many books makes one call, not one per book (rate limit)
+const META_CACHE = new Map<string, { t: number; v: unknown }>();
+let metaCacheOn = false;
+/** Turned on for the duration of one multi-book run (runLocked); off otherwise, so every other caller reads fresh data. */
+export const metaCacheScope = (on: boolean) => { metaCacheOn = on; META_CACHE.clear(); };
 export async function hlContext(sym: Sym = "BTC", diag: HlDiag = {}): Promise<HlCtx | null> {
   diag.coin = SYMBOLS[sym].hl; diag.status = "unavailable";
   try {
-    const r = await withTimeout(async s => { const res = await fetch(HL, { method: "POST", signal: s, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: "metaAndAssetCtxs" }) }); return res.ok ? await res.json() : null; });
+    const coin = SYMBOLS[sym].hl, dex = coin.includes(":") ? coin.split(":")[0] : "";
+    const hit = metaCacheOn ? META_CACHE.get(dex) : undefined;
+    const r = hit && Date.now() - hit.t < 60_000 ? hit.v : await withTimeout(async s => { const res = await fetch(HL, { method: "POST", signal: s, headers: { "Content-Type": "application/json" }, body: JSON.stringify(dex ? { type: "metaAndAssetCtxs", dex } : { type: "metaAndAssetCtxs" }) }); return res.ok ? await res.json() : null; });
     if (!r) return null;
+    if (metaCacheOn && !(hit && Date.now() - hit.t < 60_000)) META_CACHE.set(dex, { t: Date.now(), v: r });
     const [meta, ctxs] = r;
     const i = meta.universe.findIndex((u: { name: string }) => u.name === SYMBOLS[sym].hl); if (i < 0) { diag.status = "missing"; return null; }
     const c = ctxs[i], u = meta.universe[i] as { szDecimals?: unknown; maxLeverage?: unknown; isDelisted?: unknown };
@@ -138,6 +166,7 @@ export async function fearGreed(): Promise<{ value: number; label: string } | nu
 // Research (docs/ML_REPORT.md §8): 24h imbalance on the trade's side had better results in both periods, but the effect is small,
 // so it is logged (shadow), not used to gate entries.
 export async function orderFlow(now = Date.now(), sym: Sym = "BTC"): Promise<{ imb4: number; imb24: number; bars: number } | null> {
+  if (!SYMBOLS[sym].bn) return null;
   try {
     const raw = await withTimeout(async s => { const res = await fetch(`${BN}/klines?symbol=${SYMBOLS[sym].bn}&interval=1h&limit=26`, { signal: s }); return res.ok ? await res.json() as unknown[][] : null; });
     if (!raw) return null;

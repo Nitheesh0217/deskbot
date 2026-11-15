@@ -10,13 +10,13 @@ import {
   VERSION, CFG, STRATEGIES, OPT_IN, buildSeries, snapshot, evaluate, entryGates, openPosition, managePosition,
   initState, unrealized, backtest, summarize, rollDay, dynamicRisk, applyCfg, resolvedCfg, ensureState, markEquity, setMlAsset, traderManage, m1View, type State, type Trade, type Bar,
 } from "./engine.ts";
-import { candles, candlesRange, candlesRangeBinance, hlContext, fearGreed, orderFlow, SYMBOLS, isSym, bookOf, type Sym, type HlDiag } from "./data.ts";
+import { candles, candlesRange, candlesRangeBinance, hlContext, metaCacheScope, fearGreed, orderFlow, SYMBOLS, isSym, bookOf, type Sym, type HlDiag } from "./data.ts";
 import { positionChecks, rangeDiag, intentCheck, hlView, type IntentCheck } from "./checks.ts";
 import { guardCfg } from "./cfg_guard.ts";
 import { readNews, newsBlocks, type NewsRead } from "./news.ts";
 import { providersFromEnv, providerPolicy, type Usage, type AiFeature } from "./ai.ts";
 import { chatFacts, pushClose, pushOpen } from "./egress.ts";
-import { bookSpec, shadowEntry } from "./books.ts";
+import { bookSpec, shadowEntry, BOOK_SPECS } from "./books.ts";
 import { AI_BOOK_ROW, newAiBook, stepAiBook, aiDecider, type AiBook } from "./ai_trader.ts";
 import { chat, validatePatch, mergeCfg, EDITABLE, type ChatTurn } from "./chat.ts";
 import { configIntegrity, serialExecutor } from "./runtime.ts";
@@ -59,7 +59,11 @@ const AI_TRADER = (Deno.env.get("AI_TRADER") ?? "on") !== "off";   // the AI pap
 const aiFeaturesOf = (): Record<AiFeature, boolean> => ({ news: NEWS_AI && NEWS_MODE !== "off", committee: AGENT_AI && DESK_WORKFLOW, chat: !!CHAT_KEY && CHAT_DAILY_CAP > 0, trader: AI_TRADER });
 // Each book is a separate paper account (own equity, position, stats, cfg) in its own dbv5_state row.
 // A non-BTC book only runs once its row exists (created deliberately, with a researched cfg).
-const BOOKS: Sym[] = (Deno.env.get("DESKBOT_BOOKS") ?? "BTC,GOLD").split(",").map((x) => x.trim()).filter(isSym);
+// The 15-minute market board scans its original markets only (the basket books evaluate themselves; bounded Hyperliquid load).
+const SCAN_SYMS = new Set<string>(["BTC", "GOLD", "ETH", "SOL", "XRP", "BNB", "DOGE", "LINK", "AVAX", "SUI"]);
+// DESKBOT_BOOKS, when set, is the exact list. Unset: BTC, GOLD, then every book with a specification (books.ts); a book runs only once
+// its state row exists (init_book), so listing it creates nothing.
+const BOOKS: Sym[] = [...new Set(Deno.env.get("DESKBOT_BOOKS") ? Deno.env.get("DESKBOT_BOOKS")!.split(",").map((x) => x.trim()) : ["BTC", "GOLD", ...Object.keys(BOOK_SPECS)])].filter(isSym);
 const rowId = (sym: Sym) => bookOf(sym).rowId;
 const CORS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "content-type, x-deskbot-key, x-chat-key", "Access-Control-Allow-Methods": "GET, POST, OPTIONS" };
 
@@ -136,6 +140,7 @@ async function runLocked() {
   const owner = crypto.randomUUID();
   const got = await rest("rpc/dbv5_lease", { method: "POST", headers: { Prefer: "" }, body: JSON.stringify({ owner, seconds: 120 }) });
   if (got !== true) return { ok: true, skipped: "another run holds the lease" };
+  metaCacheScope(true);   // one Hyperliquid metaAndAssetCtxs per dex for the whole run, not one per book
   try {
     const out: Record<string, unknown> = {}, later: { sym: Sym; fn: () => Promise<void> }[] = [];
     // phase 1, per book: data, position management, entries, durable state save, equity and events. Phase 2 (below) holds only the
@@ -150,7 +155,7 @@ async function runLocked() {
       catch (e) { try { await events([{ kind: "ERROR", msg: `${sym} advisory phase: ${(e as Error).message}`.slice(0, 300), symbol: sym }]); } catch { /* the work stays pending in the book state */ } }
     }
     return { ok: true, version: VERSION, books: out };
-  } finally { try { await rest("rpc/dbv5_release", { method: "POST", body: JSON.stringify({ owner }) }); } catch { /* lease expires anyway */ } }
+  } finally { metaCacheScope(false); try { await rest("rpc/dbv5_release", { method: "POST", body: JSON.stringify({ owner }) }); } catch { /* lease expires anyway */ } }
 }
 
 async function runOnce(sym: Sym = "BTC", scheduler?: (fn: () => Promise<void>) => void) {
@@ -162,6 +167,14 @@ async function runOnce(sym: Sym = "BTC", scheduler?: (fn: () => Promise<void>) =
   const bk = bookOf(sym), isCrypto = bk.isCrypto, tag = sym === "BTC" ? "" : `${sym} `;
   let st = await loadState(sym);
   if (!st && sym !== "BTC") return { ok: true, sym, skipped: "book not initialised" };
+  // 4h-cadence books (books.ts): a FLAT book is evaluated once per 4h close, in its stagger slot; the catch-up scan re-checks the boundary
+  // bar, so a slot a few minutes late still sees the 4h setup. A book holding a position runs every cycle (management never waits).
+  const spec = bookSpec(sym), H4 = 4 * 3600_000;
+  if (spec.cadence === "h4" && st && !st.pos) {
+    const boundary = Math.floor(now / H4) * H4, slotAt = boundary + (spec.slot ?? 0) * 5 * 60_000;
+    if (now < slotAt || (st.lastEvalT ?? 0) >= boundary - 1) return { ok: true, sym, skipped: "flat; waits for its next 4h evaluation slot" };
+  }
+  const needM1 = !(spec.cadence === "h4" && !st?.pos);   // the 1m trade-manager view only matters with a position
   if (!st) { st = await carryFromV3(now); evs.push({ kind: "INIT", msg: `DeskBot ${VERSION} initialised at $${st.equity.toFixed(2)} (carried from v3)`, data: st.carried }); }
   ensureState(st); applyCfg(st.cfg); setMlAsset(bk.mlGold);
   const integrity = await integrityFor(sym, resolvedCfg(st.cfg));
@@ -170,7 +183,7 @@ async function runOnce(sym: Sym = "BTC", scheduler?: (fn: () => Promise<void>) =
   const rx: { m5?: number; m15?: number; h1?: number; h4?: number; ctx?: number; fng?: number; flow?: number; fngCached?: boolean } = {};
   const stamp = <T,>(k: "m5" | "m15" | "h1" | "h4" | "ctx" | "flow", p: Promise<T>) => p.then((v) => { rx[k] = Date.now(); return v; });
   const [m1v, m5, m15, h1, h4, ctx, fng, flow] = await Promise.all([
-    candles("1m", 240, now, "hyperliquid", sym).catch((e) => { notes.push(`Warning: 1m candles unavailable (${String((e as Error).message).slice(0, 80)}); the 1m trade-manager view is empty this run`); return { bars: [] as Bar[], source: "hyperliquid" as const }; }), stamp("m5", candles("5m", 400, now, "hyperliquid", sym)), stamp("m15", candles("15m", 400, now, "hyperliquid", sym)), stamp("h1", candles("1h", 300, now, "hyperliquid", sym)), stamp("h4", candles("4h", 700, now, "hyperliquid", sym)), stamp("ctx", hlContext(sym, hlDiag)),
+    (needM1 ? candles("1m", 240, now, "hyperliquid", sym) : Promise.resolve({ bars: [] as Bar[], source: "hyperliquid" as const })).catch((e) => { notes.push(`Warning: 1m candles unavailable (${String((e as Error).message).slice(0, 80)}); the 1m trade-manager view is empty this run`); return { bars: [] as Bar[], source: "hyperliquid" as const }; }), stamp("m5", candles("5m", 400, now, "hyperliquid", sym)), stamp("m15", candles("15m", 400, now, "hyperliquid", sym)), stamp("h1", candles("1h", 300, now, "hyperliquid", sym)), stamp("h4", candles("4h", 700, now, "hyperliquid", sym)), stamp("ctx", hlContext(sym, hlDiag)),
     (async () => { if (!isCrypto) return null; const c = (st as State & { _fng?: { v: number; l: string; t: number } })._fng; if (c && now - c.t < 3 * 3600_000) { rx.fng = c.t; rx.fngCached = true; return { value: c.v, label: c.l }; } const r = await fearGreed(); rx.fng = Date.now(); rx.fngCached = false; return r; })(), stamp("flow", orderFlow(now, sym)),
   ]);
   if (fng) (st as State & { _fng?: unknown })._fng = { v: fng.value, l: fng.label, t: now };
@@ -493,9 +506,12 @@ async function runScan() {
     try { const r = (await select(`dbv5_state?id=eq.${rowId(sym)}&select=cfg:state->cfg,enabled:state->enabled`))?.[0]; return r ? { cfg: r.cfg ?? undefined, enabled: r.enabled ?? {} } : { enabled: {}, error: "no state row" }; }
     catch (e) { return { enabled: {}, error: String((e as Error).message).slice(0, 100) }; }
   };
-  const books: Partial<Record<Sym, Book>> = Object.fromEntries(await Promise.all(BOOKS.map(async (b) => [b, await loadBook(b)] as const)));
+  // A listed book with no state row is not started yet (init_book creates it): its market is scanned like any other market.
+  // BTC and GOLD are always books, so a missing row there stays an error.
+  const books: Partial<Record<Sym, Book>> = Object.fromEntries((await Promise.all(BOOKS.map(async (b) => [b, await loadBook(b)] as const)))
+    .filter(([b, v]) => b === "BTC" || b === "GOLD" || v.error !== "no state row"));
   const laneTrace: Record<string, { book: LaneTrace; shadow: LaneTrace; bookCfgId: string; shadowCfgId: string | null; shadowIds: string[] }> = {};
-  const syms = (Object.keys(SYMBOLS) as Sym[]).sort((a, b) => (PRIORITY[a] ?? 3) - (PRIORITY[b] ?? 3)), markets: unknown[] = [];
+  const syms = (Object.keys(SYMBOLS) as Sym[]).filter((x) => SCAN_SYMS.has(x)).sort((a, b) => (PRIORITY[a] ?? 3) - (PRIORITY[b] ?? 3)), markets: unknown[] = [];
   // forward tracking (track.ts): best-effort; a failure here is reported and never stops the scan
   const trackErrors: string[] = [];
   const open: OpenSignal[] = await select("dbv5_scan_signals?status=eq.open&select=id,sym,strategy,dir,bar_t,entry,stop,tp1,r_dist,cost_r,max_hold_h,checked_t&order=id.asc&limit=2000").catch((e) => { trackErrors.push(String((e as Error).message).slice(0, 120)); return []; });

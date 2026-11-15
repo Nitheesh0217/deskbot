@@ -122,21 +122,36 @@ test("a BTC phase-1 failure (data outage) does not stop GOLD's management", asyn
   assert.deepEqual(pick(r.states.gold), pick(alone.states.gold));
 });
 
-test("shadow SOL book beside BTC and GOLD: records the would-be entry once per signal bar, never opens or moves equity; BTC and GOLD unchanged", async () => {
+test("shadow book (SUI: no specification → shadow by default) beside BTC and GOLD: records the would-be entry once per signal bar, never opens or moves equity; BTC and GOLD unchanged", async () => {
   const { i, gold } = await goldWithPosition(), at = candidateBars().find((j) => j >= i + 12)!;
-  const sol0 = fresh(LOOSE);
+  const sui0 = fresh(LOOSE);
   const base = await run({ books: "BTC,GOLD", states: { main: fresh(LOOSE), gold }, i5: at });
-  const withSol = await run({ books: "BTC,GOLD,SOL", states: { main: fresh(LOOSE), gold, sol: sol0 }, i5: at });
-  const e = withSol.states.sol, sh = withSol.evRows.filter((x) => x.kind === "SHADOW" && x.symbol === "SOL");
-  assert.equal(e.pos, null, "shadow book never holds a position"); assert.equal(e.equity, sol0.equity, "equity untouched"); assert.equal(e.stats.all.n, 0);
-  assert.equal(sh.length, 1, "one shadow record"); assert.equal(sh[0].data.mode, "shadow"); assert.equal(sh[0].data.financialValidation, "UNVALIDATED"); assert.equal(sh[0].data.researchConfig, "SOL-SHADOW-1");
-  assert.ok(!withSol.evRows.some((x) => x.symbol === "SOL" && x.kind === "OPEN"), "no OPEN event for a shadow book");
-  assert.deepEqual(pick(withSol.states.main), pick(base.states.main), "BTC identical with or without the SOL book");
-  assert.deepEqual(pick(withSol.states.gold), pick(base.states.gold), "GOLD identical with or without the SOL book");
+  const withSui = await run({ books: "BTC,GOLD,SUI", states: { main: fresh(LOOSE), gold, sui: sui0 }, i5: at });
+  const e = withSui.states.sui, sh = withSui.evRows.filter((x) => x.kind === "SHADOW" && x.symbol === "SUI");
+  assert.equal(e.pos, null, "shadow book never holds a position"); assert.equal(e.equity, sui0.equity, "equity untouched"); assert.equal(e.stats.all.n, 0);
+  assert.equal(sh.length, 1, "one shadow record"); assert.equal(sh[0].data.mode, "shadow"); assert.equal(sh[0].data.financialValidation, "UNVALIDATED"); assert.equal(sh[0].data.researchConfig, null);
+  assert.ok(!withSui.evRows.some((x) => x.symbol === "SUI" && x.kind === "OPEN"), "no OPEN event for a shadow book");
+  assert.deepEqual(pick(withSui.states.main), pick(base.states.main), "BTC identical with or without the SUI book");
+  assert.deepEqual(pick(withSui.states.gold), pick(base.states.gold), "GOLD identical with or without the SUI book");
   // restart / retry on the same bar: the record is not repeated
-  const again = await run({ books: "SOL", states: { sol: withSol.states.sol }, i5: at });
+  const again = await run({ books: "SUI", states: { sui: withSui.states.sui }, i5: at });
   assert.equal(again.evRows.filter((x) => x.kind === "SHADOW").length, 0, "same signal bar after a restart: no duplicate shadow record");
-  assert.equal(again.states.sol.pos, null);
+  assert.equal(again.states.sui.pos, null);
+});
+
+test("4h-cadence basket book: a FLAT book is evaluated once per 4h close in its slot, skipped otherwise; a book with a position runs every cycle", async () => {
+  // synthetic bars start on a 4h boundary; ADA has slot 2 (10 minutes after the close)
+  const k = Math.floor((m5.length - 60) / 48) - 1, closeBar = 48 * k - 1, early = closeBar + 1, late = closeBar + 3;   // now ≈ close + 5m / + 15m
+  const ada0 = fresh(LOOSE);
+  const r1 = await run({ books: "ADA", states: { ada: ada0 }, i5: early });
+  assert.match(String((r1.res.books.ADA as any).skipped), /waits for its next 4h evaluation slot/, "before its slot: skipped");
+  const r2 = await run({ books: "ADA", states: { ada: ada0 }, i5: late });
+  assert.equal((r2.res.books.ADA as any).skipped, undefined, "in its slot: evaluated"); assert.ok(r2.states.ada.lastEvalT >= m5[late].ct - 1);
+  const r3 = await run({ books: "ADA", states: { ada: r2.states.ada }, i5: late + 1 });
+  assert.match(String((r3.res.books.ADA as any).skipped), /waits/, "same 4h period, already evaluated: skipped");
+  const { gold } = await goldWithPosition(); const withPos = structuredClone(r2.states.ada) as State; withPos.pos = { ...structuredClone(gold.pos!), id: "ADA-test" };
+  const r4 = await run({ books: "ADA", states: { ada: withPos }, i5: late + 1 });
+  assert.equal((r4.res.books.ADA as any).skipped, undefined, "holding a position: runs every cycle");
 });
 
 test("init_book creates a missing SHADOW book, or a new PAPER book with its research config; refuses BTC/GOLD and never overwrites", async () => {
