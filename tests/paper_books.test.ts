@@ -9,17 +9,19 @@ import { initState, type State } from "../supabase/functions/deskbot-v5/engine.t
 
 const asInstrument = (sym: string): Instrument => { const i = BOOK_SPECS[sym].instrument; return { id: `hl:${i.coin}`, venue: i.venue, symbol: i.coin, currency: "USD", tick: 10 ** -(6 - i.szDecimals), lot: i.lot, sessions: [{ always: true }], dataSource: i.dataFeed, cls: "crypto_perp", multiplier: i.multiplier, expiry: null, settlement: null }; };
 
-test("book specs: ETH is a paper book on HTF_TREND only (ETH-PAPER-1), SOL is shadow; BTC/GOLD unchanged; unknown books default to shadow", () => {
+test("book specs: ETH paper (ETH-PAPER-1); basket books paper on HTF_TREND at half size, 4h cadence; tradfi record-only; BTC/GOLD unchanged; unknown → shadow", () => {
   assert.equal(BOOK_SPECS.BTC.mode, "paper"); assert.equal(BOOK_SPECS.GOLD.mode, "paper"); assert.equal(BOOK_SPECS.BTC.initCfg, undefined); assert.equal(BOOK_SPECS.GOLD.initCfg, undefined);
-  assert.equal(BOOK_SPECS.ETH.mode, "paper"); assert.equal(BOOK_SPECS.ETH.researchConfig, "ETH-PAPER-1"); assert.equal(BOOK_SPECS.ETH.instrument.szDecimals, 4);
-  assert.deepEqual(Object.entries((BOOK_SPECS.ETH.initCfg as any).RISK_SCALE).filter(([, v]) => v !== 0).map(([k]) => k), ["HTF_TREND"]);
-  assert.equal(BOOK_SPECS.SOL.mode, "shadow"); assert.equal(BOOK_SPECS.SOL.financialValidation, "UNVALIDATED"); assert.equal(BOOK_SPECS.SOL.researchConfig, "SOL-SHADOW-1");
-  for (const s of ["ETH", "SOL"]) {
-    const b = BOOK_SPECS[s];
-    assert.equal(b.instrument.type, "perpetual"); assert.equal(b.instrument.expiry, null); assert.equal(b.instrument.multiplier, 1);
+  assert.equal(BOOK_SPECS.BTC.cadence, undefined); assert.equal(BOOK_SPECS.GOLD.cadence, undefined);
+  assert.equal(BOOK_SPECS.ETH.mode, "paper"); assert.equal(BOOK_SPECS.ETH.researchConfig, "ETH-PAPER-1"); assert.equal((BOOK_SPECS.ETH.initCfg as any).RISK_SCALE.HTF_TREND, 1);
+  const basket = ["SOL", "DOGE", "BNB", "XRP", "ZEC", "NEAR", "XMR", "AAVE", "UNI", "LINK", "PEPE", "AVAX", "ADA"];
+  for (const s of basket) {
+    const b = BOOK_SPECS[s]; assert.equal(b.mode, "paper", s); assert.equal(b.researchConfig, "BASKET-HTF-1"); assert.equal(b.cadence, "h4"); assert.ok([0, 1, 2].includes(b.slot!));
+    const rs = (b.initCfg as any).RISK_SCALE; assert.equal(rs.HTF_TREND, 0.5, `${s} half size`); assert.deepEqual(Object.entries(rs).filter(([, v]) => v !== 0).map(([k]) => k), ["HTF_TREND"]);
     assert.deepEqual(validateInstrument(asInstrument(s)), [], `${s} instrument passes the registry contract`);
   }
-  assert.equal(bookSpec("DOGE").mode, "shadow"); assert.equal(bookSpec("DOGE").financialValidation, "UNVALIDATED");
+  for (const s of ["SPX", "NDX", "NVDA", "XAU", "XAG", "BRENT", "WTI"]) { const b = BOOK_SPECS[s]; assert.equal(b.mode, "shadow", s); assert.equal(b.researchConfig, "TRADFI-SHADOW-1"); assert.ok(b.instrument.coin.startsWith("xyz:")); }
+  for (const s of ["ETH", "SOL"]) { const b = BOOK_SPECS[s]; assert.equal(b.instrument.type, "perpetual"); assert.equal(b.instrument.expiry, null); assert.equal(b.instrument.multiplier, 1); }
+  assert.equal(bookSpec("SUI").mode, "shadow"); assert.equal(bookSpec("SUI").financialValidation, "UNVALIDATED"); assert.equal(bookSpec("SUI").initCfg, undefined);
 });
 
 test("shadow entry: quantity rounded down to the instrument's lot; minimum order value and round-trip cost in R reported", () => {

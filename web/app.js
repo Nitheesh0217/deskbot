@@ -374,6 +374,23 @@ function panelError(name, err, hostId) {
 }
 function clearPanelError(name, hostId) { const host = $(hostId); const note = host && host.querySelector(`:scope > .panel-error[data-render="${name}"]`); if (note) note.remove(); }
 function safeRender(name, fn, hostId) { try { fn(); clearPanelError(name, hostId); } catch (e) { panelError(name, e, hostId); } }
+function renderBasket() {
+  const note = $("basketNote"), rows = $("basketRows"); if (!note || !rows) return;
+  const B = (RAW && RAW.books) || {}, list = [["BTC", { spec: RAW && RAW.spec, state: RAW && RAW.state, lastRun: RAW && RAW.lastRun }], ...Object.entries(B)].filter(([, b]) => b && b.state);
+  if (!list.length) { note.textContent = "No book status returned."; rows.innerHTML = ""; return; }
+  let eq = 0, start = 0, n = 0, sumR = 0, open = 0;
+  const line = ([sym, b]) => {
+    const st = b.state || {}, sp = b.spec || {}, s0 = (st.simulated && st.simulated.startEquity) || sp.simulatedStartEquity || 350, a = (st.stats && st.stats.all) || { n: 0, sumR: 0 };
+    const shadow = sp.mode === "shadow";
+    if (!shadow) { eq += +st.equity || 0; start += s0; n += a.n || 0; sumR += a.sumR || 0; if (st.pos) open++; }
+    const p = st.pos, ch = (+st.equity || 0) - s0;
+    return `<div class="li"><div class="a">${esc(sym)} · ${esc(shadow ? "record-only" : (sp.researchConfig || "paper"))}</div><div class="b">${shadow ? "—" : `<span class="${ch >= 0 ? "up" : "down"}">${fmt$(st.equity)}</span>`}</div><div class="c">${p ? `Open ${esc(p.strategy)} ${esc(String(p.dir).toUpperCase())}` : "Flat"} · ${a.n || 0} trades${a.n ? ` · ${(a.sumR / a.n >= 0 ? "+" : "") + (a.sumR / a.n).toFixed(2)}R/trade` : ""}${b.lastRun && b.lastRun.ts ? ` · last run ${ago(b.lastRun.ts)}` : ""}</div></div>`;
+  };
+  const html = list.map(line).join("");
+  note.textContent = `Paper books: ${fmt$(eq)} vs ${fmt$(start)} simulated start (${eq - start >= 0 ? "+" : "−"}${fmt$(Math.abs(eq - start))}) · ${open} open · ${n} trades${n ? ` · ${(sumR / n >= 0 ? "+" : "") + (sumR / n).toFixed(2)}R/trade` : ""}. SIMULATED money; basket judged after 30+ trades.`;
+  rows.innerHTML = html;
+}
+
 function renderAiTrader() {
   const A = RAW && RAW.aiTrader, note = $("aiTraderNote"), rows = $("aiTraderRows"); if (!note || !rows) return;
   if (!A) { note.textContent = "AI trader status not reported by this backend."; rows.innerHTML = ""; return; }
@@ -387,6 +404,7 @@ function renderAiTrader() {
 }
 
 const RENDERERS = [
+  ["basket", renderBasket, "v-system"],
   ["aitrader", renderAiTrader, "v-system"],
   ["book", () => document.querySelectorAll(".bookName").forEach((e) => { e.textContent = BM().label; }), "v-desk"],
   ["desk", () => renderDesk(), "v-desk"], ["agents", () => renderAgents(), "v-desk"], ["operations", () => renderOperations(), "v-desk"],
