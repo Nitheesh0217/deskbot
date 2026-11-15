@@ -66,3 +66,11 @@ test('broker connection state is explicit: none connected means paper only, neve
   assert.ok(none.issues.some((x: string) => /No broker account connected .*Paper execution only; funded orders disabled/.test(x)));
   assert.ok(evidence.summarize(fixture(), now, true).issues.includes('Broker connection state not reported.'));
 });
+test('every book is listed with its mode, research config, validation and limitations; uninitialised books are shown as such', () => {
+  const st = { ...fixture(), spec: { mode: 'paper', researchConfig: null, financialValidation: 'DEVELOPMENT-ONLY', limitations: ['x'] },
+    books: { ETH: { updated: new Date(now - 60000).toISOString(), lastRun: { ts: new Date(now - 60000).toISOString(), market: { barT: now - 60000 }, ai: { providers: [] } }, integrity: { approved: false }, spec: { mode: 'shadow', researchConfig: 'ETH-SHADOW-1', financialValidation: 'UNVALIDATED', limitations: ['Shadow only'] } } },
+    pendingBooks: [{ sym: 'SOL', state: 'NOT INITIALISED', spec: { mode: 'shadow', financialValidation: 'UNVALIDATED', limitations: [] } }] };
+  const r = evidence.summarize(st, now, true), by = Object.fromEntries(r.rows.map((x: any) => [x.symbol, x]));
+  assert.equal(by.BTC.mode, 'PAPER'); assert.equal(by.ETH.mode, 'SHADOW · ETH-SHADOW-1'); assert.equal(by.ETH.validation, 'UNVALIDATED'); assert.deepEqual([...by.ETH.limitations], ['Shadow only']);
+  assert.match(by.SOL.mode, /^NOT INITIALISED · SHADOW/); assert.equal(by.SOL.fresh, false);
+});
