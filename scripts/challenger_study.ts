@@ -7,6 +7,10 @@
 //           (frozen spec docs/research/2026-11-10-layer-agreement/SPEC_FROZEN.md).
 //   EXIT_D  HTF_TREND only: after a closed bar, once MFE >= 1.5R the stop ratchets to MFE - 1.0R (never loosens; effective next bar)
 //           (frozen spec docs/research/2026-11-10-exit-d/SPEC_FROZEN.md).
+//   FUND_CROWD any strategy: skip a long when the latest settled funding is >= the 90th percentile of the previous 90 settlements,
+//           a short when <= the 10th (needs --funding; spec docs/research/2026-11-15-lumibot/SPEC_FROZEN.md).
+//   --funding <csv>: charge historical funding (last settlement at or before each bar, rate / interval hours per hour) instead of the
+//           flat BT_FUNDING_PER_HOUR assumption. The identity check still runs on the flat assumption.
 //   ENTRY_1 HTF_TREND only: skip a signal whose close is more than 1.0 × ATR4h beyond its Donchian trigger (closed signal bar only).
 //   npx tsx scripts/challenger_study.ts --data kline5_BTC.csv.gz --book BTC --cfg live_cfg.json --strategy HTF_TREND --variant ENTRY_1 [--costx 1.5] --out dir
 import { gunzipSync } from "node:zlib";
@@ -18,7 +22,7 @@ import {
 import { newLane, stepLane, finishLane, withLaneCfg, type Lane } from "../supabase/functions/deskbot-v5/lanes.ts";
 import { cadenceFor } from "../supabase/functions/deskbot-v5/coverage_view.ts";
 
-type Variant = "BASE" | "EXIT_B" | "EXIT_C" | "ENTRY_1" | "AGREE" | "EXIT_D";
+type Variant = "BASE" | "EXIT_B" | "EXIT_C" | "ENTRY_1" | "AGREE" | "EXIT_D" | "FUND_CROWD";
 const arg = (k: string, d?: string) => { const i = process.argv.indexOf("--" + k); return i > 0 ? process.argv[i + 1] : d; };
 const TF5 = 300_000, DAY = 86_400_000, book = arg("book", "BTC")!, strategy = arg("strategy")! as StrategyId, variant = arg("variant")! as Variant;
 const costx = +(arg("costx") ?? "1"), outDir = arg("out", "challenger_out")!;
@@ -33,14 +37,27 @@ const S = buildSeries({ m5, m15: agg(900_000), h1: agg(3_600_000), h4: agg(14_40
 const baseCfg = costx === 1 ? live.cfg : { ...live.cfg, TAKER_FEE: CFG.TAKER_FEE * costx, MAKER_FEE: CFG.MAKER_FEE * costx, SLIPPAGE: CFG.SLIPPAGE * costx, BT_FUNDING_PER_HOUR: CFG.BT_FUNDING_PER_HOUR * costx };
 const TP1_GT_1R = new Set<StrategyId>(["HTF_TREND", "EMA_CROSS", "HTF_SWEEP", "D_THRUST", "D_BEARTRAP"]);
 
+// historical funding (LumiBot-style: real settlements; a bar with no known settlement falls back to the flat assumption and is counted)
+const fundPath = arg("funding");
+const FT: number[] = [], FR: number[] = [], FH: number[] = [];
+if (fundPath) for (const line of readFileSync(fundPath, "utf8").trim().split("\n").slice(1)) { const [t, h, r] = line.split(",").map(Number); FT.push(t); FH.push(h || 8); FR.push(r); }
+const fundIdx = (T: number) => { let lo = 0, hi = FT.length - 1, a = -1; while (lo <= hi) { const m = (lo + hi) >> 1; if (FT[m] <= T) { a = m; lo = m + 1; } else hi = m - 1; } return a; };
+let fundFallbackBars = 0;
+const fundHourly = (T: number): number | null => { const k = fundIdx(T); if (k < 0) { fundFallbackBars++; return null; } return FR[k] / FH[k]; };
+const crowd = (T: number): number => {   // +1 crowded long, -1 crowded short, 0 neither / not enough history
+  const k = fundIdx(T); if (k < 90) return 0;
+  const prev = FR.slice(k - 90, k).sort((a, b) => a - b), p90 = prev[Math.floor(0.9 * 89)], p10 = prev[Math.floor(0.1 * 89)];
+  return FR[k] >= p90 ? 1 : FR[k] <= p10 ? -1 : 0;
+};
+
 type Run = { trades: Trade[]; eq: { t: number; e: number }[]; skipped: number; modified: number; timeClosed: number };
-async function run(v: Variant): Promise<Run> {
+async function run(v: Variant, real = false): Promise<Run> {
   const lane: Lane = await newLane({ sym: book, strategy, startEquity: live.startEquity, baseCfg, specVersion: "lane-spec-1" }, m5[0].t);
   const st = lane.state, trades: Trade[] = [], eq: { t: number; e: number }[] = []; let skipped = 0, modified = 0, timeClosed = 0, trailMoves = 0; const mfe = new Map<string, number>();
   for (let i = Math.max(warm, 60); i < m5.length - 1; i++) {
     const bar = m5[i], fill = { px: m5[i + 1].o, t: m5[i + 1].t };
     withLaneCfg(lane, () => {
-      if (st.pos) trades.push(...managePosition(st, [bar], null));
+      if (st.pos) trades.push(...managePosition(st, [bar], real ? fundHourly(bar.ct) : null));
       if (st.pos && CFG.TRADER) { const sn = snapshot(S, i), r = traderManage(st, sn, S, { st: sn.st5, bos: sn.st5, c: bar.c }, bar.c, bar.ct); if (r.closed) trades.push(r.closed); }
       if (v === "EXIT_C" && st.pos && !st.pos.tp1Done && bar.ct - st.pos.openT >= 0.5 * st.pos.maxHoldH * 3600e3) {
         const t = closeNow(st, fill.px, fill.t); if (t) { trades.push({ ...t, reason: "time50" }); timeClosed++; }
@@ -67,6 +84,7 @@ async function run(v: Variant): Promise<Run> {
             const daily = isFinite(e) && isFinite(dc) ? Math.sign(dc - e) : 0;
             if (snap.st1h !== d || snap.st4h !== d || daily !== d) { skipped++; continue; }
           }
+          if (v === "FUND_CROWD") { const c = crowd(bar.ct); if (c !== 0 && c === d) { skipped++; continue; } }
           if (!entryGates(st, sig, bar.ct).ok) continue;
           const p = openPosition(st, sig, fill.px, fill.t); if (!p) continue;
           if (v === "EXIT_B" && TP1_GT_1R.has(strategy)) {
@@ -91,10 +109,11 @@ async function viaStepLane(): Promise<Trade[]> {
   for (let i = Math.max(warm, 60); i < m5.length - 1; i++) out.push(...stepLane(lane, { S, i, bar: m5[i], fill: { px: m5[i + 1].o, t: m5[i + 1].t } }).trades);
   out.push(...finishLane(lane, m5[m5.length - 1]).trades); return out;
 }
-const base = await run("BASE"), ref = await viaStepLane();
+const flat = await run("BASE"), ref = await viaStepLane(), base = fundPath ? await run("BASE", true) : flat;
 const sig = (ts: Trade[]) => ts.map((t) => `${t.openT}|${t.closeT}|${t.net.toFixed(6)}`).join(",");
-if (sig(base.trades) !== sig(ref)) { console.error(`IDENTITY FAIL: copy ${base.trades.length} vs stepLane ${ref.length}`); process.exit(2); }
-const ch = variant === "BASE" ? base : await run(variant);
+if (sig(flat.trades) !== sig(ref)) { console.error(`IDENTITY FAIL: copy ${base.trades.length} vs stepLane ${ref.length}`); process.exit(2); }
+if (variant === "FUND_CROWD" && !fundPath) { console.error("FUND_CROWD needs --funding"); process.exit(2); }
+const ch = variant === "BASE" ? base : await run(variant, !!fundPath);
 
 const metrics = (r: Run) => {
   const R = r.trades.map((t) => t.r), wins = R.filter((x) => x > 0), loss = R.filter((x) => x <= 0), sorted = [...R].sort((a, b) => a - b);
@@ -117,4 +136,4 @@ mkdirSync(outDir, { recursive: true });
 const tag = `${book}_${strategy}_${variant}${costx !== 1 ? `_cost${costx}` : ""}`;
 writeFileSync(`${outDir}/trades_${tag}.json`, JSON.stringify({ base: base.trades.map((t) => [t.closeT, +t.r.toFixed(4)]), challenger: ch.trades.map((t) => [t.closeT, +t.r.toFixed(4)]) }));
 writeFileSync(`${outDir}/daily_${tag}.json`, JSON.stringify({ book, strategy, variant, costx, day0: d0, dR }));
-console.log(JSON.stringify({ book, strategy, variant, costx, identity: "ok", base: metrics(base), challenger: metrics(ch) }));
+console.log(JSON.stringify({ book, strategy, variant, costx, identity: "ok", funding: fundPath ? "historical" : "flat", fundFallbackBars, ...(fundPath ? { baseFlat: metrics(flat) } : {}), base: metrics(base), challenger: metrics(ch) }));
