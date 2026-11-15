@@ -42,7 +42,7 @@ const STRATS = MODEL ? MODEL.strategies.map((s) => Object.assign({}, s, STRAT_X.
 const PRIV = () => !!(globalThis.DeskRisk && DeskRisk.privacyOn());
 const fmtQty = (v, dp) => PRIV() ? DeskRisk.QMASK : (+v).toFixed(dp);
 const fmt$ = (v) => !Number.isFinite(v) ? "—" : PRIV() ? DeskRisk.MASK : (v < 0 ? "−$" : "$") + Math.abs(v).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const fmtPx = (v) => v == null || !isFinite(v) ? "—" : Number(v).toLocaleString("en-US",{minimumFractionDigits:BOOK==="GOLD"?2:0,maximumFractionDigits:BOOK==="GOLD"?2:0});
+const fmtPx = (v) => v == null || !isFinite(v) ? "—" : Number(v).toLocaleString("en-US",{minimumFractionDigits:BOOK==="BTC"?0:2,maximumFractionDigits:BOOK==="BTC"?0:2});
 const sgnR = (r) => (r > 0 ? "+" : r < 0 ? "−" : "") + Math.abs(r).toFixed(2) + "R";
 const pct = (v, d = 1) => (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v * 100).toFixed(d) + "%";
 function when(ts) { const d = new Date(ts); return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }); }
@@ -50,7 +50,13 @@ const nameOf = (id) => (STRATS.find((s) => s.id === id) || { name: id || "System
 
 let DATA = SNAP, LIVE = false, RAW = null;
 let BOOK = (() => { try { return localStorage.getItem("deskbot_book") || "BTC"; } catch (e) { return "BTC"; } })();
-const BOOK_META = { BTC: { coin: "BTC", bn: "BTCUSDT", tv: "BINANCE:BTCUSDT", label: "BTC" }, GOLD: { coin: "PAXG", bn: "PAXGUSDT", tv: "BINANCE:PAXGUSDT", label: "PAXG" } };
+const BOOK_META = {
+  BTC: { coin: "BTC", bn: "BTCUSDT", tv: "BINANCE:BTCUSDT", label: "BTC", name: "BTC", unit: "BTC", instr: "BTC / USD · Paper book", since: "v5 start" },
+  GOLD: { coin: "PAXG", bn: "PAXGUSDT", tv: "BINANCE:PAXGUSDT", label: "PAXG", name: "gold (PAXG)", unit: "PAXG units (modeled)", instr: "PAXG / USD · Gold proxy, not XAUUSD", since: "gold book start" },
+  ETH: { coin: "ETH", bn: "ETHUSDT", tv: "BINANCE:ETHUSDT", label: "ETH", name: "ETH", unit: "ETH", instr: "ETH / USD · Paper book · HTF_TREND only (ETH-PAPER-1)", since: "ETH book start" },
+};
+const BM = () => BOOK_META[BOOK] || BOOK_META.BTC;
+const bookRow = (g) => (BOOK === "BTC" ? null : g && g.books && g.books[BOOK]);
 
 function sparkPath(vals, w, h, pad = 4) {
   if (!vals.length) return "";
@@ -74,12 +80,12 @@ function renderDesk() {
   $("metricRisk").textContent = account.risk == null ? "—" : fmt$(account.risk);
   $("metricState").textContent = account.status;
   $("metricStateNote").textContent = !LIVE ? "Disconnected / waiting for data" : "Paper execution · no funded orders";
-  $("deskInstrument").textContent = available ? (BOOK === "GOLD" ? "PAXG / USD · Gold proxy, not XAUUSD" : "BTC / USD · Paper book") : "Instrument status not loaded";
+  $("deskInstrument").textContent = available ? BM().instr : "Instrument status not loaded";
   $("deskSource").textContent = lr.source ? "Reported feed: " + lr.source : "Feed not reported";
   $("deskClock").textContent = Number.isFinite(Date.parse(S.updated_at)) ? "Updated " + new Date(S.updated_at).toISOString().slice(11,19) + " UTC" : "No update timestamp";
   $("eq").textContent = available ? fmt$(eq + upnl) : "—";
   const ch = eq + upnl - start, base = S.carried && S.carried.v3StartEquity ? +S.carried.v3StartEquity : null;
-  $("eqd").innerHTML = `<span class="${ch >= 0 ? "up" : "down"}">${ch >= 0 ? "+" : "−"}${fmt$(Math.abs(ch))} (${pct(start ? ch / start : 0, 2)})</span> <span class="faint">since ${BOOK === "GOLD" ? "gold book start" : "v5 start"}</span>` +
+  $("eqd").innerHTML = `<span class="${ch >= 0 ? "up" : "down"}">${ch >= 0 ? "+" : "−"}${fmt$(Math.abs(ch))} (${pct(start ? ch / start : 0, 2)})</span> <span class="faint">since ${BM().since}</span>` +
     (base ? `<br><span class="faint">v3 began at ${PRIV() ? DeskRisk.MASK : "$" + base.toFixed(0)} · ${pct((eq + upnl) / base - 1, 1)} all-time</span>` : "");
   $("runAction").textContent = (lr.action || "—").replace("_", " ");
   const all = (st.stats && st.stats.all) || { n: 0, wins: 0, sumR: 0 };
@@ -117,7 +123,7 @@ function renderDesk() {
     pc.innerHTML = `<div class="pos-head"><span class="side ${p.dir}">${p.dir.toUpperCase()}</span><h2>${esc(nameOf(p.strategy))}</h2><span class="num ${u >= 0 ? "up" : "down"}" style="margin-left:auto;font-weight:600">${u >= 0 ? "+" : "−"}${fmt$(Math.abs(u))}</span></div>
       <div class="setup-svg" style="margin-top:10px">${mod("DeskSetup") ? DeskSetup.setupSVG(p, zonePal(), fmtPx) : unavailable("Setup drawing (setup.js)")}</div>
       <div class="grid2" style="margin-top:10px"><div><div class="k">Entry</div><div class="v">${fmtPx(p.entry)}</div></div><div><div class="k">Risk</div><div class="v">${fmt$(p.riskAmt)} · ${fmtPx(R)} pts</div></div>
-      <div><div class="k">Size</div><div class="v">${fmtQty(p.remainingQty, 5)} ${BOOK === "GOLD" ? "PAXG units (modeled)" : "BTC"}</div></div><div><div class="k">Opened</div><div class="v">${ago(p.openT)}</div></div></div>
+      <div><div class="k">Size</div><div class="v">${fmtQty(p.remainingQty, 5)} ${BM().unit}</div></div><div><div class="k">Opened</div><div class="v">${ago(p.openT)}</div></div></div>
       <div class="ladder">${rung("TP3", p.tp3, p.tp3Done)}${rung("TP2", p.tp2, p.tp2Done)}${rung("TP1", p.tp1, p.tp1Done)}
       <div class="rung stop"><span class="t">Stop</span><span class="track"><i style="width:${p.stop !== p.stop0 ? 100 : 0}%"></i></span><span>${fmtPx(p.stop)}${p.stop !== p.stop0 ? " (moved)" : ""}</span></div></div>
       <p class="note" style="margin-top:10px">${(p.why || []).map(esc).join(" · ")}</p>
@@ -140,7 +146,7 @@ function renderDesk() {
     ["vs daily VWAP", m.vwapDev != null ? (m.vwapDev >= 0 ? "+" : "−") + Math.abs(m.vwapDev).toFixed(2) + "σ" : "—", ""],
     ["RSI 15m / 1h", m.rsi15 != null ? `${(+m.rsi15).toFixed(0)} / ${(+m.rsi1h).toFixed(0)}` : "—", ""],
     ["ATR 5m / 15m", m.atr5 != null ? `$${fmtPx(m.atr5)} / $${fmtPx(m.atr15)}` : "—", ""],
-    ["Open interest", m.oi != null ? Math.round(m.oi).toLocaleString() + (BOOK === "GOLD" ? " PAXG" : " BTC") : "—", ""],
+    ["Open interest", m.oi != null ? Math.round(m.oi).toLocaleString() + (" " + BM().label) : "—", ""],
   ];
   $("mkt").innerHTML = cells.map(([k, v, c]) => `<div><div class="k">${k}</div><div class="v ${c}">${esc(v)}</div></div>`).join("");
 
@@ -227,11 +233,11 @@ function renderMatrix(S, st) {
   const el = $("covMatrix"); if (!el) return;
   if (!mod("DeskCoverage") || !DeskCoverage.strategyMatrix || !MODEL) { MATRIX = null; el.innerHTML = unavailable("Coverage matrix (coverage_view.js / desk-model.js)"); return; }
   const reg = (RAW && RAW.registry) || { strategies: STRATS.map((x) => x.id), optIn: MODEL.OPT_IN.slice() };
-  const bookCfg = BOOK === "GOLD" ? (RAW && RAW.books && RAW.books.GOLD && RAW.books.GOLD.config) : (RAW && RAW.config);
+  const bookCfg = BOOK === "BTC" ? (RAW && RAW.config) : (bookRow(RAW) && bookRow(RAW).config);
   // RISK_SCALE always via the shared resolver (book config merged over defaults); the inputs are never mutated
   const cfg = bookCfg ? Object.assign({}, bookCfg, { RISK_SCALE: MODEL.riskScaleMap(bookCfg) }) : { RISK_SCALE: MODEL.riskScaleMap(st.cfg), XC_TF: (st.cfg || {}).XC_TF, HSW_TF: (st.cfg || {}).HSW_TF };
   const lr = S.last_run || {}, riskPct = typeof lr.risk === "number" ? lr.risk : null;
-  const shadow = ((RAW && RAW.track && RAW.track.shadow) || []).filter((x) => x.sym === (BOOK === "GOLD" ? "GOLD" : "BTC"));
+  const shadow = ((RAW && RAW.track && RAW.track.shadow) || []).filter((x) => x.sym === BOOK);
   MATRIX = DeskCoverage.strategyMatrix({ strategies: reg.strategies, optIn: reg.optIn, cfg, st, trades: DATA.trades || [], riskPct, now: Date.now(), shadow });
   const meta = st.covMeta, hh = (T) => (T == null ? "—" : new Date(T + 1).toISOString().slice(11, 16));
   const tr = MATRIX.map((m) => `<tr class="${m.openNow ? "open" : ""} ${m.starved ? "warn" : ""}"><td><b>${esc(m.id)}</b>${m.openNow ? ' <span class="chip">OPEN</span>' : ""}<br><small class="faint">${esc(m.requires)}</small></td>
@@ -241,7 +247,7 @@ function renderMatrix(S, st) {
     <td>${m.vetoes.length ? m.vetoes.slice(0, 2).map((x) => `${esc(x.reason)} ×${x.n}`).join("<br>") : '<span class="faint">none</span>'}</td>
     <td class="r">${m.entered} / ${m.notSelected} / ${m.portfolioBlocked}</td><td class="r">${m.closed ? `${m.wins}/${m.closed} · ${m.sumR >= 0 ? "+" : ""}${m.sumR}R` : "—"}</td>
     <td class="r">${m.eligiblePaper ? m.riskPerTradePct.toFixed(2) + "%" : "0"}</td></tr>`).join("");
-  el.innerHTML = `<div class="section-top"><h2>Coverage matrix · ${BOOK === "GOLD" ? "gold (PAXG)" : "BTC"}</h2><span class="chip">PAPER</span></div>
+  el.innerHTML = `<div class="section-top"><h2>Coverage matrix · ${BM().name}</h2><span class="chip">PAPER</span></div>
     <p class="note">Since ${meta ? esc(new Date(meta.since).toISOString().slice(0, 16).replace("T", " ")) + " UTC" : "—"}: ${meta ? `${meta.evalBars} bars evaluated, ${meta.missedBars} missed, missing due bars 15m ${meta.missingDue["15m"]} / 1H ${meta.missingDue["1h"]} / 4H ${meta.missingDue["4h"]} / 1D ${meta.missingDue["1d"]}` : "no counters"}. Every eligible evaluator is called on every bar before selection; one position per book means a valid signal can be <b>not selected</b> or <b>blocked</b> without the evaluator being starved. Columns are counts of evaluations, not trades.</p>
     <div class="mx-wrap"><table class="mx"><thead><tr><th>Strategy · needs</th><th>State</th><th>Trigger</th><th class="r">Due bars</th><th class="r">No setup</th><th class="r">Missing data</th><th class="r">Signals (A)</th><th>Vetoes</th><th class="r">Entered / not sel. / blocked</th><th class="r">Closed W/n · ΣR (C)</th><th class="r">Risk/trade</th></tr></thead><tbody>${tr}</tbody></table></div>
     <p class="note">A = signal frequency; C = portfolio-selected paper outcomes for the closed trades loaded on this page. B (standalone hypothetical outcomes): the scanner's setup tracker on the Board, plus an isolated shadow lane (SHADOW-1 config) for evaluators the book does not run, shown under their state. B outcomes are simplified hypothetical setup outcomes (first of TP1 / stop / max hold), not book returns with partial exits, trailing stops or portfolio constraints; never traded, never counted for promotion. Risk/trade = the runner's reported risk (${riskPct != null ? (riskPct * 100).toFixed(2) + "%" : "not reported"}) × scale. Closed trades before 29 Oct 17:26 UTC have no recorded config identity.</p>`;
@@ -251,7 +257,7 @@ function renderStrategies() {
   try { renderMatrix(S, st); } catch (e) { MATRIX = null; panelError("matrix", e, "covMatrix"); }
   const trades = (DATA.trades || []).slice().sort((a, b) => new Date(a.close_t) - new Date(b.close_t));
   const views = STRATS.map((s) => stratView(s.id, st)), on = views.filter((v) => v.state !== "DISABLED").length;
-  $("strategyCount").textContent = `${STRATS.length} registered · ${on} on for ${BOOK === "GOLD" ? "gold (PAXG)" : "BTC"}`;
+  $("strategyCount").textContent = `${STRATS.length} registered · ${on} on for ${BM().name}`;
   const meta = st.covMeta;
   $("stratNote").innerHTML = (hasCov ? `Evaluation counters since <b>${esc(new Date(Math.min(...Object.values(st.cov).map((c) => c.since))).toISOString().slice(0, 16).replace("T", " "))} UTC</b>${meta ? ` · bars evaluated ${meta.evalBars} · boundary bars missed ${meta.missedBars} · bars missing from the feed ${Object.values(meta.missingDue || {}).reduce((a, b) => a + b, 0)}` : ""}.`
     : `<b>No evaluation counters in this data yet.</b> They start when the coverage update is deployed; the states below come from configuration only and do not prove a strategy ran.`) +
@@ -272,7 +278,7 @@ function renderStrategies() {
     const evalTxt = c && c.lastDueT != null ? `${ago(c.lastDueT + 1)} · data to ${hhmm(c.lastDueT)}` : c && c.lastEvalT != null ? `no due bar yet (last bar ${hhmm(c.lastEvalT)})` : "no data";
     const nextTxt = v.nextDueT != null ? `next due bar closes ${hhmm(v.nextDueT)}` : "";
     const reasonTop = c ? Object.entries(c.reasons || {}).sort((a, b) => b[1] - a[1]).slice(0, 5) : [];
-    const rate = s.rate && s.rate[BOOK === "GOLD" ? "GOLD" : "BTC"];
+    const rate = s.rate && s.rate[BOOK];
     const mismatch = s.ref.noteSaysOff && v.state !== "DISABLED" ? `<div class="refnote warn">The note above says this strategy was switched off. The current effective configuration has it <b>on</b> (${esc(sizeTxt)}), so the research result described may not describe what is running now.</div>` : (!s.ref.noteSaysOff && v.state === "DISABLED" ? `<div class="refnote warn">Disabled now (${esc(v.offReason || "")}), although the research note describes it as active.</div>` : "");
     const ver = `Engine v${esc((RAW && RAW.version) || "?")} · config ${esc(String(((S.integrity || {}).hash) || "unknown").slice(0, 8))} · fingerprint ${((S.integrity || {}).approved) ? "approved for this paper experiment" : "not approved"} · financial validation: none`;
     return `<article class="strat" data-strategy="${s.id}"><div class="strat-h"><h3>${esc(s.name)}</h3><span class="paper">PAPER</span><span class="opst ${cls}">${label}</span></div>
@@ -314,7 +320,7 @@ function renderSystem() {
   if (EV) {
     const evidence = EV.summarize(RAW, Date.now(), LIVE);
     $("evidenceMode").textContent = evidence.mode + " · Observations, not a forecast or execution authorization.";
-    $("evidenceRows").innerHTML = evidence.rows.map((r) => `<div class="li"><div class="a">${esc(r.instrument)}</div><div class="b">${r.fresh ? "Recent timestamps" : "STALE / UNKNOWN"}</div><div class="c">Last run UTC: ${esc(r.runAt)} · ${esc(r.approval)} · AI: ${esc(r.ai)}</div></div>`).join("");
+    $("evidenceRows").innerHTML = evidence.rows.map((r) => `<div class="li"><div class="a">${esc(r.instrument)} · ${esc(r.mode || "")}</div><div class="b">${r.fresh ? "Recent timestamps" : "STALE / UNKNOWN"}</div><div class="c">Last run UTC: ${esc(r.runAt)} · ${esc(r.approval)} · AI: ${esc(r.ai)} · financial validation: ${esc(r.validation || "not reported")}${(r.limitations || []).length ? " · limits: " + esc(r.limitations.join("; ")) : ""}</div></div>`).join("");
     $("evidenceIssues").innerHTML = evidence.issues.map((s) => `<li>${esc(s)}</li>`).join("");
   } else { $("evidenceMode").textContent = "Evidence summary unavailable"; $("evidenceRows").innerHTML = unavailable("Evidence summary (evidence.js)"); $("evidenceIssues").innerHTML = ""; }
   const b = DATA.bt, S = DATA.state || {}, lr = S.last_run || {};
@@ -368,15 +374,28 @@ function panelError(name, err, hostId) {
 }
 function clearPanelError(name, hostId) { const host = $(hostId); const note = host && host.querySelector(`:scope > .panel-error[data-render="${name}"]`); if (note) note.remove(); }
 function safeRender(name, fn, hostId) { try { fn(); clearPanelError(name, hostId); } catch (e) { panelError(name, e, hostId); } }
+function renderAiTrader() {
+  const A = RAW && RAW.aiTrader, note = $("aiTraderNote"), rows = $("aiTraderRows"); if (!note || !rows) return;
+  if (!A) { note.textContent = "AI trader status not reported by this backend."; rows.innerHTML = ""; return; }
+  if (A.error) { note.textContent = "AI trader status error: " + A.error; rows.innerHTML = ""; return; }
+  const prov = (A.providers || []).length ? `provider: ${A.providers.join(", ")}` : "BLOCKED: no AI provider usable for 'trader' (needs a key, reviewed terms and AI_DATA_USE_ACCEPTED provider:trader)";
+  const b = A.book, st = b && b.stats;
+  note.textContent = `${A.enabled ? "On" : "Off"} · ${prov} · picks one of the valid signals or stands aside; code sets stop, size and exits · SIMULATED money.`;
+  const head = b ? `<div class="li"><div class="a">Equity ${fmt$(b.equity)} (start ${fmt$(b.startEquity)})</div><div class="b">${st ? `${st.n} trades · ${st.n ? (st.sumR / st.n >= 0 ? "+" : "") + (st.sumR / st.n).toFixed(2) + "R/trade" : ""}` : "no trades"}</div><div class="c">${b.pos ? `Open: ${esc(b.pos.strategy)} ${esc(String(b.pos.dir).toUpperCase())} @ ${fmtPx(b.pos.entry)} · stop ${fmtPx(b.pos.stop)}` : "Flat"} · ${esc(b.specVersion || "")}</div></div>` : `<div class="li"><div class="a">Not started</div><div class="c">The book is created on the first BTC run after deploy.</div></div>`;
+  const logs = ((b && b.log) || []).slice(-8).reverse().map((l) => `<div class="li"><div class="a">${esc(l.outcome)}${l.choice && l.choice.pick >= 0 && l.menu[l.choice.pick] ? " · " + esc(l.menu[l.choice.pick].strategy + " " + l.menu[l.choice.pick].dir) : ""}</div><div class="b faint">${ago(l.t)}</div><div class="c">${l.choice ? `conf ${l.choice.confidence} · ${esc(l.choice.reason)}` : esc(l.note || "")} · menu: ${esc(l.menu.map((m) => m.strategy + " " + m.dir).join(", "))} · by ${esc(l.by)}</div></div>`).join("");
+  rows.innerHTML = head + (logs || `<div class="li"><div class="c faint">No decisions yet (a decision is asked only when at least one strategy has a valid signal).</div></div>`);
+}
+
 const RENDERERS = [
-  ["book", () => document.querySelectorAll(".bookName").forEach((e) => { e.textContent = BOOK === "GOLD" ? "PAXG" : "BTC"; }), "v-desk"],
+  ["aitrader", renderAiTrader, "v-system"],
+  ["book", () => document.querySelectorAll(".bookName").forEach((e) => { e.textContent = BM().label; }), "v-desk"],
   ["desk", () => renderDesk(), "v-desk"], ["agents", () => renderAgents(), "v-desk"], ["operations", () => renderOperations(), "v-desk"],
   ["strategies", () => renderStrategies(), "v-strategies"], ["trades", () => renderTrades(), "v-trades"], ["events", () => renderEvents(), "v-activity"],
   ["system", () => renderSystem(), "v-system"],
   ["freshness", () => { const M = mod("DeskFreshness"); if (M) M.mount($("v-system"), RAW, DATA, BOOK, Date.now()); }, "v-system"],
-  ["receipts", () => { const M = mod("DeskReceipts"); if (M) M.mount($("v-system"), (DATA.state || {}).last_run, { nameOf, bookLabel: BOOK === "GOLD" ? "PAXG" : "BTC" }); }, "v-system"],
+  ["receipts", () => { const M = mod("DeskReceipts"); if (M) M.mount($("v-system"), (DATA.state || {}).last_run, { nameOf, bookLabel: BM().label }); }, "v-system"],
   ["riskchecks", () => { const M = mod("DeskRisk"); if (!M) return; const S = DATA.state || {}, lr = S.last_run || {}, p = (S.state || {}).pos || null, price = (lr.market || {}).price;
-    M.mount({ desk: $("v-desk"), system: $("v-system") }, { lastRun: lr, pos: p, plan: p ? planOf(p, Number.isFinite(price) ? price : null) : null, price, now: Date.now(), fmtPx, unit: BOOK === "GOLD" ? "PAXG" : "BTC", bookLabel: BOOK === "GOLD" ? "PAXG" : "BTC",
+    M.mount({ desk: $("v-desk"), system: $("v-system") }, { lastRun: lr, pos: p, plan: p ? planOf(p, Number.isFinite(price) ? price : null) : null, price, now: Date.now(), fmtPx, unit: BM().label, bookLabel: BM().label,
       onChange: () => { renderAll(); if (!$("v-chart").hidden && CH.chart) chartDraw(); } }); }, "v-desk"],
   ["tower", () => renderTower(), "v-tower"], ["scanner", () => renderScanner(), "v-scanner"],
 ];
@@ -390,7 +409,7 @@ function renderScanner() {
   S.renderMini($("miniBoard"), RAW && RAW.scan, RAW && RAW.track);
   S.renderCommittee($("committeeBody"), RAW && RAW.agents, RAW && RAW.chat && RAW.chat.ai);
   if (!RAW) { S.renderState($("tradeState"), { state: "HALTED", reasons: ["account status not loaded"] }); return; }
-  const g = RAW.books && RAW.books.GOLD, gold = BOOK === "GOLD";
+  const g = bookRow(RAW), gold = BOOK !== "BTC";
   const st = gold ? g && g.state : RAW.state, lr = gold ? g && g.lastRun : RAW.lastRun, cfg = Object.assign({}, RAW.config || {}, (gold && st && st.cfg) || {});
   S.renderState($("tradeState"), S.tradingState(st, cfg, lr, now));
 }
@@ -606,7 +625,7 @@ async function chartDraw() {
     legend.push(["#4fd1c5", `EMA20 (${tf})`, "$" + fmtPx(e20[e20.length - 1])], ["#b48ef0", `EMA50 (${tf})`, "$" + fmtPx(e50[e50.length - 1])]);
     if (p) legend.push([cssVar("--fg"), `Open ${p.dir} (${nameOf(p.strategy)})`, `entry $${fmtPx(p.entry)} · stop $${fmtPx(p.stop)}`]);
     $("legend").innerHTML = legend.map(([c, k, v]) => `<div><i style="background:${c}"></i><span class="muted">${esc(k)}</span><span>${esc(v)}</span></div>`).join("");
-    $("chartNote").textContent = `Reaction areas from fixed rules on closed candles (FVG, IFVG, order blocks, value area, premium/discount), not forecasts. Trade boxes show the bot's recorded plan. Reference indicators use the displayed feed while reported positions use the runner feed; these can differ. Candles: ${main.src} ${BOOK === "GOLD" ? "PAXG (gold)" : "BTC"} · refreshed ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.`;
+    $("chartNote").textContent = `Reaction areas from fixed rules on closed candles (FVG, IFVG, order blocks, value area, premium/discount), not forecasts. Trade boxes show the bot's recorded plan. Reference indicators use the displayed feed while reported positions use the runner feed; these can differ. Candles: ${main.src} ${BOOK === "GOLD" ? "PAXG (gold)" : BM().label} · refreshed ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.`;
     // the bot's read, in words
     const d = (last - eDnow) / last, rd = [];
     rd.push(`<div>Price is <b>${pct(d)}</b> from the displayed daily EMA50. The ±3% lines are reference overlays, not entry approval. Consult each strategy's reported decision and configuration.</div>`);
@@ -664,7 +683,7 @@ async function renderSetupCard(p, S) {
   try { await renderSetupCardInner(p, S); } catch (e) { panelError("setup card", e, "setupCard"); }
 }
 async function renderSetupCardInner(p, S) {
-  const el = $("setupCard"), pal = zonePal(), nm = (BOOK === "GOLD" ? "Gold (PAXG)" : "BTC");
+  const el = $("setupCard"), pal = zonePal(), nm = (BOOK === "GOLD" ? "Gold (PAXG)" : BM().name);
   if (!p) { el.innerHTML = `<div class="setup-head"><h2>Trade setup</h2></div><p class="note" style="margin-top:6px">No open ${nm} trade. When the bot enters, the setup appears here: entry, red stop-loss block, green take-profit blocks and the structure checks that agree with the trade. Reaction areas on the chart below show where the rules would care.</p>`; return; }
   let conf = null, why = "";
   if (!mod("DeskZones")) why = "Structure checks unavailable: zones.js did not load.";
@@ -677,7 +696,7 @@ async function renderSetupCardInner(p, S) {
     <div class="setup-grid"><div class="setup-svg">${mod("DeskSetup") ? DeskSetup.setupSVG(p, pal, fmtPx) : unavailable("Setup drawing (setup.js)")}</div>
     <div><div class="grid2"><div><div class="k">Entry</div><div class="v">${fmtPx(p.entry)}</div></div><div><div class="k">Stop loss (original)</div><div class="v down">${fmtPx(p.stop0)} · −1R</div></div>
     <div><div class="k">Take profits</div><div class="v up">${fmtPx(p.tp1)} · ${fmtPx(p.tp2)} · ${fmtPx(p.tp3)}</div></div><div><div class="k">Reward at TP1 / TP2 / TP3</div><div class="v">${rr(p.tp1)}R / ${rr(p.tp2)}R / ${rr(p.tp3)}R</div></div>
-    <div><div class="k">Risk</div><div class="v">${fmt$(p.riskAmt)} · ${fmtPx(R)} pts</div></div><div><div class="k">Size</div><div class="v">${fmtQty(p.originalQty, 5)} ${BOOK === "GOLD" ? "oz" : "BTC"}</div></div></div>
+    <div><div class="k">Risk</div><div class="v">${fmt$(p.riskAmt)} · ${fmtPx(R)} pts</div></div><div><div class="k">Size</div><div class="v">${fmtQty(p.originalQty, 5)} ${BOOK === "GOLD" ? "oz" : BM().label}</div></div></div>
     ${conf && mod("DeskSetup") ? `<h3 style="margin:14px 0 0;font:600 13px var(--f-display)">Structure checks at entry: ${conf.met} of ${conf.of} agree</h3><p class="note faint" style="margin:2px 0 0">A count of rule items on 15m candles at the time of entry. It is not a win probability.</p>${DeskSetup.checksHTML(conf)}` : `<p class="note">${esc(why)}</p>`}
     <p class="note" style="margin-top:10px"><b>Why the bot took it:</b> ${(p.why || []).map(esc).join(" · ") || "—"}</p></div></div>`;
 }
@@ -728,12 +747,13 @@ const LIVE_URL = "https://deskbot-azure.vercel.app";
 const API = "https://xevymbzgpcsdhygswxlk.supabase.co/functions/v1/deskbot-v5";
 function fromApi(g) {
   RAW = g;
-  const bk = g.books && g.books.GOLD;
+  if (!BOOK_META[BOOK]) BOOK = "BTC";
+  const bk = bookRow(g);
   $("bookSeg").hidden = false;
-  document.querySelectorAll("#bookSeg button").forEach((b) => { b.setAttribute("aria-pressed", String(b.dataset.b === BOOK)); if (b.dataset.b === "GOLD") b.title = bk && bk.state ? "" : "Gold book not started yet"; });
-  const gold = BOOK === "GOLD";
+  document.querySelectorAll("#bookSeg button").forEach((b) => { b.setAttribute("aria-pressed", String(b.dataset.b === BOOK)); if (b.dataset.b !== "BTC") { const r = g.books && g.books[b.dataset.b]; b.title = r && r.state ? "" : `${b.dataset.b} book not started yet`; } });
+  const gold = BOOK !== "BTC";
   if (gold && !bk?.state) return { ...SNAP, state:{}, bt:null };
-  const sym = gold ? "GOLD" : "BTC", mine = (x) => (x.symbol || "BTC") === sym;
+  const sym = BOOK, mine = (x) => (x.symbol || "BTC") === sym;
   const st = (gold ? bk.state : g.state) || {}, r = !gold && g.backtest && g.backtest.results;
   return {
     state: { state: st, carried: st.carried, integrity: gold ? bk.integrity : g.integrity, last_run: gold ? bk.lastRun : g.lastRun, updated_at: gold ? bk.updated : g.updated },
@@ -882,8 +902,8 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("chat
 
 $("bookSeg").addEventListener("click", (e) => {
   const b = e.target.closest("button"); if (!b || b.dataset.b === BOOK) return;
-  const bk = RAW && RAW.books && RAW.books.GOLD;
-  if (b.dataset.b === "GOLD" && !(bk && bk.state)) { $("srcBanner").hidden = false; $("srcBanner").textContent = "The gold paper book hasn't started yet."; return; }
+  const bk = RAW && RAW.books && RAW.books[b.dataset.b];
+  if (b.dataset.b !== "BTC" && !(bk && bk.state)) { $("srcBanner").hidden = false; $("srcBanner").textContent = `The ${b.dataset.b === "GOLD" ? "gold" : b.dataset.b} paper book hasn't started yet.`; return; }
   BOOK = b.dataset.b; try { localStorage.setItem("deskbot_book", BOOK); } catch (err) {}
   if (RAW) { DATA = fromApi(RAW); renderAll(); }
   CH.tvLoaded = false; $("tvw").innerHTML = ""; if (!$("v-chart").hidden) chartShow();
