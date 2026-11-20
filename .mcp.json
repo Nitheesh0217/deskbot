@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "ebo-robot": {
+      "type": "http",
+      "url": "https://ebox-us.enabotserverintl.com/api/v1/mcp",
+      "headers": {
+        "Authorization": "Bearer ${EBO_MCP_TOKEN}"
+      }
+    }
+  }
+}
