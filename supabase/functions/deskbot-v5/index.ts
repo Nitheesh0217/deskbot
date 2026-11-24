@@ -621,17 +621,7 @@ async function status() {
   const curve = (eq ?? []).filter((_: unknown, i: number, a: unknown[]) => a.length < 600 || i % Math.ceil(a.length / 600) === 0 || i === a.length - 1);
   // build.sourceSha256: identity of the deployed source files (build_info.ts), not only the engine VERSION
   // Learning desk: losses of ACTIVE strategies (any book with RISK_SCALE > 0) tagged by cause, mapped to the lesson ledger (learning.ts)
-  let learning: unknown = null;
-  try {
-    const active = new Set<string>();
-    const addCfg = (c: unknown) => { const rs = (c as { RISK_SCALE?: Record<string, number> } | null)?.RISK_SCALE ?? {}; for (const [k, v] of Object.entries(rs)) if (v > 0) active.add(k); };
-    addCfg(config); for (const b of Object.values(books)) addCfg((b as { config?: unknown } | undefined)?.config);
-    const since = new Date(Date.now() - 90 * 86_400_000).toISOString();
-    const rows = await select(`dbv5_trades?select=id,symbol,strategy,dir,r,net,reason,open_t,close_t,gross:data->gross,regime:data->>regime,exits:data->exits&close_t=gte.${encodeURIComponent(since)}&symbol=neq.AI_BTC&order=close_t.desc&limit=1000`);
-    const lt: LTrade[] = (rows ?? []).map((x: Record<string, any>) => ({ id: x.id, symbol: x.symbol, strategy: x.strategy, dir: x.dir, r: +x.r, net: +x.net, gross: x.gross == null ? null : +x.gross,
-      openT: Date.parse(x.open_t), closeT: Date.parse(x.close_t), reason: x.reason, regime: x.regime ?? null, path: Array.isArray(x.exits) ? x.exits.map((e: { kind: string }) => e.kind) : [] }));
-    learning = { active: [...active].sort(), ...learningReport(lt, active, Date.now()) };
-  } catch (e) { learning = { error: (e as Error).message.slice(0, 160) }; }
+  const learning = await learningNow();
   let shift: unknown = null;
   try { shift = await shiftNow(learning as never); } catch (e) { shift = { error: (e as Error).message.slice(0, 160) }; }
   // AI paper book: summary only (its log holds menus, picks and reasons; trades are in dbv5_trades with symbol AI_BTC)
@@ -663,6 +653,20 @@ async function runAiBook(a: { S: ReturnType<typeof buildSeries>; i5: number; bar
     msg: `AI ${r.log.outcome}${r.log.choice ? ` · pick ${r.log.choice.pick} conf ${r.log.choice.confidence} · ${r.log.choice.reason}` : r.log.note ? ` · ${r.log.note}` : ""} · menu ${r.log.menu.map((m) => `${m.strategy} ${m.dir}`).join(", ")}`.slice(0, 280), data: r.log });
   for (const t of r.trades) evs.push({ kind: t.net > 0 ? "WIN" : "LOSS", strategy: t.strategy, symbol: "AI_BTC" as Sym, msg: `AI ${t.strategy} ${t.dir.toUpperCase()} closed ${t.reason} (${t.r >= 0 ? "+" : ""}${t.r.toFixed(2)}R)` });
   await events(evs);
+}
+
+// Learning report from every book's configuration (active = RISK_SCALE > 0 in any book) and the last 90 days of trades.
+async function learningNow(): Promise<Record<string, unknown>> {
+  try {
+    const active = new Set<string>();
+    const cfgs = await select("dbv5_state?select=cfg:state->cfg&id=neq.ai_btc");
+    for (const r of cfgs ?? []) { const rs = (resolvedCfg((r as { cfg?: unknown }).cfg as never) as { RISK_SCALE?: Record<string, number> }).RISK_SCALE ?? {}; for (const [k, v] of Object.entries(rs)) if (v > 0) active.add(k); }
+    const since = new Date(Date.now() - 90 * 86_400_000).toISOString();
+    const rows = await select(`dbv5_trades?select=id,symbol,strategy,dir,r,net,reason,open_t,close_t,gross:data->gross,regime:data->>regime,exits:data->exits&close_t=gte.${encodeURIComponent(since)}&symbol=neq.AI_BTC&order=close_t.desc&limit=1000`);
+    const lt: LTrade[] = (rows ?? []).map((x: Record<string, any>) => ({ id: x.id, symbol: x.symbol, strategy: x.strategy, dir: x.dir, r: +x.r, net: +x.net, gross: x.gross == null ? null : +x.gross,
+      openT: Date.parse(x.open_t), closeT: Date.parse(x.close_t), reason: x.reason, regime: x.regime ?? null, path: Array.isArray(x.exits) ? x.exits.map((e: { kind: string }) => e.kind) : [] }));
+    return { active: [...active].sort(), ...learningReport(lt, active, Date.now()) };
+  } catch (e) { return { error: (e as Error).message.slice(0, 160) }; }
 }
 
 // Shift report facts: every book row at once (no per-book queries), trades of the month and the last 30 days, market-context activity.
@@ -781,7 +785,7 @@ Deno.serve(async (req) => {
     // create a SHADOW book's state row with simulated equity (part of an approved deployment); never overwrites, never a paper/real book
     // nightly shift report (cron, 00:05 UTC): one NIGHT_REPORT event with the goal board and every floor's target, status and needs
     if (body.action === "night_report") {
-      const rep = await shiftNow(null);
+      const rep = await shiftNow(await learningNow() as never);
       const g = rep.goal;
       await events([{ kind: "NIGHT_REPORT", msg: `Night report: last 24h ${g.net24h >= 0 ? "+" : "−"}$${Math.abs(g.net24h).toFixed(2)} (owner night goal $${g.nightUsd}) · month ${g.netMonth >= 0 ? "+" : "−"}$${Math.abs(g.netMonth).toFixed(2)} of $${g.monthUsd} · needs: ${rep.topNeeds.slice(0, 3).join(" | ")}`.slice(0, 480), data: rep }]);
       return json({ ok: true, report: rep });
