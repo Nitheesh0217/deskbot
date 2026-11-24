@@ -1,0 +1,163 @@
+{
+ "note": "SYNTHETIC status for browser smokes (shape of the status endpoint); not production data",
+ "status": {
+  "version": "5.8.0",
+  "mode": "PAPER",
+  "now": "2026-11-24T12:00:00.000Z",
+  "updated": "2026-11-24T11:59:00.000Z",
+  "state": {
+   "equity": 371.85,
+   "pos": null,
+   "stats": {
+    "all": {
+     "n": 30,
+     "sumR": 3.52
+    }
+   },
+   "cfg": {}
+  },
+  "lastRun": {
+   "ts": "2026-11-24T11:59:00.000Z",
+   "action": "SKIP",
+   "notes": []
+  },
+  "events": [],
+  "agents": [],
+  "trades": [],
+  "curve": [],
+  "config": {
+   "RISK_SCALE": {
+    "HTF_TREND": 1
+   }
+  },
+  "spec": {
+   "mode": "paper",
+   "simulatedStartEquity": 352.56
+  },
+  "books": {
+   "GOLD": {
+    "spec": {
+     "mode": "paper"
+    },
+    "state": {
+     "equity": 314.38,
+     "pos": null,
+     "stats": {
+      "all": {
+       "n": 25,
+       "sumR": -11.3
+      }
+     }
+    },
+    "lastRun": {
+     "ts": "2026-11-24T11:59:00.000Z"
+    },
+    "config": {
+     "RISK_SCALE": {
+      "HTF_TREND": 1
+     }
+    }
+   }
+  },
+  "learning": {
+   "active": [
+    "D_BEARTRAP",
+    "D_THRUST",
+    "HTF_TREND",
+    "VWAP_REVERT"
+   ],
+   "window": {
+    "from": "2026-08-26T12:00:00.000Z",
+    "to": "2026-11-24T12:00:00.000Z",
+    "trades": 6,
+    "losses": 3,
+    "wins": 2,
+    "netR": 0.61
+   },
+   "byCause": [
+    {
+     "cause": "cluster_loss",
+     "text": "Lost together with 2+ other books that entered the same direction within 24h (one market move taken as several bets)",
+     "trades": 3,
+     "rLost": -3,
+     "books": [
+      "ADA",
+      "DOGE",
+      "XMR"
+     ],
+     "strategies": [
+      "HTF_TREND"
+     ],
+     "lesson": {
+      "cause": "cluster_loss",
+      "test": "CLUSTER_CAP: same-direction risk budget K=3",
+      "status": "NARROW_REJECT",
+      "ref": "docs/research/2026-11-24-cluster-cap/RESULTS.md",
+      "note": "max DD −58%, net R/DD 2.37→4.19, but net R −25.3% vs −25% limit; next: budget combined with performance sizing (new frozen spec)"
+     }
+    }
+   ],
+   "focus": {
+    "cause": "cluster_loss",
+    "test": "CLUSTER_CAP: same-direction risk budget K=3",
+    "status": "NARROW_REJECT",
+    "ref": "docs/research/2026-11-24-cluster-cap/RESULTS.md",
+    "note": "max DD −58%, net R/DD 2.37→4.19, but net R −25.3% vs −25% limit; next: budget combined with performance sizing (new frozen spec)",
+    "rLost": -3,
+    "trades": 3
+   },
+   "ledger": [
+    {
+     "cause": "cost_drag",
+     "test": "Switch off negative-expectancy short-horizon strategies",
+     "status": "ADOPTED",
+     "ref": "docs/research/2026-11-10-layer-agreement/RESULTS.md",
+     "note": "SWEEP_REV, SESSION_BO, TREND_MTF (+EMA_CROSS on GOLD) off since 2026-11-10"
+    },
+    {
+     "cause": "cluster_loss",
+     "test": "CLUSTER_CAP: same-direction risk budget K=3",
+     "status": "NARROW_REJECT",
+     "ref": "docs/research/2026-11-24-cluster-cap/RESULTS.md",
+     "note": "max DD −58%, net R/DD 2.37→4.19, but net R −25.3% vs −25% limit; next: budget combined with performance sizing (new frozen spec)"
+    },
+    {
+     "cause": "gave_back_after_tp1",
+     "test": "EXIT-D ratchet trail; EXIT-B nearer TP1",
+     "status": "REJECTED",
+     "ref": "docs/research/2026-11-10-exit-d/RESULTS.md",
+     "note": "no significant gain; worse BTC drawdown"
+    },
+    {
+     "cause": "time_exit_loss",
+     "test": "EXIT-C close at half max hold without TP1",
+     "status": "REJECTED",
+     "ref": "research/2026-10-30-entry-exit",
+     "note": "rejected in the entry/exit study"
+    },
+    {
+     "cause": "stopped_fast",
+     "test": "ENTRY_CONFIRM: enter only after one more closed 5m bar holds beyond the trigger",
+     "status": "QUEUED",
+     "ref": "",
+     "note": "untested; related ENTRY-1 (skip far-from-trigger entries) was rejected"
+    },
+    {
+     "cause": "range_regime_loss",
+     "test": "CHOP_SKIP: no entry when the 15m choppiness index is >= 61.8",
+     "status": "QUEUED",
+     "ref": "",
+     "note": "untested; the layer-agreement filter (trend alignment) was rejected, this tests chop instead"
+    },
+    {
+     "cause": "trend_failure",
+     "test": "none",
+     "status": "NO_TEST",
+     "ref": "docs/research/2026-11-15-oos-coins/RESULTS.md",
+     "note": "expected losses of a trend system; the edge is measured over many trades"
+    }
+   ],
+   "note": "Causes are descriptive tags from recorded trade facts. A lesson changes trading only after a frozen-spec test passes and the owner approves."
+  }
+ }
+}

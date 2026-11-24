@@ -17,6 +17,7 @@ import { readNews, newsBlocks, type NewsRead } from "./news.ts";
 import { providersFromEnv, providerPolicy, type Usage, type AiFeature } from "./ai.ts";
 import { chatFacts, pushClose, pushOpen } from "./egress.ts";
 import { bookSpec, shadowEntry, BOOK_SPECS } from "./books.ts";
+import { learningReport, type LTrade } from "./learning.ts";
 import { AI_BOOK_ROW, newAiBook, stepAiBook, aiDecider, type AiBook } from "./ai_trader.ts";
 import { chat, validatePatch, mergeCfg, EDITABLE, type ChatTurn } from "./chat.ts";
 import { configIntegrity, serialExecutor } from "./runtime.ts";
@@ -618,6 +619,18 @@ async function status() {
   for (const [k, b] of Object.entries(books)) if ((b as { work?: unknown }).work) workBacklog[k] = (b as { work?: unknown }).work;
   const curve = (eq ?? []).filter((_: unknown, i: number, a: unknown[]) => a.length < 600 || i % Math.ceil(a.length / 600) === 0 || i === a.length - 1);
   // build.sourceSha256: identity of the deployed source files (build_info.ts), not only the engine VERSION
+  // Learning desk: losses of ACTIVE strategies (any book with RISK_SCALE > 0) tagged by cause, mapped to the lesson ledger (learning.ts)
+  let learning: unknown = null;
+  try {
+    const active = new Set<string>();
+    const addCfg = (c: unknown) => { const rs = (c as { RISK_SCALE?: Record<string, number> } | null)?.RISK_SCALE ?? {}; for (const [k, v] of Object.entries(rs)) if (v > 0) active.add(k); };
+    addCfg(config); for (const b of Object.values(books)) addCfg((b as { config?: unknown } | undefined)?.config);
+    const since = new Date(Date.now() - 90 * 86_400_000).toISOString();
+    const rows = await select(`dbv5_trades?select=id,symbol,strategy,dir,r,net,reason,open_t,close_t,gross:data->gross,regime:data->>regime,exits:data->exits&close_t=gte.${encodeURIComponent(since)}&symbol=neq.AI_BTC&order=close_t.desc&limit=1000`);
+    const lt: LTrade[] = (rows ?? []).map((x: Record<string, any>) => ({ id: x.id, symbol: x.symbol, strategy: x.strategy, dir: x.dir, r: +x.r, net: +x.net, gross: x.gross == null ? null : +x.gross,
+      openT: Date.parse(x.open_t), closeT: Date.parse(x.close_t), reason: x.reason, regime: x.regime ?? null, path: Array.isArray(x.exits) ? x.exits.map((e: { kind: string }) => e.kind) : [] }));
+    learning = { active: [...active].sort(), ...learningReport(lt, active, Date.now()) };
+  } catch (e) { learning = { error: (e as Error).message.slice(0, 160) }; }
   // AI paper book: summary only (its log holds menus, picks and reasons; trades are in dbv5_trades with symbol AI_BTC)
   let aiTrader: unknown = null;
   try {
@@ -626,7 +639,7 @@ async function status() {
     aiTrader = { enabled: AI_TRADER, providers: providersFromEnv("trader").map((p) => p.name), updated: ar?.[0]?.updated_at ?? null,
       book: a ? { equity: a.state.equity, startEquity: a.simulated?.startEquity ?? 350, pos: a.state.pos, stats: a.state.stats?.all ?? null, specVersion: a.specVersion, log: (a.log ?? []).slice(-20) } : null, trades: at ?? [] };
   } catch (e) { aiTrader = { enabled: AI_TRADER, error: (e as Error).message.slice(0, 160) }; }
-  return { version: VERSION, build: { sourceSha256: BUILD.sourceSha256 }, mode: "PAPER", aiTrader, now: new Date().toISOString(), updated: s?.[0]?.updated_at ?? null, integrity, state: st, lastRun: s?.[0]?.last_run ?? null, events: ev, agents: agents ?? [], trades: tr, curve, books, backtest: bt?.[0] ?? null, experiment, experimentError, config, registry: { strategies: STRATEGIES, optIn: OPT_IN }, scan, track, trackError, work: { backlog: workBacklog, lastFlush: Array.isArray(lastFlush) ? lastFlush : null, flushFailures24h: Array.isArray(flushFails) ? flushFails.length : null, lastFlushFailure: Array.isArray(flushFails) && flushFails[0] ? flushFails[0] : null }, chat: { enabled: !!CHAT_KEY, ai: providersFromEnv("chat").map((p) => p.name) }, ai: { policy: providerPolicy(aiFeaturesOf(), (st as { _aiUsage?: Usage } | null)?._aiUsage ?? {}), providers: providersFromEnv("committee").map((p) => p.name), byFeature: { news: providersFromEnv("news").map((p) => p.name), committee: providersFromEnv("committee").map((p) => p.name), chat: providersFromEnv("chat").map((p) => p.name), trader: providersFromEnv("trader").map((p) => p.name) }, agentAi: AGENT_AI, deskWorkflow: DESK_WORKFLOW, newsAi: NEWS_AI, newsMode: NEWS_MODE },
+  return { version: VERSION, build: { sourceSha256: BUILD.sourceSha256 }, mode: "PAPER", aiTrader, learning, now: new Date().toISOString(), updated: s?.[0]?.updated_at ?? null, integrity, state: st, lastRun: s?.[0]?.last_run ?? null, events: ev, agents: agents ?? [], trades: tr, curve, books, backtest: bt?.[0] ?? null, experiment, experimentError, config, registry: { strategies: STRATEGIES, optIn: OPT_IN }, scan, track, trackError, work: { backlog: workBacklog, lastFlush: Array.isArray(lastFlush) ? lastFlush : null, flushFailures24h: Array.isArray(flushFails) ? flushFails.length : null, lastFlushFailure: Array.isArray(flushFails) && flushFails[0] ? flushFails[0] : null }, chat: { enabled: !!CHAT_KEY, ai: providersFromEnv("chat").map((p) => p.name) }, ai: { policy: providerPolicy(aiFeaturesOf(), (st as { _aiUsage?: Usage } | null)?._aiUsage ?? {}), providers: providersFromEnv("committee").map((p) => p.name), byFeature: { news: providersFromEnv("news").map((p) => p.name), committee: providersFromEnv("committee").map((p) => p.name), chat: providersFromEnv("chat").map((p) => p.name), trader: providersFromEnv("trader").map((p) => p.name) }, agentAi: AGENT_AI, deskWorkflow: DESK_WORKFLOW, newsAi: NEWS_AI, newsMode: NEWS_MODE },
     // real-account preparation: the registry/adapter contract (accounts.ts) exists, no broker is connected, funded orders are disabled
     brokers: { connected: [] as string[], contract: "read-only (accounts.ts)", fundedOrders: "disabled" as const }, spec: bookSpec("BTC"),
     pendingBooks: BOOKS.filter((b) => b !== "BTC" && !books[b]).map((b) => ({ sym: b, state: "NOT INITIALISED", spec: bookSpec(b) })) };

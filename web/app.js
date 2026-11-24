@@ -374,6 +374,18 @@ function panelError(name, err, hostId) {
 }
 function clearPanelError(name, hostId) { const host = $(hostId); const note = host && host.querySelector(`:scope > .panel-error[data-render="${name}"]`); if (note) note.remove(); }
 function safeRender(name, fn, hostId) { try { fn(); clearPanelError(name, hostId); } catch (e) { panelError(name, e, hostId); } }
+function renderLearning() {
+  const L = RAW && RAW.learning, note = $("learningNote"), rows = $("learningRows"); if (!note || !rows) return;
+  if (!L) { note.textContent = "Learning report not returned by this backend."; rows.innerHTML = ""; return; }
+  if (L.error) { note.textContent = "Learning report error: " + L.error; rows.innerHTML = ""; return; }
+  const w = L.window || {}, f = L.focus;
+  note.textContent = `Last 90 days, active strategies (${(L.active || []).join(", ") || "none"}): ${w.trades} trades, ${w.wins} wins, ${w.losses} losses, ${w.netR >= 0 ? "+" : ""}${w.netR}R. ${f ? `Current focus: ${f.test} (${f.status.replace("_", " ").toLowerCase()}).` : "No lesson to focus on yet."} A lesson changes trading only after its test passes and you approve it.`;
+  const st = { ADOPTED: "up", REJECTED: "down", NARROW_REJECT: "down", QUEUED: "", NO_TEST: "faint" };
+  const causes = (L.byCause || []).map((c) => `<div class="li"><div class="a">${esc(c.text)}</div><div class="b down">${c.rLost}R · ${c.trades}</div><div class="c">${esc(c.books.join(", "))}${c.lesson ? ` · lesson: ${esc(c.lesson.test)} — <span class="${st[c.lesson.status] || ""}">${esc(c.lesson.status.replace("_", " "))}</span>${c.lesson.note ? " · " + esc(c.lesson.note) : ""}` : ""}</div></div>`).join("");
+  const ledger = (L.ledger || []).filter((l) => !(L.byCause || []).some((c) => c.cause === l.cause)).map((l) => `<div class="li"><div class="a faint">${esc(l.test)}</div><div class="b ${st[l.status] || ""}">${esc(l.status.replace("_", " "))}</div><div class="c faint">${esc(l.note)}</div></div>`).join("");
+  rows.innerHTML = (causes || `<div class="li"><div class="c faint">No losses on active strategies in this window.</div></div>`) + (ledger ? `<div class="li"><div class="a">Other lessons on record</div></div>${ledger}` : "");
+}
+
 function renderBasket() {
   const note = $("basketNote"), rows = $("basketRows"); if (!note || !rows) return;
   const B = (RAW && RAW.books) || {}, list = [["BTC", { spec: RAW && RAW.spec, state: RAW && RAW.state, lastRun: RAW && RAW.lastRun }], ...Object.entries(B)].filter(([, b]) => b && b.state);
@@ -404,6 +416,7 @@ function renderAiTrader() {
 }
 
 const RENDERERS = [
+  ["learning", renderLearning, "v-system"],
   ["basket", renderBasket, "v-system"],
   ["aitrader", renderAiTrader, "v-system"],
   ["book", () => document.querySelectorAll(".bookName").forEach((e) => { e.textContent = BM().label; }), "v-desk"],
