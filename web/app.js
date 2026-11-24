@@ -374,6 +374,18 @@ function panelError(name, err, hostId) {
 }
 function clearPanelError(name, hostId) { const host = $(hostId); const note = host && host.querySelector(`:scope > .panel-error[data-render="${name}"]`); if (note) note.remove(); }
 function safeRender(name, fn, hostId) { try { fn(); clearPanelError(name, hostId); } catch (e) { panelError(name, e, hostId); } }
+function renderShift() {
+  const S = RAW && RAW.shift, goal = $("shiftGoal"), rows = $("shiftRows"); if (!goal || !rows) return;
+  if (!S) { goal.textContent = "Shift report not returned by this backend."; rows.innerHTML = ""; return; }
+  if (S.error) { goal.textContent = "Shift report error: " + S.error; rows.innerHTML = ""; return; }
+  const g = S.goal, sgn = (v) => (v >= 0 ? "+" : "−") + fmt$(Math.abs(v));
+  goal.innerHTML = `<b>Your goal: ${fmt$(g.monthUsd)} this month · ${fmt$(g.nightUsd)} a night.</b> Month so far ${sgn(g.netMonth)} · last 24h ${sgn(g.net24h)} · open ${sgn(g.upnl)} · ${g.daysLeft} days left → ${fmt$(g.perDayNeeded)} a day needed. ` +
+    `At today's size the measured edge projects about <b>${fmt$(g.projectedMonthUsd)} a month</b> on ${fmt$(g.capital)} of paper capital${g.sizeMultipleNeeded ? ` (the goal is ${g.sizeMultipleNeeded}× that)` : ""}. ${esc(g.note)}`;
+  const cls = { ON_TARGET: "up", BEHIND: "", BLOCKED: "down" };
+  rows.innerHTML = S.floors.map((f) => `<div class="li"><div class="a">Floor ${f.n} · ${esc(f.name)}</div><div class="b ${cls[f.status] || ""}">${esc(f.status.replace("_", " "))}</div>` +
+    `<div class="c"><b>Target:</b> ${esc(f.target)} · <b>Now:</b> ${esc(f.actual)}${f.needs.length ? `<br><b>Needs:</b> ${f.needs.map(esc).join(" · ")}` : ""}</div></div>`).join("");
+}
+
 function renderLearning() {
   const L = RAW && RAW.learning, note = $("learningNote"), rows = $("learningRows"); if (!note || !rows) return;
   if (!L) { note.textContent = "Learning report not returned by this backend."; rows.innerHTML = ""; return; }
@@ -416,6 +428,7 @@ function renderAiTrader() {
 }
 
 const RENDERERS = [
+  ["shift", renderShift, "v-tower"],
   ["learning", renderLearning, "v-system"],
   ["basket", renderBasket, "v-system"],
   ["aitrader", renderAiTrader, "v-system"],
