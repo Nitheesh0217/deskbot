@@ -134,6 +134,6 @@ const d0 = Math.floor(from / DAY), d1 = Math.floor(to / DAY), db = daily(base.tr
 const dR: number[] = []; for (let d = d0; d <= d1; d++) dR.push((dc.get(d) ?? 0) - (db.get(d) ?? 0));
 mkdirSync(outDir, { recursive: true });
 const tag = `${book}_${strategy}_${variant}${costx !== 1 ? `_cost${costx}` : ""}`;
-writeFileSync(`${outDir}/trades_${tag}.json`, JSON.stringify({ base: base.trades.map((t) => [t.closeT, +t.r.toFixed(4)]), challenger: ch.trades.map((t) => [t.closeT, +t.r.toFixed(4)]) }));
+writeFileSync(`${outDir}/trades_${tag}.json`, JSON.stringify({ base: base.trades.map((t) => [t.closeT, +t.r.toFixed(4), t.openT, t.dir]), challenger: ch.trades.map((t) => [t.closeT, +t.r.toFixed(4), t.openT, t.dir]) }));
 writeFileSync(`${outDir}/daily_${tag}.json`, JSON.stringify({ book, strategy, variant, costx, day0: d0, dR }));
 console.log(JSON.stringify({ book, strategy, variant, costx, identity: "ok", funding: fundPath ? "historical" : "flat", fundFallbackBars, ...(fundPath ? { baseFlat: metrics(flat) } : {}), base: metrics(base), challenger: metrics(ch) }));
