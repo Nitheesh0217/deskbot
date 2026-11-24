@@ -158,6 +158,117 @@
     }
    ],
    "note": "Causes are descriptive tags from recorded trade facts. A lesson changes trading only after a frozen-spec test passes and the owner approves."
+  },
+  "shift": {
+   "at": "2026-11-24T00:05:00.000Z",
+   "goal": {
+    "monthUsd": 10000,
+    "nightUsd": 1000,
+    "perDayNeeded": 1426.41,
+    "daysLeft": 7,
+    "netMonth": 15.15,
+    "net24h": 0,
+    "upnl": 1.2,
+    "capital": 5575.79,
+    "projectedMonthUsd": 15.87,
+    "projectionBasis": "16 paper books × 2.4 trades/month × +0.1R × each book's current $ risk per trade (3-year research averages)",
+    "gapMonthUsd": 9984.13,
+    "sizeMultipleNeeded": 630,
+    "note": "The goal is tracked, not used to set size. Profit grows by adding proven edge, uncorrelated markets and capital, and by sizing up only as the live record earns it."
+   },
+   "floors": [
+    {
+     "n": 1,
+     "id": "data",
+     "name": "Data infrastructure",
+     "target": "Every book with a position checked within 15 min; flat books within their 4h slot",
+     "actual": "23/23 books current",
+     "status": "ON_TARGET",
+     "needs": []
+    },
+    {
+     "n": 2,
+     "id": "intel",
+     "name": "Market intelligence",
+     "target": "Funding / OI / premium recorded every run; news read by an AI provider",
+     "actual": "24 market-context rows in the last hour; news AI: none",
+     "status": "BEHIND",
+     "needs": [
+      "A free AI key accepted for 'news' (GROQ_API_KEY + AI_DATA_USE_ACCEPTED=groq:news)"
+     ]
+    },
+    {
+     "n": 3,
+     "id": "research",
+     "name": "Quantitative research",
+     "target": "One frozen-spec test per week on the costliest lesson",
+     "actual": "2 queued test(s); focus: CLUSTER_CAP: same-direction risk budget K=3",
+     "status": "BEHIND",
+     "needs": [
+      "Owner approval for the weekly research session (runs the queued test, opens a PR, never merges)",
+      "Long daily history for stocks/indices/commodities (a market-data API key; stooq.com refuses this cloud)"
+     ]
+    },
+    {
+     "n": 4,
+     "id": "desks",
+     "name": "Strategy desks",
+     "target": "≥ +0.1R per trade after costs over ≥ 30 trades per strategy",
+     "actual": "6 trades in 30 days, +0.63R",
+     "status": "BEHIND",
+     "needs": [
+      "More independent signals: 10/16 books had no trade in 30 days (trend systems wait for trends; more uncorrelated markets add trades)",
+      "GOLD: -0.45R/trade over 25 trades: review in the learning desk"
+     ]
+    },
+    {
+     "n": 5,
+     "id": "portfolio",
+     "name": "Portfolio management",
+     "target": "≤ 3 same-direction crypto positions at once (observation; CLUSTER_CAP narrowly rejected)",
+     "actual": "1 long, 0 short open",
+     "status": "ON_TARGET",
+     "needs": []
+    },
+    {
+     "n": 6,
+     "id": "risk",
+     "name": "Risk management",
+     "target": "No book more than 15% below its start; size never raised by a profit target",
+     "actual": "worst: GOLD 10.2% below start",
+     "status": "ON_TARGET",
+     "needs": []
+    },
+    {
+     "n": 7,
+     "id": "execution",
+     "name": "Execution",
+     "target": "Paper fills at modelled prices and costs; real money only after a proven edge and approval",
+     "actual": "paper only; AI trader provider: none",
+     "status": "BEHIND",
+     "needs": [
+      "AI trader: a free key accepted for 'trader' (GROQ_API_KEY + AI_DATA_USE_ACCEPTED=groq:trader)",
+      "Real money: a broker adapter with exchange-held stops, owner-held trade-only keys and separate approval (not built)"
+     ]
+    },
+    {
+     "n": 8,
+     "id": "ops",
+     "name": "Operations & review",
+     "target": "Every loss tagged by cause; the costliest cause has a test queued or done",
+     "actual": "5 losses tagged (90 days); focus: CLUSTER_CAP: same-direction risk budget K=3 (NARROW_REJECT)",
+     "status": "ON_TARGET",
+     "needs": []
+    }
+   ],
+   "topNeeds": [
+    "A free AI key accepted for 'news' (GROQ_API_KEY + AI_DATA_USE_ACCEPTED=groq:news)",
+    "Owner approval for the weekly research session (runs the queued test, opens a PR, never merges)",
+    "Long daily history for stocks/indices/commodities (a market-data API key; stooq.com refuses this cloud)",
+    "More independent signals: 10/16 books had no trade in 30 days (trend systems wait for trends; more uncorrelated markets add trades)",
+    "GOLD: -0.45R/trade over 25 trades: review in the learning desk",
+    "AI trader: a free key accepted for 'trader' (GROQ_API_KEY + AI_DATA_USE_ACCEPTED=groq:trader)"
+   ]
   }
  }
 }

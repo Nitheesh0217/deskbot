@@ -17,7 +17,8 @@ import { readNews, newsBlocks, type NewsRead } from "./news.ts";
 import { providersFromEnv, providerPolicy, type Usage, type AiFeature } from "./ai.ts";
 import { chatFacts, pushClose, pushOpen } from "./egress.ts";
 import { bookSpec, shadowEntry, BOOK_SPECS } from "./books.ts";
-import { learningReport, type LTrade } from "./learning.ts";
+import { learningReport, LEDGER, type LTrade } from "./learning.ts";
+import { shiftReport, type BookFact } from "./shift.ts";
 import { AI_BOOK_ROW, newAiBook, stepAiBook, aiDecider, type AiBook } from "./ai_trader.ts";
 import { chat, validatePatch, mergeCfg, EDITABLE, type ChatTurn } from "./chat.ts";
 import { configIntegrity, serialExecutor } from "./runtime.ts";
@@ -631,6 +632,8 @@ async function status() {
       openT: Date.parse(x.open_t), closeT: Date.parse(x.close_t), reason: x.reason, regime: x.regime ?? null, path: Array.isArray(x.exits) ? x.exits.map((e: { kind: string }) => e.kind) : [] }));
     learning = { active: [...active].sort(), ...learningReport(lt, active, Date.now()) };
   } catch (e) { learning = { error: (e as Error).message.slice(0, 160) }; }
+  let shift: unknown = null;
+  try { shift = await shiftNow(learning as never); } catch (e) { shift = { error: (e as Error).message.slice(0, 160) }; }
   // AI paper book: summary only (its log holds menus, picks and reasons; trades are in dbv5_trades with symbol AI_BTC)
   let aiTrader: unknown = null;
   try {
@@ -639,7 +642,7 @@ async function status() {
     aiTrader = { enabled: AI_TRADER, providers: providersFromEnv("trader").map((p) => p.name), updated: ar?.[0]?.updated_at ?? null,
       book: a ? { equity: a.state.equity, startEquity: a.simulated?.startEquity ?? 350, pos: a.state.pos, stats: a.state.stats?.all ?? null, specVersion: a.specVersion, log: (a.log ?? []).slice(-20) } : null, trades: at ?? [] };
   } catch (e) { aiTrader = { enabled: AI_TRADER, error: (e as Error).message.slice(0, 160) }; }
-  return { version: VERSION, build: { sourceSha256: BUILD.sourceSha256 }, mode: "PAPER", aiTrader, learning, now: new Date().toISOString(), updated: s?.[0]?.updated_at ?? null, integrity, state: st, lastRun: s?.[0]?.last_run ?? null, events: ev, agents: agents ?? [], trades: tr, curve, books, backtest: bt?.[0] ?? null, experiment, experimentError, config, registry: { strategies: STRATEGIES, optIn: OPT_IN }, scan, track, trackError, work: { backlog: workBacklog, lastFlush: Array.isArray(lastFlush) ? lastFlush : null, flushFailures24h: Array.isArray(flushFails) ? flushFails.length : null, lastFlushFailure: Array.isArray(flushFails) && flushFails[0] ? flushFails[0] : null }, chat: { enabled: !!CHAT_KEY, ai: providersFromEnv("chat").map((p) => p.name) }, ai: { policy: providerPolicy(aiFeaturesOf(), (st as { _aiUsage?: Usage } | null)?._aiUsage ?? {}), providers: providersFromEnv("committee").map((p) => p.name), byFeature: { news: providersFromEnv("news").map((p) => p.name), committee: providersFromEnv("committee").map((p) => p.name), chat: providersFromEnv("chat").map((p) => p.name), trader: providersFromEnv("trader").map((p) => p.name) }, agentAi: AGENT_AI, deskWorkflow: DESK_WORKFLOW, newsAi: NEWS_AI, newsMode: NEWS_MODE },
+  return { version: VERSION, build: { sourceSha256: BUILD.sourceSha256 }, mode: "PAPER", aiTrader, learning, shift, now: new Date().toISOString(), updated: s?.[0]?.updated_at ?? null, integrity, state: st, lastRun: s?.[0]?.last_run ?? null, events: ev, agents: agents ?? [], trades: tr, curve, books, backtest: bt?.[0] ?? null, experiment, experimentError, config, registry: { strategies: STRATEGIES, optIn: OPT_IN }, scan, track, trackError, work: { backlog: workBacklog, lastFlush: Array.isArray(lastFlush) ? lastFlush : null, flushFailures24h: Array.isArray(flushFails) ? flushFails.length : null, lastFlushFailure: Array.isArray(flushFails) && flushFails[0] ? flushFails[0] : null }, chat: { enabled: !!CHAT_KEY, ai: providersFromEnv("chat").map((p) => p.name) }, ai: { policy: providerPolicy(aiFeaturesOf(), (st as { _aiUsage?: Usage } | null)?._aiUsage ?? {}), providers: providersFromEnv("committee").map((p) => p.name), byFeature: { news: providersFromEnv("news").map((p) => p.name), committee: providersFromEnv("committee").map((p) => p.name), chat: providersFromEnv("chat").map((p) => p.name), trader: providersFromEnv("trader").map((p) => p.name) }, agentAi: AGENT_AI, deskWorkflow: DESK_WORKFLOW, newsAi: NEWS_AI, newsMode: NEWS_MODE },
     // real-account preparation: the registry/adapter contract (accounts.ts) exists, no broker is connected, funded orders are disabled
     brokers: { connected: [] as string[], contract: "read-only (accounts.ts)", fundedOrders: "disabled" as const }, spec: bookSpec("BTC"),
     pendingBooks: BOOKS.filter((b) => b !== "BTC" && !books[b]).map((b) => ({ sym: b, state: "NOT INITIALISED", spec: bookSpec(b) })) };
@@ -660,6 +663,31 @@ async function runAiBook(a: { S: ReturnType<typeof buildSeries>; i5: number; bar
     msg: `AI ${r.log.outcome}${r.log.choice ? ` · pick ${r.log.choice.pick} conf ${r.log.choice.confidence} · ${r.log.choice.reason}` : r.log.note ? ` · ${r.log.note}` : ""} · menu ${r.log.menu.map((m) => `${m.strategy} ${m.dir}`).join(", ")}`.slice(0, 280), data: r.log });
   for (const t of r.trades) evs.push({ kind: t.net > 0 ? "WIN" : "LOSS", strategy: t.strategy, symbol: "AI_BTC" as Sym, msg: `AI ${t.strategy} ${t.dir.toUpperCase()} closed ${t.reason} (${t.r >= 0 ? "+" : ""}${t.r.toFixed(2)}R)` });
   await events(evs);
+}
+
+// Shift report facts: every book row at once (no per-book queries), trades of the month and the last 30 days, market-context activity.
+async function shiftNow(learning: { focus?: { test: string; status: string } | null; window?: { losses: number } } | null) {
+  const now = Date.now(), d = new Date(now), monthStart = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1), since = Math.min(monthStart, now - 30 * 86_400_000);
+  const [rows, trades, ctx] = await Promise.all([
+    select("dbv5_state?select=id,eq:state->equity,pos:state->pos,stats:state->stats->all,cfg:state->cfg,sim:state->simulated,lastTs:last_run->>ts,upnl:last_run->upnl&id=neq.ai_btc"),
+    select(`dbv5_trades?select=symbol,r,net,close_t&close_t=gte.${new Date(since).toISOString()}&symbol=neq.AI_BTC&limit=5000`),
+    select(`dbv5_market_ctx?select=id&ts=gte.${new Date(now - 3600_000).toISOString()}&limit=2000`).catch(() => []),
+  ]);
+  const symOf = (id: string) => (id === "main" ? "BTC" : id.toUpperCase());
+  const tr = (trades ?? []) as { symbol: string; r: number; net: number; close_t: string }[];
+  const books: BookFact[] = (rows ?? []).filter((r: { id: string }) => isSym(symOf(r.id))).map((r: Record<string, any>) => {
+    const sym = symOf(r.id), spec = bookSpec(sym), eq = +r.eq || 0, mine = tr.filter((t) => t.symbol === sym && Date.parse(t.close_t) >= now - 30 * 86_400_000);
+    const scale = +(r.cfg?.RISK_SCALE?.HTF_TREND ?? 1);
+    return { sym, mode: spec.mode, equity: eq, start: +(r.sim?.startEquity ?? spec.simulatedStartEquity ?? 350), open: !!r.pos, openDir: r.pos?.dir ?? null,
+      lastRunMs: r.lastTs ? Date.parse(r.lastTs) : null, trades30d: mine.length, r30d: mine.reduce((a, t) => a + +t.r, 0), tradesAll: +(r.stats?.n ?? 0), rAll: +(r.stats?.sumR ?? 0),
+      riskPerTradeUsd: eq * dynamicRisk(eq) * (Number.isFinite(scale) ? scale : 1), strategy: "HTF_TREND" } as BookFact;
+  });
+  const net = (from: number) => tr.filter((t) => Date.parse(t.close_t) >= from).reduce((a, t) => a + +t.net, 0);
+  return shiftReport({
+    now, books, netMonth: net(monthStart), net24h: net(now - 86_400_000), upnl: (rows ?? []).reduce((a: number, r: { upnl?: number }) => a + (+(r.upnl ?? 0) || 0), 0),
+    learning: learning && !("error" in learning) ? { focusTest: learning.focus?.test ?? null, focusStatus: learning.focus?.status ?? null, losses90d: learning.window?.losses ?? 0, queued: LEDGER.filter((l) => l.status === "QUEUED").length } : null,
+    aiTraderProviders: providersFromEnv("trader").map((p) => p.name), newsProviders: providersFromEnv("news").map((p) => p.name), marketCtxLastHour: (ctx ?? []).length,
+  });
 }
 
 async function initBook(sym: string) {
@@ -751,6 +779,13 @@ Deno.serve(async (req) => {
     const body = await req.json().catch(() => ({}));
     if (body.action === "scan") return json(await exclusive(() => runScan()));
     // create a SHADOW book's state row with simulated equity (part of an approved deployment); never overwrites, never a paper/real book
+    // nightly shift report (cron, 00:05 UTC): one NIGHT_REPORT event with the goal board and every floor's target, status and needs
+    if (body.action === "night_report") {
+      const rep = await shiftNow(null);
+      const g = rep.goal;
+      await events([{ kind: "NIGHT_REPORT", msg: `Night report: last 24h ${g.net24h >= 0 ? "+" : "−"}$${Math.abs(g.net24h).toFixed(2)} (owner night goal $${g.nightUsd}) · month ${g.netMonth >= 0 ? "+" : "−"}$${Math.abs(g.netMonth).toFixed(2)} of $${g.monthUsd} · needs: ${rep.topNeeds.slice(0, 3).join(" | ")}`.slice(0, 480), data: rep }]);
+      return json({ ok: true, report: rep });
+    }
     if (body.action === "init_book") return json(await exclusive(() => initBook(String(body.sym ?? ""))));
     if (body.action === "backtest") return json(await exclusive(() => runBacktest({ sym: isSym(body.sym) ? body.sym : "BTC", endDaysAgo: body.endDaysAgo, days: body.days, source: body.source, cfg: body.cfg, label: body.label, save: body.save, only: body.only, combinedOnly: body.combinedOnly })));
     return json(await exclusive(() => runLocked()));
